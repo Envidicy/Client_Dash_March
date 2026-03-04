@@ -247,6 +247,24 @@ function formatFxLinesFromKzt(kztAmount) {
   }
 }
 
+function convertAmountToUsd(amount, currency) {
+  const value = Number(amount || 0)
+  if (!Number.isFinite(value)) return null
+  const code = String(currency || 'USD').toUpperCase()
+  if (code === 'USD') return value
+  if (code === 'KZT') {
+    const usdRate = getMarkedRateByCode('USD')
+    return usdRate ? value / usdRate : null
+  }
+  if (code === 'EUR') {
+    const eurRate = getMarkedRateByCode('EUR')
+    const usdRate = getMarkedRateByCode('USD')
+    if (!eurRate || !usdRate) return null
+    return (value * eurRate) / usdRate
+  }
+  return value
+}
+
 function ensureSidebarRatesPanel() {
   const sidebar = document.querySelector('.sidebar')
   if (!sidebar) return null
@@ -337,10 +355,11 @@ function renderOpenAccounts() {
   state.openAccounts.forEach((row) => {
     const hasAccount = Boolean(row.account_db_id)
     const tr = document.createElement('tr')
+    const budgetUsd = convertAmountToUsd(row.budget, row.currency)
     const budgetLabel =
-      row.budget == null
+      row.budget == null || budgetUsd == null
         ? '—'
-        : `${Number(row.budget).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${row.currency || 'USD'}`
+        : `${formatMoneyAmount(budgetUsd)} USD`
     const liveBillingLabel = formatLiveBillingCell(row.live_billing, row.currency)
     tr.innerHTML = `
       <td>${platformLabel(row.platform)}</td>
