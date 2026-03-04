@@ -60,12 +60,12 @@ function renderClients(rows) {
   clientsBody.innerHTML = rows
     .map((row) => {
       const pending = Number(row.pending_requests || 0)
-      const completedTotal = Number(row.completed_total || 0)
+      const completedTotal = Number(row.completed_total_usd ?? row.completed_total ?? 0)
       return `
         <tr>
           <td>${row.email || '—'}</td>
           <td>${pending ? `<span class="dot">${pending}</span>` : '—'}</td>
-          <td>${completedTotal ? formatMoney(completedTotal) : '—'}</td>
+          <td>${completedTotal ? `${formatMoney(completedTotal)} USD` : '—'}</td>
           <td style="text-align:right;">
             <button class="btn ghost small" data-client="${row.id}" data-email="${row.email}">Открыть</button>
           </td>
@@ -159,12 +159,21 @@ function getTopupAccountAmount(row) {
   return row?.amount_net != null ? Number(row.amount_net) : Number(row?.amount_input || 0)
 }
 
+function getTopupAccountAmountUsd(row) {
+  if (row?.amount_account_usd != null) return Number(row.amount_account_usd)
+  const accountCurrency = String(row?.account_currency || row?.currency || 'USD').toUpperCase()
+  const amount = getTopupAccountAmount(row)
+  if (!Number.isFinite(amount)) return 0
+  if (accountCurrency === 'USD') return amount
+  return 0
+}
+
 function renderClientSummary(userId, email, requests, topups, accounts, profile) {
   if (!clientSummary) return
   const pendingCount = Array.isArray(requests) ? requests.length : 0
   const completedTotal = Array.isArray(topups)
     ? topups.reduce((sum, row) => {
-        const value = getTopupAccountAmount(row)
+        const value = getTopupAccountAmountUsd(row)
         return sum + Number(value || 0)
       }, 0)
     : 0
@@ -183,8 +192,8 @@ function renderClientSummary(userId, email, requests, topups, accounts, profile)
     </div>
     <div class="stat">
       <p class="muted">Пополнено</p>
-      <h3>${completedTotal ? formatMoney(completedTotal) : '—'}</h3>
-      <p class="muted small">По подтверждённым операциям</p>
+      <h3>${completedTotal ? `${formatMoney(completedTotal)} USD` : '—'}</h3>
+      <p class="muted small">По подтверждённым операциям, в USD</p>
     </div>
     <div class="stat">
       <p class="muted">Аккаунты</p>

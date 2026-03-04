@@ -36,6 +36,7 @@ _R2_CLIENT = None
 _BCC_RATES_CACHE = {"ts": 0.0, "data": None}
 _BCC_RATES_TTL_SEC = 900
 _BCC_TOKEN_CACHE = {"token": None, "expires_at": 0.0}
+_BCC_DEFAULT_MARKUP = float(os.getenv("BCC_DEFAULT_MARKUP", "10") or 10)
 _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
 
@@ -214,6 +215,55 @@ def _fetch_bcc_rates() -> Dict[str, object]:
     _BCC_RATES_CACHE["ts"] = now
     _BCC_RATES_CACHE["data"] = data
     return data
+
+
+def _get_marked_bcc_sell_rate(code: str, rates_data: Optional[Dict[str, object]] = None) -> Optional[float]:
+    code_upper = str(code or "").upper()
+    if not code_upper:
+        return None
+    rates_payload = rates_data or _fetch_bcc_rates()
+    rates = rates_payload.get("rates") if isinstance(rates_payload, dict) else None
+    if not isinstance(rates, dict):
+        return None
+    entry = rates.get(code_upper)
+    if not isinstance(entry, dict):
+        return None
+    sell = entry.get("sell")
+    try:
+        sell_value = float(sell) if sell is not None else None
+    except (TypeError, ValueError):
+        return None
+    if sell_value is None:
+        return None
+    return sell_value + _BCC_DEFAULT_MARKUP
+
+
+def _convert_amount_to_usd(amount: object, currency: object, rates_data: Optional[Dict[str, object]] = None) -> Optional[float]:
+    try:
+        value = float(amount) if amount is not None else None
+    except (TypeError, ValueError):
+        return None
+    if value is None:
+        return None
+
+    code = str(currency or "USD").upper()
+    if code == "USD":
+        return value
+
+    usd_rate = _get_marked_bcc_sell_rate("USD", rates_data)
+    if not usd_rate or usd_rate <= 0:
+        return None
+
+    if code == "KZT":
+        return value / usd_rate
+
+    if code == "EUR":
+        eur_rate = _get_marked_bcc_sell_rate("EUR", rates_data)
+        if not eur_rate or eur_rate <= 0:
+            return None
+        return (value * eur_rate) / usd_rate
+
+    return None
 
 
 def _r2_upload_fileobj(key: str, fileobj, content_type: str = "application/pdf") -> str:
@@ -3050,11 +3100,17 @@ def _resolve_topup_account_amount(row: Dict[str, object]) -> Optional[float]:
 
 
 def _attach_topup_account_amount(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    try:
+        rates_data = _fetch_bcc_rates()
+    except Exception:
+        rates_data = None
     prepared = []
     for row in rows:
-      payload = dict(row)
-      payload["amount_account"] = _resolve_topup_account_amount(payload)
-      prepared.append(payload)
+        payload = dict(row)
+        payload["amount_account"] = _resolve_topup_account_amount(payload)
+        account_currency = payload.get("account_currency") or payload.get("currency") or "USD"
+        payload["amount_account_usd"] = _convert_amount_to_usd(payload.get("amount_account"), account_currency, rates_data)
+        prepared.append(payload)
     return prepared
 
 
@@ -5402,7 +5458,30 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
             ORDER BY unread_topups DESC, u.email ASC
             """
         ).fetchall()
-        return [dict(row) for row in rows]
+        clients = [dict(row) for row in rows]
+        topup_rows = conn.execute(
+            """
+            SELECT t.user_id, t.amount_input, t.amount_net, t.fx_rate, t.currency, a.currency as account_currency
+            FROM topups t
+            LEFT JOIN ad_accounts a ON a.id = t.account_id
+            WHERE t.status='completed'
+            """
+        ).fetchall()
+        prepared_topups = _attach_topup_account_amount([dict(row) for row in topup_rows])
+        totals_usd: Dict[int, float] = {}
+        for row in prepared_topups:
+            try:
+                user_id = int(row.get("user_id"))
+            except (TypeError, ValueError):
+                continue
+            try:
+                amount_usd = float(row.get("amount_account_usd") or 0.0)
+            except (TypeError, ValueError):
+                amount_usd = 0.0
+            totals_usd[user_id] = totals_usd.get(user_id, 0.0) + amount_usd
+        for row in clients:
+            row["completed_total_usd"] = totals_usd.get(int(row["id"]), 0.0)
+        return clients
 
 
 @app.get("/admin/users")
