@@ -4323,7 +4323,7 @@ def tiktok_insights(
             date_from,
             date_to,
             "AUCTION_CAMPAIGN",
-            ["campaign_id", "campaign_name"],
+            ["campaign_id"],
             metrics,
         )
         adgroup_rows = _tiktok_fetch_report(
@@ -4331,7 +4331,7 @@ def tiktok_insights(
             date_from,
             date_to,
             "AUCTION_ADGROUP",
-            ["adgroup_id", "adgroup_name", "campaign_id", "campaign_name"],
+            ["adgroup_id", "campaign_id"],
             metrics,
         )
         ad_rows = _tiktok_fetch_report(
@@ -4339,7 +4339,7 @@ def tiktok_insights(
             date_from,
             date_to,
             "AUCTION_AD",
-            ["ad_id", "ad_name", "adgroup_id", "adgroup_name", "campaign_id", "campaign_name"],
+            ["ad_id", "adgroup_id", "campaign_id"],
             metrics,
         )
         for row in campaign_rows:
