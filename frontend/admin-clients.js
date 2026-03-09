@@ -15,6 +15,7 @@ const clientClose = document.getElementById('client-close')
 const clientSummary = document.getElementById('client-summary')
 const clientRequests = document.getElementById('client-requests')
 const clientTopups = document.getElementById('client-topups')
+const clientWalletOps = document.getElementById('client-wallet-ops')
 const clientAccounts = document.getElementById('client-accounts')
 const clientProfile = document.getElementById('client-profile')
 const feeMeta = document.getElementById('fee-meta')
@@ -100,9 +101,10 @@ if (clientModal) {
 async function openClientModal(userId, email) {
   if (!clientModal || !clientTitle) return
   clientTitle.textContent = email || 'Клиент'
-  const [requests, topups, accounts, profile, fees] = await Promise.all([
+  const [requests, topups, walletOps, accounts, profile, fees] = await Promise.all([
     fetchClientRequests(userId),
     fetchClientTopups(userId),
+    fetchClientWalletTransactions(userId),
     fetchClientAccounts(userId),
     fetchClientProfile(userId),
     fetchClientFees(userId),
@@ -110,6 +112,7 @@ async function openClientModal(userId, email) {
   renderClientSummary(userId, email, requests, topups, accounts, profile)
   renderClientRequests(requests)
   renderClientTopups(topups)
+  renderClientWalletOps(walletOps)
   renderClientAccounts(accounts)
   renderClientProfile(profile)
   renderClientFees(fees)
@@ -128,6 +131,13 @@ async function fetchClientRequests(userId) {
 
 async function fetchClientTopups(userId) {
   const res = await fetch(`${apiBase}/admin/clients/${userId}/topups`, { headers: authHeadersSafe() })
+  if (handleAuthFailure(res)) return []
+  if (!res.ok) return []
+  return res.json()
+}
+
+async function fetchClientWalletTransactions(userId) {
+  const res = await fetch(`${apiBase}/admin/clients/${userId}/wallet-transactions`, { headers: authHeadersSafe() })
   if (handleAuthFailure(res)) return []
   if (!res.ok) return []
   return res.json()
@@ -258,6 +268,41 @@ function renderClientTopups(rows) {
           <td>${row.fx_rate ?? '—'}</td>
           <td>${accountAmount == null ? '—' : `${formatMoney(accountAmount)} ${accountCurrency}`}</td>
           <td>${row.status || '—'}</td>
+        </tr>
+      `
+    })
+    .join('')
+}
+
+function walletTypeLabel(value) {
+  const key = String(value || '')
+  if (key === 'adjustment') return 'Ручная корректировка'
+  if (key === 'topup_hold') return 'Холд пополнения'
+  if (key === 'topup_hold_release') return 'Возврат холда'
+  if (key === 'topup') return 'Списание пополнения'
+  return key || '—'
+}
+
+function renderClientWalletOps(rows) {
+  if (!clientWalletOps) return
+  if (!rows || rows.length === 0) {
+    clientWalletOps.innerHTML = `<tr><td colspan="7" class="muted">Нет операций по балансу.</td></tr>`
+    return
+  }
+  clientWalletOps.innerHTML = rows
+    .map((row) => {
+      const amount = Number(row.amount || 0)
+      const amountText = `${formatMoney(amount)} ${row.currency || ''}`
+      const amountUsdText = row.amount_usd == null ? '—' : `${formatMoney(Number(row.amount_usd || 0))} USD`
+      return `
+        <tr>
+          <td>${formatDate(row.created_at)}</td>
+          <td>${walletTypeLabel(row.type)}</td>
+          <td>${row.account_platform || '—'}</td>
+          <td>${row.account_name || '—'}</td>
+          <td>${amountText}</td>
+          <td>${amountUsdText}</td>
+          <td>${row.note || '—'}</td>
         </tr>
       `
     })

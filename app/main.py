@@ -5631,6 +5631,33 @@ def admin_client_topups(user_id: int, admin_user=Depends(get_admin_user)):
         return _attach_topup_account_amount([dict(row) for row in rows])
 
 
+@app.get("/admin/clients/{user_id}/wallet-transactions")
+def admin_client_wallet_transactions(user_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        return []
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT wt.*, a.name as account_name, a.platform as account_platform
+            FROM wallet_transactions wt
+            LEFT JOIN ad_accounts a ON a.id = wt.account_id
+            WHERE wt.user_id=?
+            ORDER BY wt.created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        result = []
+        try:
+            rates_data = _fetch_bcc_rates()
+        except Exception:
+            rates_data = None
+        for row in rows:
+            payload = dict(row)
+            payload["amount_usd"] = _convert_amount_to_usd(payload.get("amount"), payload.get("currency"), rates_data)
+            result.append(payload)
+        return result
+
+
 @app.get("/admin/clients/{user_id}/accounts")
 def admin_client_accounts(user_id: int, admin_user=Depends(get_admin_user)):
     if not get_conn:
