@@ -3577,7 +3577,19 @@ def get_wallet(current_user=Depends(get_current_user)):
         return {}
     with get_conn() as conn:
         wallet = _get_or_create_wallet(conn, current_user["id"])
-        return wallet
+        reserved_row = conn.execute(
+            """
+            SELECT COALESCE(SUM(amount_input + amount_input * (fee_percent / 100.0) + amount_input * (vat_percent / 100.0)), 0) AS reserved
+            FROM topups
+            WHERE user_id=? AND status='pending' AND COALESCE(hold_applied, 0)=1
+            """,
+            (current_user["id"],),
+        ).fetchone()
+        reserved = float((reserved_row["reserved"] if reserved_row else 0) or 0)
+        payload = dict(wallet)
+        payload["available_balance"] = float(wallet.get("balance") or 0)
+        payload["reserved_balance"] = reserved
+        return payload
 
 
 @app.get("/admin/wallets")
@@ -5809,31 +5821,42 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
         raise HTTPException(status_code=500, detail="DB not initialized")
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT id, status, account_id, amount_input, amount_net, fee_percent, vat_percent, currency, user_id FROM topups WHERE id=?",
+            "SELECT id, status, account_id, amount_input, amount_net, fee_percent, vat_percent, currency, user_id, hold_applied FROM topups WHERE id=?",
             (topup_id,),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Topup not found")
-        conn.execute("UPDATE topups SET status=? WHERE id=?", (status.value, topup_id))
-        if row["status"] != "completed" and status.value == "completed":
-            fee_amount = (row["amount_input"] or 0) * (row["fee_percent"] or 0) / 100.0
-            vat_amount = (row["amount_input"] or 0) * (row["vat_percent"] or 0) / 100.0
-            gross_amount = (row["amount_input"] or 0) + fee_amount + vat_amount
-            wallet = _get_or_create_wallet(conn, row["user_id"])
-            if float(wallet["balance"]) < gross_amount:
-                raise HTTPException(status_code=400, detail="Недостаточно средств на кошельке для завершения пополнения")
-            new_balance = float(wallet["balance"]) - gross_amount
-            conn.execute(
-                "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
-                (new_balance, row["user_id"]),
-            )
-            conn.execute(
-                """
-                INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (row["user_id"], row["account_id"], -gross_amount, row["currency"], "topup", "Account topup"),
-            )
+
+        previous_status = row["status"]
+        next_status = status.value
+        hold_applied = int(row["hold_applied"] or 0) == 1
+        gross_amount = _topup_gross_amount(
+            float(row["amount_input"] or 0),
+            float(row["fee_percent"] or 0),
+            float(row["vat_percent"] or 0),
+        )
+
+        if previous_status != "completed" and next_status == "completed":
+            if hold_applied:
+                conn.execute("UPDATE topups SET status=?, hold_applied=0 WHERE id=?", (next_status, topup_id))
+            else:
+                wallet = _get_or_create_wallet(conn, row["user_id"])
+                if float(wallet["balance"]) < gross_amount:
+                    raise HTTPException(status_code=400, detail="Недостаточно средств на кошельке для завершения пополнения")
+                new_balance = float(wallet["balance"]) - gross_amount
+                conn.execute(
+                    "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+                    (new_balance, row["user_id"]),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (row["user_id"], row["account_id"], -gross_amount, row["currency"], "topup", "Account topup"),
+                )
+                conn.execute("UPDATE topups SET status=? WHERE id=?", (next_status, topup_id))
+
             acc = conn.execute("SELECT budget_total FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
             base_amount = row["amount_net"] if row["amount_net"] else row["amount_input"]
             new_total = (acc["budget_total"] or 0) + (base_amount or 0)
@@ -5856,8 +5879,28 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                     ]
                 )
             )
+        elif previous_status == "pending" and next_status == "failed":
+            if hold_applied:
+                wallet = _get_or_create_wallet(conn, row["user_id"])
+                new_balance = float(wallet["balance"]) + gross_amount
+                conn.execute(
+                    "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+                    (new_balance, row["user_id"]),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (row["user_id"], row["account_id"], gross_amount, row["currency"], "topup_hold_release", f"Topup hold released #{topup_id}"),
+                )
+                conn.execute("UPDATE topups SET status=?, hold_applied=0 WHERE id=?", (next_status, topup_id))
+            else:
+                conn.execute("UPDATE topups SET status=? WHERE id=?", (next_status, topup_id))
+        else:
+            conn.execute("UPDATE topups SET status=? WHERE id=?", (next_status, topup_id))
         conn.commit()
-        return {"id": topup_id, "status": status.value}
+        return {"id": topup_id, "status": next_status}
 
 
 @app.get("/admin/topups/profit-summary")
@@ -6164,6 +6207,12 @@ class TopupCreatePayload(BaseModel):
     fx_rate: Optional[float] = None
 
 
+def _topup_gross_amount(amount_input: float, fee_percent: float, vat_percent: float) -> float:
+    fee_amount = amount_input * (fee_percent / 100.0)
+    vat_amount = amount_input * (vat_percent / 100.0)
+    return amount_input + fee_amount + vat_amount
+
+
 @app.post("/topups")
 def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_user)):
     if not get_conn:
@@ -6194,9 +6243,7 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
         fee_percent = float(platform_fee)
         wallet = _get_or_create_wallet(conn, resolved_user_id)
         wallet_balance = float(wallet["balance"] or 0)
-        fee_amount = amount_input * (fee_percent / 100.0)
-        vat_amount = amount_input * (vat_percent / 100.0)
-        gross_amount = amount_input + fee_amount + vat_amount
+        gross_amount = _topup_gross_amount(amount_input, fee_percent, vat_percent)
         if gross_amount > wallet_balance:
             denom = 1.0 + (fee_percent / 100.0) + (vat_percent / 100.0)
             max_input = (wallet_balance / denom) if denom > 0 else 0.0
@@ -6214,13 +6261,25 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
             amount_net = amount_input
         cur = conn.execute(
             """
-            INSERT INTO topups (account_id, user_id, amount_input, fee_percent, vat_percent, amount_net, currency, fx_rate, status, seen_by_admin)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO topups (account_id, user_id, amount_input, fee_percent, vat_percent, amount_net, currency, fx_rate, hold_applied, status, seen_by_admin)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (account_id, resolved_user_id, amount_input, fee_percent, vat_percent, amount_net, currency, fx_rate, "pending", 0),
+            (account_id, resolved_user_id, amount_input, fee_percent, vat_percent, amount_net, currency, fx_rate, 1, "pending", 0),
+        )
+        topup_id = cur.lastrowid
+        new_balance = wallet_balance - gross_amount
+        conn.execute(
+            "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+            (new_balance, resolved_user_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (resolved_user_id, account_id, -gross_amount, currency, "topup_hold", f"Topup hold #{topup_id}"),
         )
         conn.commit()
-        topup_id = cur.lastrowid
         account_name = conn.execute("SELECT name FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
         _send_telegram_alert(
             "\n".join(
@@ -6232,6 +6291,7 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
                     f"Аккаунт: <b>{account_name['name'] if account_name else account_id}</b> (id={account_id})",
                     f"Сумма: <b>{amount_input:.2f} {currency}</b>",
                     f"Комиссия: <b>{fee_percent:.2f}%</b>",
+                    f"Холд в кошельке: <b>{gross_amount:.2f} {currency}</b>",
                 ]
             )
         )
@@ -6245,6 +6305,8 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
             "amount_net": amount_net,
             "currency": currency,
             "fx_rate": fx_rate,
+            "hold_applied": 1,
+            "hold_amount": gross_amount,
             "status": "pending",
         }
 

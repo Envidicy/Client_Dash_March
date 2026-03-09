@@ -129,6 +129,7 @@ def apply_schema():
             conn.execute("ALTER TABLE ad_accounts ADD COLUMN IF NOT EXISTS budget_total DOUBLE PRECISION")
             conn.execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS fee_config TEXT")
             conn.execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS notifications_seen_at TIMESTAMPTZ")
+            conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS hold_applied INTEGER DEFAULT 0")
             conn.commit()
         return
     schema_path = os.path.join(os.path.dirname(__file__), "..", "db", "schema.sql")
@@ -367,6 +368,7 @@ def apply_schema():
         _ensure_column(conn, "ad_accounts", "budget_total", "DOUBLE PRECISION")
         _ensure_column(conn, "topups", "user_id", "INTEGER")
         _ensure_column(conn, "topups", "seen_by_admin", "INTEGER")
+        _ensure_column(conn, "topups", "hold_applied", "INTEGER")
         conn.commit()
 
 

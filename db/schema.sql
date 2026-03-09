@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS topups (
   amount_net DOUBLE PRECISION NOT NULL,
   currency TEXT DEFAULT 'USD',
   fx_rate DOUBLE PRECISION,
+  hold_applied INTEGER DEFAULT 0,
   status TEXT DEFAULT 'pending',
   seen_by_admin INTEGER DEFAULT 0,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
