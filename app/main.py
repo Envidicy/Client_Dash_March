@@ -1489,7 +1489,7 @@ def plan_to_workbook(
         kpi_label = req.kpi_type.upper()
         outputs.cell(row=current_row, column=2, value="Тип")
         outputs.cell(row=current_row, column=3, value=kpi_label)
-        outputs.cell(row=current_row + 1, column=2, value="РџР»Р°РЅ")
+        outputs.cell(row=current_row + 1, column=2, value="План")
         outputs.cell(row=current_row + 1, column=3, value=plan.planned_kpi)
         outputs.cell(row=current_row + 2, column=2, value="Цель")
         outputs.cell(row=current_row + 2, column=3, value=req.kpi_target)
@@ -1728,7 +1728,7 @@ def _format_date_ru(dt: datetime) -> str:
         dt.strftime("%d %B %Y")
         .replace("January", "января")
         .replace("February", "февраля")
-        .replace("March", "РјР°СЂС‚Р°")
+        .replace("March", "марта")
         .replace("April", "апреля")
         .replace("May", "мая")
         .replace("June", "июня")
@@ -5821,8 +5821,8 @@ def admin_export_topups(admin_user=Depends(get_admin_user)):
     ws.title = "Topups"
     ws.append(
         [
-            "Р”Р°С‚Р°",
-            "РљР»РёРµРЅС‚",
+            "Дата",
+            "Клиент",
             "Платформа",
             "Аккаунт",
             "Сумма",
@@ -6175,7 +6175,7 @@ def invoice_preview():
         "beneficiary_iban": company.get("iban") or BENEFICIARY["iban"],
         "beneficiary_bic": company.get("bic") or BENEFICIARY["bic"],
         "beneficiary_kbe": company.get("kbe") or BENEFICIARY["kbe"],
-        "payer_name": "РћРћРћ РљР»РёРµРЅС‚",
+        "payer_name": "ООО Клиент",
         "payer_bin": "ИИН/БИН не указан",
         "payer_address": "Адрес не указан",
         "description": "Пополнение рекламного аккаунта",
