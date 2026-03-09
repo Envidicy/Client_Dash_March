@@ -3074,6 +3074,18 @@ def _google_fetch_account_billing(customer_id: str) -> Dict[str, object]:
     cached = _live_billing_cache_get(cache_key)
     if cached:
         return cached
+    if not normalized_customer_id:
+        payload = {
+            "provider": "google",
+            "currency": "USD",
+            "spend": None,
+            "limit": None,
+            "balance": None,
+            "error": "Google customer ID не задан или указан неверно",
+            "source": "google_ads_api",
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        return _live_billing_cache_set(cache_key, payload)
 
     client = _google_ads_client()
     ga_service = client.get_service("GoogleAdsService")
@@ -3094,22 +3106,13 @@ def _google_fetch_account_billing(customer_id: str) -> Dict[str, object]:
         ORDER BY account_budget.id DESC
         LIMIT 1
     """
-    rows = list(ga_service.search(customer_id=normalized_customer_id, query=query))
-    if not rows:
-        payload = {
-            "provider": "google",
-            "currency": currency,
-            "spend": None,
-            "limit": None,
-            "balance": None,
-            "source": "google_ads_api",
-            "updated_at": datetime.utcnow().isoformat() + "Z",
-        }
-        return _live_billing_cache_set(cache_key, payload)
+    rows = []
+    try:
+        rows = list(ga_service.search(customer_id=normalized_customer_id, query=query))
+    except Exception:
+        rows = []
 
-    budget = rows[0].account_budget
-    spend_budget = float(budget.amount_served_micros or 0) / 1_000_000
-    spend = spend_budget
+    spend = None
     try:
         spend_query = """
             SELECT metrics.cost_micros
@@ -3122,7 +3125,23 @@ def _google_fetch_account_billing(customer_id: str) -> Dict[str, object]:
             if spend_metrics >= 0:
                 spend = spend_metrics
     except Exception:
-        # Keep fallback to account_budget amount_served_micros if metrics query is unavailable.
+        spend = None
+
+    if not rows:
+        payload = {
+            "provider": "google",
+            "currency": currency,
+            "spend": spend,
+            "limit": None,
+            "balance": None,
+            "source": "google_ads_api",
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        return _live_billing_cache_set(cache_key, payload)
+
+    budget = rows[0].account_budget
+    spend_budget = float(budget.amount_served_micros or 0) / 1_000_000
+    if spend is None:
         spend = spend_budget
     adjusted_limit = float(budget.adjusted_spending_limit_micros or 0) / 1_000_000
     approved_limit = float(budget.approved_spending_limit_micros or 0) / 1_000_000
@@ -3132,8 +3151,8 @@ def _google_fetch_account_billing(customer_id: str) -> Dict[str, object]:
         "provider": "google",
         "currency": currency,
         "spend": spend,
-        "limit": None,
-        "balance": None,
+        "limit": limit,
+        "balance": (limit - spend) if (limit is not None and spend is not None) else None,
         "source": "google_ads_api",
         "updated_at": datetime.utcnow().isoformat() + "Z",
     }

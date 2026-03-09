@@ -314,11 +314,16 @@ function renderClientWalletOps(rows) {
 
 function formatLiveBillingCell(liveBilling, fallbackCurrency) {
   if (!liveBilling) return '—'
-  if (liveBilling.error) return '<span class="muted small">Ошибка API</span>'
+  if (liveBilling.error) return `<span class="muted small" title="${String(liveBilling.error)}">Ошибка API</span>`
   const currency = liveBilling.currency || fallbackCurrency || ''
   const spend = liveBilling.spend
-  if (spend == null) return '<span class="muted small">Нет данных</span>'
-  return `${formatMoney(spend)} ${currency}`
+  const limit = liveBilling.limit
+  if (spend == null && limit == null) return '<span class="muted small">Нет данных</span>'
+  if (spend != null && limit != null) {
+    return `${formatMoney(spend)} / ${formatMoney(limit)} ${currency}`
+  }
+  if (spend != null) return `${formatMoney(spend)} ${currency}`
+  return `${formatMoney(limit)} ${currency}`
 }
 
 function renderClientAccounts(rows) {

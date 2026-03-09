@@ -408,11 +408,16 @@ function renderOpenAccounts() {
 
 function formatLiveBillingCell(liveBilling, fallbackCurrency) {
   if (!liveBilling) return '—'
-  if (liveBilling.error) return '<span class="muted small">Ошибка API</span>'
+  if (liveBilling.error) return `<span class="muted small" title="${String(liveBilling.error)}">Ошибка API</span>`
   const currency = liveBilling.currency || fallbackCurrency || ''
   const spend = liveBilling.spend
-  if (spend == null) return '<span class="muted small">Нет данных</span>'
-  return `${formatMoneyAmount(spend)} ${currency}`
+  const limit = liveBilling.limit
+  if (spend == null && limit == null) return '<span class="muted small">Нет данных</span>'
+  if (spend != null && limit != null) {
+    return `${formatMoneyAmount(spend)} / ${formatMoneyAmount(limit)} ${currency}`
+  }
+  if (spend != null) return `${formatMoneyAmount(spend)} ${currency}`
+  return `${formatMoneyAmount(limit)} ${currency}`
 }
 
 function normalizeAccountStatus(status) {
