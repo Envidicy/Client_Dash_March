@@ -354,6 +354,7 @@ function renderOpenAccounts() {
   tbody.innerHTML = ''
   state.openAccounts.forEach((row) => {
     const hasAccount = Boolean(row.account_db_id)
+    const canTopup = hasAccount && row.can_topup !== false
     const tr = document.createElement('tr')
     const budgetUsd = convertAmountToUsd(row.budget, row.currency)
     const budgetLabel =
@@ -374,7 +375,7 @@ function renderOpenAccounts() {
         ${
           hasAccount
             ? `
-        <button class="icon-btn" title="Пополнить" data-topup="${row.account_db_id}" data-platform="${row.platform}">$</button>
+        ${canTopup ? `<button class="icon-btn" title="Пополнить" data-topup="${row.account_db_id}" data-platform="${row.platform}">$</button>` : ''}
         <button class="icon-btn stat" title="Статистика" data-stat="${row.account_db_id}" data-platform="${row.platform}">📊</button>
         <button class="icon-btn refresh" title="Обновить" data-refresh="${row.account_db_id}" data-platform="${row.platform}">⟳</button>
         `
@@ -441,6 +442,7 @@ function syncOpenAccounts() {
   const accountRows = (state.accountsFull || []).map((acc) => {
     const key = `${acc.platform}:${acc.name}`
     accountIndex.set(key, acc.id)
+    const normalizedStatus = normalizeAccountStatus(acc.status)
     return {
       platform: acc.platform,
       account_id: acc.name || acc.external_id || `Аккаунт #${acc.id}`,
@@ -451,7 +453,8 @@ function syncOpenAccounts() {
       email: '—',
       budget: acc.budget_total ?? null,
       currency: acc.currency || (acc.platform === 'telegram' ? 'EUR' : 'USD'),
-      status: normalizeAccountStatus(acc.status),
+      status: normalizedStatus,
+      can_topup: normalizedStatus !== 'Закрыт',
     }
   })
 
@@ -962,6 +965,7 @@ async function fetchAccounts() {
         budget_total: acc.budget_total || 0,
         external_id: acc.external_id || null,
       }
+      if (String(acc.status || '').toLowerCase() === 'archived') return
       if (acc.platform === 'meta') accounts.meta.push(row)
       if (acc.platform === 'google') accounts.google.push(row)
       if (acc.platform === 'tiktok') accounts.tiktok.push(row)
