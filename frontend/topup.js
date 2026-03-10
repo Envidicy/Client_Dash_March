@@ -415,13 +415,17 @@ function renderOpenAccounts() {
     card.innerHTML = `
       <div class="account-status-left">
         <div class="account-status-title-row">
-          <span class="platform-logo platform-${row.platform}" title="${platformLabel(row.platform)}">${platformLogo}</span>
-          <div class="account-status-name">${row.account_id}</div>
+          <div class="account-status-title-main">
+            <span class="platform-logo platform-${row.platform}" title="${platformLabel(row.platform)}">${platformLogo}</span>
+            <div class="account-status-name-wrap">
+              <div class="account-status-name">${row.account_id}</div>
+              <div class="account-status-id">ID: ${row.account_ref || '—'}</div>
+            </div>
+          </div>
           <span class="status ${statusClass(row.status)}">${row.status}</span>
         </div>
         <div class="account-status-sub">
           <span>${platformLabel(row.platform)}</span>
-          <span>ID: ${row.account_ref || '—'}</span>
           <span>${row.email || '—'}</span>
         </div>
       </div>
