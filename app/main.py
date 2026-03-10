@@ -2948,10 +2948,10 @@ def _live_billing_cache_set(key: str, data: Dict[str, object]) -> Dict[str, obje
     return dict(payload)
 
 
-def _meta_fetch_account_billing(account_external_id: str) -> Dict[str, object]:
+def _meta_fetch_account_billing(account_external_id: str, force_refresh: bool = False) -> Dict[str, object]:
     cache_key = f"meta:{account_external_id}"
     cached = _live_billing_cache_get(cache_key)
-    if cached:
+    if cached and not force_refresh:
         return cached
 
     token = os.getenv("META_ACCESS_TOKEN")
@@ -3074,11 +3074,11 @@ def _tiktok_normalize_advertiser_id(advertiser_id: object) -> str:
     return digits or raw
 
 
-def _google_fetch_account_billing(customer_id: str) -> Dict[str, object]:
+def _google_fetch_account_billing(customer_id: str, force_refresh: bool = False) -> Dict[str, object]:
     normalized_customer_id = _google_normalize_customer_id(customer_id)
     cache_key = f"google:{normalized_customer_id}"
     cached = _live_billing_cache_get(cache_key)
-    if cached:
+    if cached and not force_refresh:
         return cached
     if not normalized_customer_id:
         payload = {
@@ -3165,11 +3165,11 @@ def _google_fetch_account_billing(customer_id: str) -> Dict[str, object]:
     return _live_billing_cache_set(cache_key, payload)
 
 
-def _tiktok_fetch_account_billing(advertiser_id: str) -> Dict[str, object]:
+def _tiktok_fetch_account_billing(advertiser_id: str, force_refresh: bool = False) -> Dict[str, object]:
     normalized_advertiser_id = _tiktok_normalize_advertiser_id(advertiser_id)
     cache_key = f"tiktok:{normalized_advertiser_id}"
     cached = _live_billing_cache_get(cache_key)
-    if cached:
+    if cached and not force_refresh:
         return cached
 
     if not normalized_advertiser_id:
@@ -3280,7 +3280,7 @@ def _tiktok_fetch_account_billing(advertiser_id: str) -> Dict[str, object]:
     return _live_billing_cache_set(cache_key, result_payload)
 
 
-def _attach_live_billing(account: Dict[str, object]) -> Dict[str, object]:
+def _attach_live_billing(account: Dict[str, object], force_refresh: bool = False) -> Dict[str, object]:
     payload = dict(account)
     platform = str(payload.get("platform") or "").lower().strip()
     external_id = payload.get("external_id") or payload.get("account_code") or payload.get("name")
@@ -3290,11 +3290,11 @@ def _attach_live_billing(account: Dict[str, object]) -> Dict[str, object]:
 
     try:
         if platform == "meta":
-            payload["live_billing"] = _meta_fetch_account_billing(str(external_id))
+            payload["live_billing"] = _meta_fetch_account_billing(str(external_id), force_refresh=force_refresh)
         elif platform == "google":
-            payload["live_billing"] = _google_fetch_account_billing(str(external_id))
+            payload["live_billing"] = _google_fetch_account_billing(str(external_id), force_refresh=force_refresh)
         elif platform == "tiktok":
-            payload["live_billing"] = _tiktok_fetch_account_billing(str(external_id))
+            payload["live_billing"] = _tiktok_fetch_account_billing(str(external_id), force_refresh=force_refresh)
     except Exception as exc:
         logging.exception("Failed to fetch live billing for %s account %s", platform, external_id)
         payload["live_billing"] = {
@@ -3306,8 +3306,8 @@ def _attach_live_billing(account: Dict[str, object]) -> Dict[str, object]:
     return payload
 
 
-def _attach_live_billing_many(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    return [_attach_live_billing(row) for row in rows]
+def _attach_live_billing_many(rows: List[Dict[str, object]], force_refresh: bool = False) -> List[Dict[str, object]]:
+    return [_attach_live_billing(row, force_refresh=force_refresh) for row in rows]
 
 
 def _resolve_topup_account_amount(row: Dict[str, object]) -> Optional[float]:
@@ -6443,6 +6443,26 @@ def list_accounts(current_user=Depends(get_current_user)):
         query += " ORDER BY created_at DESC"
         rows = conn.execute(query, params).fetchall()
         return _attach_live_billing_many([dict(row) for row in rows])
+
+
+@app.post("/accounts/{account_id}/refresh-live-billing")
+def refresh_account_live_billing(account_id: int, current_user=Depends(get_current_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM ad_accounts WHERE id=? AND user_id=?",
+            (account_id, current_user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+        payload = _attach_live_billing(dict(row), force_refresh=True)
+        return {
+            "id": payload.get("id"),
+            "platform": payload.get("platform"),
+            "live_billing": payload.get("live_billing"),
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
 
 
 @app.post("/accounts")

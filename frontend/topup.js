@@ -461,7 +461,7 @@ function renderOpenAccounts() {
   if (nextBtn) nextBtn.disabled = page >= totalPages
 
   if (!cardsRoot.dataset.bound) {
-    cardsRoot.addEventListener('click', (e) => {
+    cardsRoot.addEventListener('click', async (e) => {
       const btn = e.target.closest('button[data-topup]')
       if (btn) {
         const accId = btn.dataset.topup
@@ -474,11 +474,47 @@ function renderOpenAccounts() {
       }
       const refresh = e.target.closest('button[data-refresh]')
       if (refresh) {
-        alert('Обновление бюджета будет добавлено позже.')
+        const originalText = refresh.textContent
+        refresh.disabled = true
+        refresh.textContent = 'Обновляем...'
+        try {
+          await refreshAccountLiveBilling(refresh.dataset.refresh)
+        } catch (err) {
+          const message = err?.message || 'Не удалось обновить данные по аккаунту.'
+          alert(message)
+        } finally {
+          refresh.disabled = false
+          refresh.textContent = originalText || 'Обновить'
+        }
       }
     })
     cardsRoot.dataset.bound = '1'
   }
+}
+
+async function refreshAccountLiveBilling(accountId) {
+  if (!accountId) return
+  const res = await fetch(`${apiBase}/accounts/${accountId}/refresh-live-billing`, {
+    method: 'POST',
+    headers: { ...authHeadersSafe() },
+  })
+  if (handleAuthFailure(res)) return
+  if (!res.ok) {
+    let message = 'Не удалось обновить данные по аккаунту.'
+    try {
+      const data = await res.json()
+      if (data?.detail) message = String(data.detail)
+    } catch (e) {
+      // ignore parse error
+    }
+    throw new Error(message)
+  }
+  const data = await res.json()
+  const id = String(accountId)
+  state.accountsFull = (state.accountsFull || []).map((acc) =>
+    String(acc.id) === id ? { ...acc, live_billing: data.live_billing || null } : acc
+  )
+  syncOpenAccounts()
 }
 
 function normalizeDateValue(raw) {
