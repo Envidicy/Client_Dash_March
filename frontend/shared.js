@@ -55,9 +55,11 @@
     </div>
     <div class="topbar">
       <div class="topbar-left">
-        <p class="eyebrow">${eyebrow ?? ''}</p>
-        <h1>${title ?? ''}</h1>
-        <p class="lede">${subtitle ?? ''}</p>
+        <div class="topbar-title-row">
+          ${eyebrow ? `<span class="topbar-eyebrow">${eyebrow}</span>` : ''}
+          <h1>${title ?? ''}</h1>
+          ${subtitle ? `<span class="topbar-subtitle">${subtitle}</span>` : ''}
+        </div>
       </div>
       <div class="topbar-right">
         ${isAdmin ? '' : '<div id="header-balance" class="balance-pill">Баланс: —</div>'}
