@@ -30,23 +30,25 @@
           </div>
           <span class="chip chip-ghost">Обновляется после заявки</span>
         </div>
-        <div class="table-wrapper">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Платформа</th>
-                <th>Аккаунт</th>
-                <th>ID аккаунта</th>
-                <th>Компания</th>
-                <th>Email</th>
-                <th>Бюджет</th>
-                <th>Потрачено</th>
-                <th>Статус</th>
-                <th style="text-align:right;">Действие</th>
-              </tr>
-            </thead>
-            <tbody id="accounts-body"></tbody>
-          </table>
+        <div class="accounts-toolbar">
+          <div class="accounts-date-range">
+            <input id="accounts-date-from" type="date" />
+            <span class="muted small">—</span>
+            <input id="accounts-date-to" type="date" />
+          </div>
+          <select id="accounts-status-filter" class="accounts-status-filter">
+            <option value="all">Статус: Все</option>
+            <option value="open">Статус: Открытые</option>
+            <option value="processing">Статус: В работе</option>
+            <option value="closed">Статус: Закрытые / Отклоненные</option>
+          </select>
+          <input id="accounts-search" type="search" placeholder="Поиск по фильтрам и названию" />
+        </div>
+        <div id="accounts-cards" class="accounts-cards"></div>
+        <div class="accounts-pagination">
+          <button id="accounts-prev" class="btn ghost small" type="button">Назад</button>
+          <span id="accounts-page-label" class="muted small">0 из 0</span>
+          <button id="accounts-next" class="btn ghost small" type="button">Далее</button>
         </div>
       </section>
 

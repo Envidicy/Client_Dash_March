@@ -28,6 +28,14 @@ const state = {
   accountsFull: [],
   fees: null,
   walletBalanceKzt: null,
+  openAccountsFilters: {
+    dateFrom: '',
+    dateTo: '',
+    status: 'all',
+    search: '',
+    page: 1,
+    pageSize: 5,
+  },
 }
 
 let accounts = { meta: [], google: [], tiktok: [], yandex: [], telegram: [], monochrome: [] }
@@ -365,13 +373,33 @@ async function loadBccRates() {
 }
 
 function renderOpenAccounts() {
-  const tbody = document.getElementById('accounts-body')
-  if (!tbody) return
-  tbody.innerHTML = ''
-  state.openAccounts.forEach((row) => {
+  const cardsRoot = document.getElementById('accounts-cards')
+  const pageLabel = document.getElementById('accounts-page-label')
+  const prevBtn = document.getElementById('accounts-prev')
+  const nextBtn = document.getElementById('accounts-next')
+  if (!cardsRoot) return
+  cardsRoot.innerHTML = ''
+
+  const filteredRows = getFilteredOpenAccounts()
+  const pageSize = Number(state.openAccountsFilters.pageSize || 5)
+  const total = filteredRows.length
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  if (state.openAccountsFilters.page > totalPages) state.openAccountsFilters.page = totalPages
+  if (state.openAccountsFilters.page < 1) state.openAccountsFilters.page = 1
+  const page = state.openAccountsFilters.page
+  const start = (page - 1) * pageSize
+  const end = start + pageSize
+  const rows = filteredRows.slice(start, end)
+
+  if (!rows.length) {
+    cardsRoot.innerHTML = '<div class="accounts-empty">По выбранным фильтрам ничего не найдено.</div>'
+  }
+
+  rows.forEach((row) => {
     const hasAccount = Boolean(row.account_db_id)
     const canTopup = hasAccount && row.can_topup !== false
-    const tr = document.createElement('tr')
+    const card = document.createElement('article')
+    card.className = 'account-status-card'
     const fallbackBudget = row.account_db_id ? getCompletedTopupBudgetByAccountId(row.account_db_id) : null
     const effectiveBudget =
       row.budget == null || Number(row.budget) <= 0
@@ -383,31 +411,51 @@ function renderOpenAccounts() {
         ? '—'
         : `${formatMoneyAmount(budgetUsd)} USD`
     const liveBillingLabel = formatLiveBillingCell(row.live_billing, row.currency)
-    tr.innerHTML = `
-      <td>${platformLabel(row.platform)}</td>
-      <td>${row.account_id}</td>
-      <td>${row.account_ref || '—'}</td>
-      <td>${row.company}</td>
-      <td>${row.email}</td>
-      <td>${budgetLabel}</td>
-      <td>${liveBillingLabel}</td>
-      <td><span class="status ${statusClass(row.status)}">${row.status}</span></td>
-      <td style="text-align:right; display:flex; gap:6px; justify-content:flex-end;">
+    card.innerHTML = `
+      <div class="account-status-left">
+        <div class="account-status-title-row">
+          <div class="account-status-name">${row.account_id}</div>
+          <span class="status ${statusClass(row.status)}">${row.status}</span>
+        </div>
+        <div class="account-status-sub">
+          <span>${platformLabel(row.platform)}</span>
+          <span>ID: ${row.account_ref || '—'}</span>
+          <span>${row.email || '—'}</span>
+        </div>
+      </div>
+      <div class="account-status-metrics">
+        <div class="account-metric">
+          <div class="account-metric-label">Бюджет</div>
+          <div class="account-metric-value">${budgetLabel}</div>
+        </div>
+        <div class="account-metric">
+          <div class="account-metric-label">Потрачено</div>
+          <div class="account-metric-value">${liveBillingLabel}</div>
+        </div>
+      </div>
+      <div class="account-status-actions">
         ${
           hasAccount
             ? `
-        ${canTopup ? `<button class="icon-btn" title="Пополнить" data-topup="${row.account_db_id}" data-platform="${row.platform}">$</button>` : ''}
-        <button class="icon-btn stat" title="Статистика" data-stat="${row.account_db_id}" data-platform="${row.platform}">📊</button>
-        <button class="icon-btn refresh" title="Обновить" data-refresh="${row.account_db_id}" data-platform="${row.platform}">⟳</button>
+        ${canTopup ? `<button class="btn primary small" title="Пополнить" data-topup="${row.account_db_id}" data-platform="${row.platform}">Пополнить</button>` : ''}
+        <button class="btn ghost small" title="Статистика" data-stat="${row.account_db_id}" data-platform="${row.platform}">Статистика</button>
+        <button class="btn ghost small" title="Обновить" data-refresh="${row.account_db_id}" data-platform="${row.platform}">Обновить</button>
         `
             : `<span class="muted small">Ожидает открытия</span>`
         }
-      </td>
+      </div>
     `
-    tbody.appendChild(tr)
+    cardsRoot.appendChild(card)
   })
-  if (!tbody.dataset.bound) {
-    tbody.addEventListener('click', (e) => {
+
+  const fromLabel = total === 0 ? 0 : start + 1
+  const toLabel = Math.min(end, total)
+  if (pageLabel) pageLabel.textContent = `${fromLabel}-${toLabel} из ${total}`
+  if (prevBtn) prevBtn.disabled = page <= 1
+  if (nextBtn) nextBtn.disabled = page >= totalPages
+
+  if (!cardsRoot.dataset.bound) {
+    cardsRoot.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-topup]')
       if (btn) {
         const accId = btn.dataset.topup
@@ -423,7 +471,102 @@ function renderOpenAccounts() {
         alert('Обновление бюджета будет добавлено позже.')
       }
     })
-    tbody.dataset.bound = '1'
+    cardsRoot.dataset.bound = '1'
+  }
+}
+
+function normalizeDateValue(raw) {
+  if (!raw) return ''
+  const dt = new Date(raw)
+  if (Number.isNaN(dt.getTime())) return ''
+  const y = dt.getFullYear()
+  const m = String(dt.getMonth() + 1).padStart(2, '0')
+  const d = String(dt.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function mapStatusFilter(status) {
+  const value = String(status || '').toLowerCase()
+  if (value === 'активен' || value === 'открыт') return 'open'
+  if (value === 'на модерации' || value === 'в работе' || value === 'новая') return 'processing'
+  if (value === 'закрыт' || value === 'отклонен' || value === 'заблокирован') return 'closed'
+  return 'all'
+}
+
+function getFilteredOpenAccounts() {
+  const filters = state.openAccountsFilters
+  const q = String(filters.search || '').trim().toLowerCase()
+  return state.openAccounts.filter((row) => {
+    const rowDate = normalizeDateValue(row.created_at)
+    if (filters.dateFrom && rowDate && rowDate < filters.dateFrom) return false
+    if (filters.dateTo && rowDate && rowDate > filters.dateTo) return false
+    if (filters.status !== 'all' && mapStatusFilter(row.status) !== filters.status) return false
+    if (q) {
+      const haystack = [
+        row.account_id,
+        row.account_ref,
+        row.email,
+        row.company,
+        platformLabel(row.platform),
+        row.status,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      if (!haystack.includes(q)) return false
+    }
+    return true
+  })
+}
+
+function bindOpenAccountsControls() {
+  const dateFrom = document.getElementById('accounts-date-from')
+  const dateTo = document.getElementById('accounts-date-to')
+  const status = document.getElementById('accounts-status-filter')
+  const search = document.getElementById('accounts-search')
+  const prevBtn = document.getElementById('accounts-prev')
+  const nextBtn = document.getElementById('accounts-next')
+
+  if (dateFrom) {
+    dateFrom.addEventListener('change', () => {
+      state.openAccountsFilters.dateFrom = dateFrom.value
+      state.openAccountsFilters.page = 1
+      renderOpenAccounts()
+    })
+  }
+  if (dateTo) {
+    dateTo.addEventListener('change', () => {
+      state.openAccountsFilters.dateTo = dateTo.value
+      state.openAccountsFilters.page = 1
+      renderOpenAccounts()
+    })
+  }
+  if (status) {
+    status.addEventListener('change', () => {
+      state.openAccountsFilters.status = status.value
+      state.openAccountsFilters.page = 1
+      renderOpenAccounts()
+    })
+  }
+  if (search) {
+    search.addEventListener('input', () => {
+      state.openAccountsFilters.search = search.value
+      state.openAccountsFilters.page = 1
+      renderOpenAccounts()
+    })
+  }
+  if (prevBtn) {
+    prevBtn.addEventListener('click', () => {
+      if (state.openAccountsFilters.page <= 1) return
+      state.openAccountsFilters.page -= 1
+      renderOpenAccounts()
+    })
+  }
+  if (nextBtn) {
+    nextBtn.addEventListener('click', () => {
+      state.openAccountsFilters.page += 1
+      renderOpenAccounts()
+    })
   }
 }
 
@@ -474,6 +617,7 @@ function syncOpenAccounts() {
       account_id: acc.name || acc.external_id || `Аккаунт #${acc.id}`,
       account_ref: acc.external_id || acc.account_code || acc.id,
       account_db_id: acc.id,
+      created_at: acc.created_at || null,
       live_billing: acc.live_billing || null,
       company: '',
       email: '—',
@@ -963,6 +1107,7 @@ function updateFee() {
 function init() {
   ensureSidebarRatesPanel()
   renderCards()
+  bindOpenAccountsControls()
   renderOpenAccounts()
   bindModal()
   loadBccRates()

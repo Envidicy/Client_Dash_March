@@ -1422,10 +1422,151 @@ h1 {
   .topup-card {
     width: 100%;
   }
+
+  .accounts-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .account-status-card {
+    grid-template-columns: 1fr;
+  }
+
+  .account-status-actions {
+    justify-content: flex-start;
+  }
+
+  .accounts-pagination {
+    justify-content: space-between;
+  }
 }
 
 .topup-card h3 {
   margin: 2px 0 0;
+}
+
+.accounts-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(170px, 0.9fr) minmax(220px, 1.3fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.accounts-date-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(15, 19, 34, 0.45);
+}
+
+.accounts-date-range input,
+.accounts-status-filter,
+#accounts-search {
+  background: rgba(15, 19, 34, 0.45);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 9px 10px;
+  font-size: 13px;
+  width: 100%;
+}
+
+.accounts-date-range input {
+  border: none;
+  padding: 0;
+}
+
+.accounts-cards {
+  display: grid;
+  gap: 10px;
+}
+
+.account-status-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgba(17, 22, 43, 0.94), rgba(12, 17, 34, 0.94));
+  padding: 12px;
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(260px, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.account-status-left {
+  min-width: 0;
+}
+
+.account-status-title-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.account-status-name {
+  font-weight: 700;
+  font-size: 15px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-status-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-status-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.account-metric {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  background: rgba(15, 19, 34, 0.5);
+}
+
+.account-metric-label {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.account-metric-value {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.account-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.accounts-pagination {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.accounts-empty {
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .platform-chip {
