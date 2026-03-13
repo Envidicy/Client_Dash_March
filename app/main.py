@@ -5794,11 +5794,12 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                     SELECT u.id, u.email,
                       COALESCE(SUM(CASE WHEN t.seen_by_admin=0 THEN 1 ELSE 0 END), 0) as unread_topups,
                       COALESCE(SUM(CASE WHEN t.status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
-                      COALESCE(SUM(CASE WHEN t.status='completed' THEN COALESCE(t.amount_input, 0) ELSE 0 END), 0) as completed_total,
+                      COALESCE(SUM(CASE WHEN wt.type='adjustment' AND wt.amount > 0 THEN wt.amount ELSE 0 END), 0) as completed_total,
                       COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
-                      MAX(t.created_at) as last_activity
+                      MAX(COALESCE(t.created_at, wt.created_at)) as last_activity
                     FROM users u
                     LEFT JOIN topups t ON t.user_id = u.id
+                    LEFT JOIN wallet_transactions wt ON wt.user_id = u.id
                     GROUP BY u.id, u.email
                     HAVING COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) > 0
                        OR COALESCE(u.is_client, 0) = 1
@@ -5811,11 +5812,12 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                     SELECT u.id, u.email,
                       0 as unread_topups,
                       COALESCE(SUM(CASE WHEN t.status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
-                      COALESCE(SUM(CASE WHEN t.status='completed' THEN COALESCE(t.amount_input, 0) ELSE 0 END), 0) as completed_total,
+                      COALESCE(SUM(CASE WHEN wt.type='adjustment' AND wt.amount > 0 THEN wt.amount ELSE 0 END), 0) as completed_total,
                       COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
-                      MAX(t.created_at) as last_activity
+                      MAX(COALESCE(t.created_at, wt.created_at)) as last_activity
                     FROM users u
                     LEFT JOIN topups t ON t.user_id = u.id
+                    LEFT JOIN wallet_transactions wt ON wt.user_id = u.id
                     GROUP BY u.id, u.email
                     HAVING COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) > 0
                        OR COALESCE(u.is_client, 0) = 1

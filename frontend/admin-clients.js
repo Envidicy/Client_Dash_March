@@ -110,7 +110,7 @@ async function openClientModal(userId, email, completedTotalKzt = null) {
     fetchClientProfile(userId),
     fetchClientFees(userId),
   ])
-  renderClientSummary(userId, email, requests, topups, accounts, profile, completedTotalKzt)
+  renderClientSummary(userId, email, requests, topups, walletOps, accounts, profile, completedTotalKzt)
   renderClientRequests(requests)
   renderClientTopups(topups)
   renderClientWalletOps(walletOps)
@@ -170,16 +170,20 @@ function getTopupAccountAmount(row) {
   return row?.amount_net != null ? Number(row.amount_net) : Number(row?.amount_input || 0)
 }
 
-function renderClientSummary(userId, email, requests, topups, accounts, profile, completedTotalKzt = null) {
+function renderClientSummary(userId, email, requests, topups, walletOps, accounts, profile, completedTotalKzt = null) {
   if (!clientSummary) return
   const pendingCount = Array.isArray(requests) ? requests.length : 0
-  const calculatedTotal = Array.isArray(topups)
-    ? topups.reduce((sum, row) => {
-        const value = Number(row?.amount_input || 0)
-        return sum + (Number.isFinite(value) ? value : 0)
+  const walletFundedTotal = Array.isArray(walletOps)
+    ? walletOps.reduce((sum, row) => {
+        if (String(row?.type || '') !== 'adjustment') return sum
+        const value = Number(row?.amount || 0)
+        if (!Number.isFinite(value) || value <= 0) return sum
+        return sum + value
       }, 0)
     : 0
-  const completedTotal = Number.isFinite(Number(completedTotalKzt)) ? Number(completedTotalKzt) : calculatedTotal
+  const completedTotal = Number.isFinite(walletFundedTotal) && walletFundedTotal > 0
+    ? walletFundedTotal
+    : (Number.isFinite(Number(completedTotalKzt)) ? Number(completedTotalKzt) : 0)
   const accountsCount = Array.isArray(accounts) ? accounts.length : 0
   const company = profile?.company || '—'
   clientSummary.innerHTML = `
@@ -196,7 +200,7 @@ function renderClientSummary(userId, email, requests, topups, accounts, profile,
     <div class="stat">
       <p class="muted">Пополнено</p>
       <h3>${completedTotal ? `${formatMoney(completedTotal)} KZT` : '—'}</h3>
-      <p class="muted small">По подтверждённым пополнениям, в KZT</p>
+      <p class="muted small">По фактическим зачислениям в кошелек, в KZT</p>
     </div>
     <div class="stat">
       <p class="muted">Аккаунты</p>
