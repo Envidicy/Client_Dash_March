@@ -432,9 +432,19 @@ function renderOpenAccounts() {
         ${
           hasAccount
             ? `
-        ${canTopup ? `<button class="btn primary small" title="Пополнить" data-topup="${row.account_db_id}" data-platform="${row.platform}">Пополнить</button>` : ''}
-        <button class="btn ghost small" title="Статистика" data-stat="${row.account_db_id}" data-platform="${row.platform}">Статистика</button>
-        <button class="btn ghost small" title="Обновить" data-refresh="${row.account_db_id}" data-platform="${row.platform}">Обновить</button>
+        ${
+          canTopup
+            ? `<button class="account-action-icon" data-tooltip="Пополнить" aria-label="Пополнить" data-topup="${row.account_db_id}" data-platform="${row.platform}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </button>`
+            : ''
+        }
+        <button class="account-action-icon" data-tooltip="Статистика" aria-label="Статистика" data-stat="${row.account_db_id}" data-platform="${row.platform}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18h16M7 16v-5M12 16V8M17 16v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <button class="account-action-icon" data-tooltip="Обновить" aria-label="Обновить" data-refresh="${row.account_db_id}" data-platform="${row.platform}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5.3M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
         `
             : `<span class="muted small">Ожидает открытия</span>`
         }
@@ -463,9 +473,8 @@ function renderOpenAccounts() {
       }
       const refresh = e.target.closest('button[data-refresh]')
       if (refresh) {
-        const originalText = refresh.textContent
         refresh.disabled = true
-        refresh.textContent = 'Обновляем...'
+        refresh.classList.add('is-loading')
         try {
           await refreshAccountLiveBilling(refresh.dataset.refresh)
         } catch (err) {
@@ -473,7 +482,7 @@ function renderOpenAccounts() {
           alert(message)
         } finally {
           refresh.disabled = false
-          refresh.textContent = originalText || 'Обновить'
+          refresh.classList.remove('is-loading')
         }
       }
     })

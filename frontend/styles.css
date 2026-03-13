@@ -293,6 +293,12 @@ body {
   position: relative;
 }
 
+.icon-circle svg {
+  width: 18px;
+  height: 18px;
+  color: #fff;
+}
+
 .icon-circle[data-tooltip]:hover::after {
   content: attr(data-tooltip);
   position: absolute;
@@ -1641,6 +1647,50 @@ h1 {
   gap: 8px;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+.account-action-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(15, 19, 34, 0.72);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.18s ease, background 0.18s ease, opacity 0.18s ease;
+}
+
+.account-action-icon:hover {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(15, 19, 34, 0.88);
+}
+
+.account-action-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.account-action-icon[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  background: #0f1322;
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  z-index: 20;
+}
+
+.account-action-icon.is-loading {
+  opacity: 0.65;
 }
 
 .accounts-pagination {
