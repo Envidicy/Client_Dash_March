@@ -400,27 +400,6 @@ function renderOpenAccounts() {
     const canTopup = hasAccount && row.can_topup !== false
     const card = document.createElement('article')
     card.className = 'account-status-card'
-    const fallbackBudget = row.account_db_id ? getCompletedTopupBudgetByAccountId(row.account_db_id) : null
-    const allowLiveBudgetFallback = row.platform === 'meta' || row.platform === 'google'
-    const liveLimit = row.live_billing && row.live_billing.limit != null ? Number(row.live_billing.limit) : null
-    const liveBalance = row.live_billing && row.live_billing.balance != null ? Number(row.live_billing.balance) : null
-    const liveSpend = row.live_billing && row.live_billing.spend != null ? Number(row.live_billing.spend) : null
-    const liveBudget =
-      allowLiveBudgetFallback && liveLimit != null
-        ? liveLimit
-        : allowLiveBudgetFallback && liveBalance != null && liveSpend != null
-          ? liveBalance + liveSpend
-          : null
-    const effectiveBudget =
-      row.budget == null || Number(row.budget) <= 0
-        ? (fallbackBudget == null ? (liveBudget == null ? row.budget : liveBudget) : fallbackBudget)
-        : row.budget
-    const budgetCurrency = row.live_billing?.currency || row.currency
-    const budgetUsd = convertAmountToUsd(effectiveBudget, budgetCurrency)
-    const budgetLabel =
-      effectiveBudget == null || budgetUsd == null
-        ? '—'
-        : `${formatMoneyAmount(budgetUsd)} USD`
     const liveBillingLabel = formatLiveBillingCell(row.live_billing, row.currency)
     const platformLogo = platformLogoHtml(row.platform)
     card.innerHTML = `
@@ -441,10 +420,6 @@ function renderOpenAccounts() {
         </div>
       </div>
       <div class="account-status-metrics">
-        <div class="account-metric">
-          <div class="account-metric-label">Бюджет</div>
-          <div class="account-metric-value">${budgetLabel}</div>
-        </div>
         <div class="account-metric">
           <div class="account-metric-label">Потрачено</div>
           <div class="account-metric-value">${liveBillingLabel}</div>
@@ -647,13 +622,8 @@ function formatLiveBillingCell(liveBilling, fallbackCurrency) {
   if (liveBilling.error) return `<span class="muted small" title="${String(liveBilling.error)}">Ошибка API</span>`
   const currency = liveBilling.currency || fallbackCurrency || ''
   const spend = liveBilling.spend
-  const limit = liveBilling.limit
-  if (spend == null && limit == null) return '<span class="muted small">Нет данных</span>'
-  if (spend != null && limit != null) {
-    return `${formatMoneyAmount(spend)} / ${formatMoneyAmount(limit)} ${currency}`
-  }
-  if (spend != null) return `${formatMoneyAmount(spend)} ${currency}`
-  return `${formatMoneyAmount(limit)} ${currency}`
+  if (spend == null) return '<span class="muted small">Нет данных</span>'
+  return `${formatMoneyAmount(spend)} ${currency}`
 }
 
 function normalizeAccountStatus(status) {
