@@ -221,7 +221,10 @@ def _get_marked_bcc_sell_rate(code: str, rates_data: Optional[Dict[str, object]]
     code_upper = str(code or "").upper()
     if not code_upper:
         return None
-    rates_payload = rates_data or _fetch_bcc_rates()
+    try:
+        rates_payload = rates_data or _fetch_bcc_rates()
+    except Exception:
+        return None
     rates = rates_payload.get("rates") if isinstance(rates_payload, dict) else None
     if not isinstance(rates, dict):
         return None
@@ -2301,7 +2304,23 @@ def health() -> Dict[str, str]:
 
 @app.get("/rates/bcc")
 def bcc_rates() -> Dict[str, object]:
-    return _fetch_bcc_rates()
+    try:
+        return _fetch_bcc_rates()
+    except Exception as exc:
+        cached = _BCC_RATES_CACHE.get("data")
+        if isinstance(cached, dict):
+            return {
+                **cached,
+                "source": "bcc_cache_fallback",
+                "warning": str(exc),
+                "fetched_at": datetime.utcnow().isoformat() + "Z",
+            }
+        return {
+            "source": "bcc_unavailable",
+            "rates": {"USD": None, "EUR": None},
+            "fetched_at": datetime.utcnow().isoformat() + "Z",
+            "warning": str(exc),
+        }
 
 
 @app.get("/rate-cards", response_model=List[RateCard])
