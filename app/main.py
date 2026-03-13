@@ -3420,32 +3420,34 @@ def _attach_topup_account_amount(rows: List[Dict[str, object]]) -> List[Dict[str
         account_currency = payload.get("account_currency") or payload.get("currency") or "USD"
         payload["amount_account_usd"] = _convert_amount_to_usd(payload.get("amount_account"), account_currency, rates_data)
         payload["amount_account_kzt"] = _convert_amount_to_kzt(payload.get("amount_account"), account_currency, rates_data)
-        try:
-            amount_input_value = float(payload.get("amount_input") or 0)
-        except (TypeError, ValueError):
-            amount_input_value = 0.0
-        try:
-            amount_account_value = float(payload.get("amount_account") or 0)
-        except (TypeError, ValueError):
-            amount_account_value = 0.0
-        try:
-            fx_rate_value = float(payload.get("fx_rate")) if payload.get("fx_rate") is not None else None
-        except (TypeError, ValueError):
-            fx_rate_value = None
-        try:
-            fee_percent_value = float(payload.get("fee_percent") or 0)
-        except (TypeError, ValueError):
-            fee_percent_value = 0.0
+        def _num(value: object, default: Optional[float] = 0.0) -> Optional[float]:
+            if value is None:
+                return default
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                text = str(value).replace("\xa0", "").replace(" ", "").replace(",", ".").strip()
+                if text == "":
+                    return default
+                try:
+                    return float(text)
+                except (TypeError, ValueError):
+                    return default
+
+        amount_input_value = _num(payload.get("amount_input"), 0.0) or 0.0
+        amount_account_value = _num(payload.get("amount_account"), 0.0) or 0.0
+        fx_rate_value = _num(payload.get("fx_rate"), None)
+        fee_percent_value = _num(payload.get("fee_percent"), 0.0) or 0.0
 
         our_rate = None
         fx_profit_kzt = 0.0
-        if fx_rate_value and fx_rate_value > 0 and amount_account_value > 0 and amount_input_value > 0:
+        if fx_rate_value and fx_rate_value > 0:
             if fx_rate_value > 10:
                 our_rate = fx_rate_value - 10.0
-                fx_profit_kzt = amount_input_value - (amount_account_value * our_rate)
             else:
                 our_rate = fx_rate_value
-                fx_profit_kzt = 0.0
+            if amount_account_value > 0 and amount_input_value > 0:
+                fx_profit_kzt = amount_input_value - (amount_account_value * our_rate)
             if fx_profit_kzt < 0:
                 fx_profit_kzt = 0.0
 
