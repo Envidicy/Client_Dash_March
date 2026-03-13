@@ -639,9 +639,27 @@ function formatLiveBillingCell(liveBilling, fallbackCurrency) {
   if (!liveBilling) return '—'
   if (liveBilling.error) return `<span class="muted small" title="${String(liveBilling.error)}">Ошибка API</span>`
   const currency = liveBilling.currency || fallbackCurrency || ''
-  const spend = liveBilling.spend
+  const spend = extractLiveSpend(liveBilling)
   if (spend == null) return '<span class="muted small">Нет данных</span>'
   return `${formatMoneyAmount(spend)} ${currency}`
+}
+
+function extractLiveSpend(liveBilling) {
+  if (!liveBilling || typeof liveBilling !== 'object') return null
+  const candidates = [
+    liveBilling.spend,
+    liveBilling.spent,
+    liveBilling.amount_spent,
+    liveBilling.total_spent,
+    liveBilling.total_spend,
+    liveBilling.metrics?.spend,
+    liveBilling.data?.spend,
+  ]
+  for (const item of candidates) {
+    const num = Number(item)
+    if (Number.isFinite(num)) return num
+  }
+  return null
 }
 
 function normalizeAccountStatus(status) {
