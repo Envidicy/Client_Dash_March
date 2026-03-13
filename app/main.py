@@ -6036,6 +6036,65 @@ def admin_client_wallet_transactions(user_id: int, admin_user=Depends(get_admin_
         return result
 
 
+@app.get("/admin/clients/{user_id}/invoice-summary")
+def admin_client_invoice_summary(user_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        return {"invoice_total_kzt": 0.0, "invoice_count": 0}
+    with get_conn() as conn:
+        user = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        rows = conn.execute(
+            """
+            SELECT
+              r.id as request_id,
+              COALESCE(i.amount, r.amount) as invoice_amount,
+              COALESCE(i.currency, r.currency, 'KZT') as invoice_currency
+            FROM wallet_topup_requests r
+            LEFT JOIN invoice_uploads i ON i.id = (
+              SELECT id FROM invoice_uploads WHERE request_id = r.id ORDER BY created_at DESC LIMIT 1
+            )
+            WHERE r.user_id=?
+            ORDER BY r.created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+
+        def _to_float(value: object) -> float:
+            if value is None:
+                return 0.0
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                text = str(value).replace("\xa0", "").replace(" ", "").replace(",", ".").strip()
+                try:
+                    return float(text)
+                except (TypeError, ValueError):
+                    return 0.0
+
+        try:
+            rates_data = _fetch_bcc_rates()
+        except Exception:
+            rates_data = None
+
+        total_kzt = 0.0
+        count = 0
+        for row in rows:
+            amount = _to_float(row.get("invoice_amount"))
+            if amount <= 0:
+                continue
+            currency = str(row.get("invoice_currency") or "KZT").upper()
+            converted = _convert_amount_to_kzt(amount, currency, rates_data)
+            if converted is None:
+                if currency == "KZT":
+                    converted = amount
+                else:
+                    continue
+            total_kzt += float(converted)
+            count += 1
+        return {"invoice_total_kzt": round(total_kzt, 2), "invoice_count": count}
+
+
 @app.get("/admin/clients/{user_id}/accounts")
 def admin_client_accounts(user_id: int, admin_user=Depends(get_admin_user)):
     if not get_conn:
