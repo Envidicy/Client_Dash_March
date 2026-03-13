@@ -214,51 +214,42 @@ body {
 }
 
 .topbar {
-  display: grid;
-  gap: 10px;
+  display: block;
+  margin-bottom: 12px;
   position: relative;
   z-index: 3000;
 }
 
-.topbar-left {
-  width: 100%;
-  min-width: 0;
-  order: 2;
-}
-
-.topbar-title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.topbar-eyebrow {
+.topbar-context {
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 4px 8px;
+  padding: 7px 12px;
   white-space: nowrap;
-  background: rgba(15, 19, 34, 0.45);
+  background: rgba(15, 19, 34, 0.7);
 }
 
-.topbar h1 {
+.page-heading {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(15, 19, 34, 0.52);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.page-heading h1 {
   margin: 0;
   font-size: 24px;
   line-height: 1.15;
-  white-space: nowrap;
 }
 
-.topbar-subtitle {
+.page-subtitle {
+  margin: 6px 0 0;
   font-size: 13px;
   color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
 }
 
 .topbar-right {
@@ -269,7 +260,6 @@ body {
   justify-content: flex-end;
   position: relative;
   width: 100%;
-  order: 1;
 }
 
 .balance-pill {
@@ -2353,17 +2343,11 @@ h1 {
     gap: 12px;
   }
 
-  .topbar-title-row {
-    width: 100%;
-    flex-wrap: wrap;
-    row-gap: 6px;
-  }
-
-  .topbar h1 {
+  .page-heading h1 {
     font-size: 20px;
   }
 
-  .topbar-subtitle {
+  .page-subtitle {
     width: 100%;
     white-space: normal;
   }

@@ -68,6 +68,7 @@ function renderHeader({ eyebrow, title, subtitle, buttons = [] }) {
     </div>
     <div class="topbar">
       <div class="topbar-right">
+        ${eyebrow ? `<span class="topbar-context">${eyebrow}</span>` : ''}
         ${isAdmin ? '' : '<div id="header-balance" class="balance-pill">Баланс: —</div>'}
         ${isAdmin ? '' : '<button class="btn primary" id="header-topup" type="button">Пополнить баланс</button>'}
         <div class="header-actions">
@@ -105,13 +106,10 @@ function renderHeader({ eyebrow, title, subtitle, buttons = [] }) {
         </div>
         ${isAdmin ? '' : '<div class="help-popover" id="help-popover"><div class="help-title">Помощь</div><p>Нужна консультация? Оставьте заявку.</p><button class="btn ghost small" id="help-request">Оставить заявку</button></div>'}
       </div>
-      <div class="topbar-left">
-        <div class="topbar-title-row">
-          ${eyebrow ? `<span class="topbar-eyebrow">${eyebrow}</span>` : ''}
-          <h1>${title ?? ''}</h1>
-          ${subtitle ? `<span class="topbar-subtitle">${subtitle}</span>` : ''}
-        </div>
-      </div>
+    </div>
+    <div class="page-heading">
+      <h1>${title ?? ''}</h1>
+      ${subtitle ? `<p class="page-subtitle">${subtitle}</p>` : ''}
     </div>
   `
   const logoutButtons = Array.from(document.querySelectorAll('.nav-logout'))
