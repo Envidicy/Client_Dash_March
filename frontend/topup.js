@@ -32,6 +32,7 @@ const state = {
   openAccountsFilters: {
     dateFrom: '',
     dateTo: '',
+    periodPreset: 'this_month',
     status: 'all',
     search: '',
     page: 1,
@@ -213,6 +214,40 @@ function getCurrentMonthPeriod() {
   const m = String(now.getMonth() + 1).padStart(2, '0')
   const d = String(now.getDate()).padStart(2, '0')
   return { dateFrom: `${y}-${m}-01`, dateTo: `${y}-${m}-${d}` }
+}
+
+function toIsoDate(value) {
+  const y = value.getFullYear()
+  const m = String(value.getMonth() + 1).padStart(2, '0')
+  const d = String(value.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function getPeriodFromPreset(preset) {
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  if (preset === 'today') {
+    const iso = toIsoDate(today)
+    return { dateFrom: iso, dateTo: iso }
+  }
+  if (preset === '7d') {
+    const from = new Date(today)
+    from.setDate(from.getDate() - 6)
+    return { dateFrom: toIsoDate(from), dateTo: toIsoDate(today) }
+  }
+  if (preset === '30d') {
+    const from = new Date(today)
+    from.setDate(from.getDate() - 29)
+    return { dateFrom: toIsoDate(from), dateTo: toIsoDate(today) }
+  }
+  if (preset === 'prev_month') {
+    const firstCurrent = new Date(today.getFullYear(), today.getMonth(), 1)
+    const lastPrev = new Date(firstCurrent)
+    lastPrev.setDate(0)
+    const firstPrev = new Date(lastPrev.getFullYear(), lastPrev.getMonth(), 1)
+    return { dateFrom: toIsoDate(firstPrev), dateTo: toIsoDate(lastPrev) }
+  }
+  return getCurrentMonthPeriod()
 }
 
 function withDefaultMarkup(rate) {
@@ -540,6 +575,16 @@ async function fetchPeriodSpend() {
     renderOpenAccounts()
     return
   }
+  if (dateFrom > dateTo) {
+    state.periodSpendByAccount = {}
+    renderOpenAccounts()
+    return
+  }
+  if (!Array.isArray(state.accountsFull) || state.accountsFull.length === 0) {
+    state.periodSpendByAccount = {}
+    renderOpenAccounts()
+    return
+  }
   const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
   try {
     state.periodSpendByAccount = Object.fromEntries(
@@ -620,6 +665,7 @@ function getFilteredOpenAccounts() {
 }
 
 function bindOpenAccountsControls() {
+  const periodPreset = document.getElementById('accounts-period-preset')
   const dateFrom = document.getElementById('accounts-date-from')
   const dateTo = document.getElementById('accounts-date-to')
   const status = document.getElementById('accounts-status-filter')
@@ -627,15 +673,34 @@ function bindOpenAccountsControls() {
   const prevBtn = document.getElementById('accounts-prev')
   const nextBtn = document.getElementById('accounts-next')
 
+  if (!state.openAccountsFilters.dateFrom || !state.openAccountsFilters.dateTo) {
+    const period = getPeriodFromPreset(state.openAccountsFilters.periodPreset || 'this_month')
+    state.openAccountsFilters.dateFrom = period.dateFrom
+    state.openAccountsFilters.dateTo = period.dateTo
+  }
+
+  if (periodPreset) {
+    periodPreset.value = state.openAccountsFilters.periodPreset || 'this_month'
+    periodPreset.addEventListener('change', () => {
+      const preset = periodPreset.value || 'this_month'
+      state.openAccountsFilters.periodPreset = preset
+      if (preset !== 'custom') {
+        const period = getPeriodFromPreset(preset)
+        state.openAccountsFilters.dateFrom = period.dateFrom
+        state.openAccountsFilters.dateTo = period.dateTo
+        if (dateFrom) dateFrom.value = period.dateFrom
+        if (dateTo) dateTo.value = period.dateTo
+      }
+      fetchPeriodSpend()
+    })
+  }
+
   if (dateFrom) {
-    if (!state.openAccountsFilters.dateFrom || !state.openAccountsFilters.dateTo) {
-      const period = getCurrentMonthPeriod()
-      state.openAccountsFilters.dateFrom = period.dateFrom
-      state.openAccountsFilters.dateTo = period.dateTo
-    }
     dateFrom.value = state.openAccountsFilters.dateFrom
     dateFrom.addEventListener('change', () => {
       state.openAccountsFilters.dateFrom = dateFrom.value
+      state.openAccountsFilters.periodPreset = 'custom'
+      if (periodPreset) periodPreset.value = 'custom'
       fetchPeriodSpend()
     })
   }
@@ -643,6 +708,8 @@ function bindOpenAccountsControls() {
     dateTo.value = state.openAccountsFilters.dateTo
     dateTo.addEventListener('change', () => {
       state.openAccountsFilters.dateTo = dateTo.value
+      state.openAccountsFilters.periodPreset = 'custom'
+      if (periodPreset) periodPreset.value = 'custom'
       fetchPeriodSpend()
     })
   }

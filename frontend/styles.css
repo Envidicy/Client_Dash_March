@@ -1478,7 +1478,7 @@ h1 {
 
 .accounts-toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, 1.2fr) minmax(170px, 0.9fr) minmax(220px, 1.3fr);
+  grid-template-columns: minmax(150px, 0.9fr) minmax(220px, 1.2fr) minmax(170px, 0.9fr) minmax(220px, 1.3fr);
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -1494,6 +1494,7 @@ h1 {
 }
 
 .accounts-date-range input,
+.accounts-period-preset,
 .accounts-status-filter,
 #accounts-search {
   background: rgba(15, 19, 34, 0.45);
