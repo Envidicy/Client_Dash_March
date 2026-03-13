@@ -3161,19 +3161,6 @@ def _google_fetch_account_billing(customer_id: str, force_refresh: bool = False)
         rows = []
 
     spend = None
-    try:
-        spend_query = """
-            SELECT metrics.cost_micros
-            FROM customer
-            WHERE segments.date DURING THIS_MONTH
-        """
-        spend_rows = list(ga_service.search(customer_id=normalized_customer_id, query=spend_query))
-        if spend_rows:
-            spend_metrics = float(spend_rows[0].metrics.cost_micros or 0) / 1_000_000
-            if spend_metrics >= 0:
-                spend = spend_metrics
-    except Exception:
-        spend = None
 
     if not rows:
         payload = {
@@ -3189,8 +3176,7 @@ def _google_fetch_account_billing(customer_id: str, force_refresh: bool = False)
 
     budget = rows[0].account_budget
     spend_budget = float(budget.amount_served_micros or 0) / 1_000_000
-    if spend is None:
-        spend = spend_budget
+    spend = spend_budget
     adjusted_limit = float(budget.adjusted_spending_limit_micros or 0) / 1_000_000
     approved_limit = float(budget.approved_spending_limit_micros or 0) / 1_000_000
     limit = adjusted_limit or approved_limit or None
