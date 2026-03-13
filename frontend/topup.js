@@ -442,7 +442,7 @@ function renderOpenAccounts() {
         <button class="account-action-icon" data-tooltip="Статистика" aria-label="Статистика" data-stat="${row.account_db_id}" data-platform="${row.platform}">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18h16M7 16v-5M12 16V8M17 16v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
-        <button class="account-action-icon" data-tooltip="Обновить" aria-label="Обновить" data-refresh="${row.account_db_id}" data-platform="${row.platform}">
+        <button class="account-action-icon" data-tooltip="Обновить бюджет" aria-label="Обновить бюджет" data-refresh="${row.account_db_id}" data-platform="${row.platform}">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5.3M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         `
@@ -469,7 +469,13 @@ function renderOpenAccounts() {
       }
       const stat = e.target.closest('button[data-stat]')
       if (stat) {
-        alert('Статистика будет подтягиваться позже.')
+        const accountId = stat.dataset.stat
+        const platform = stat.dataset.platform
+        const params = new URLSearchParams()
+        if (platform) params.set('platform', platform)
+        if (accountId) params.set('account_id', accountId)
+        window.location.href = `/dashboard${params.toString() ? `?${params.toString()}` : ''}`
+        return
       }
       const refresh = e.target.closest('button[data-refresh]')
       if (refresh) {

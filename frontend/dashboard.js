@@ -11,6 +11,10 @@ renderHeader({
 })
 
 const apiBase = window.API_BASE || 'https://envidicy-dash-client.onrender.com'
+const dashboardQuery = new URLSearchParams(window.location.search || '')
+const deepLinkPlatform = String(dashboardQuery.get('platform') || '').toLowerCase()
+const deepLinkAccountId = String(dashboardQuery.get('account_id') || '')
+let deepLinkApplied = false
 const metaDateFrom = document.getElementById('meta-date-from')
 const metaDateTo = document.getElementById('meta-date-to')
 const metaAccount = document.getElementById('meta-account')
@@ -110,8 +114,35 @@ async function loadMetaAccounts() {
         tiktok.map((acc) => `<option value="${acc.id}">${accountOptionLabel(acc)}</option>`).join('')
       tiktokAccount.value = ''
     }
+    applyDashboardDeepLink()
   } catch (e) {
     if (metaStatus) metaStatus.textContent = 'Не удалось загрузить Meta аккаунты.'
+  }
+}
+
+function applyDashboardDeepLink() {
+  if (deepLinkApplied) return
+  if (!deepLinkPlatform || !deepLinkAccountId) return
+  deepLinkApplied = true
+  if (deepLinkPlatform === 'meta' && metaAccount) {
+    if (metaAccount.querySelector(`option[value="${deepLinkAccountId}"]`)) {
+      metaAccount.value = deepLinkAccountId
+    }
+    void withGlobalLoading('Загружаем данные...', loadMetaInsights)
+    return
+  }
+  if (deepLinkPlatform === 'google' && googleAccount) {
+    if (googleAccount.querySelector(`option[value="${deepLinkAccountId}"]`)) {
+      googleAccount.value = deepLinkAccountId
+    }
+    void withGlobalLoading('Загружаем данные...', loadGoogleInsights)
+    return
+  }
+  if (deepLinkPlatform === 'tiktok' && tiktokAccount) {
+    if (tiktokAccount.querySelector(`option[value="${deepLinkAccountId}"]`)) {
+      tiktokAccount.value = deepLinkAccountId
+    }
+    void withGlobalLoading('Загружаем данные...', loadTiktokInsights)
   }
 }
 
