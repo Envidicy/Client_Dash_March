@@ -26,6 +26,7 @@ const state = {
   accountRequests: [],
   topups: [],
   accountsFull: [],
+  periodSpendByAccount: {},
   fees: null,
   walletBalanceKzt: null,
   openAccountsFilters: {
@@ -204,6 +205,14 @@ function formatRateValue(value) {
 function formatMoneyAmount(value) {
   const n = Number(value || 0)
   return n.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function getCurrentMonthPeriod() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return { dateFrom: `${y}-${m}-01`, dateTo: `${y}-${m}-${d}` }
 }
 
 function withDefaultMarkup(rate) {
@@ -427,6 +436,10 @@ function renderOpenAccounts() {
           <div class="account-metric-label">Потрачено</div>
           <div class="account-metric-value">${liveBillingLabel}</div>
         </div>
+        <div class="account-metric">
+          <div class="account-metric-label">Потрачено за период</div>
+          <div class="account-metric-value">${formatPeriodSpendCell(row)}</div>
+        </div>
       </div>
       <div class="account-status-actions">
         ${
@@ -521,14 +534,39 @@ async function refreshAccountLiveBilling(accountId) {
   syncOpenAccounts()
 }
 
-function normalizeDateValue(raw) {
-  if (!raw) return ''
-  const dt = new Date(raw)
-  if (Number.isNaN(dt.getTime())) return ''
-  const y = dt.getFullYear()
-  const m = String(dt.getMonth() + 1).padStart(2, '0')
-  const d = String(dt.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+async function fetchPeriodSpend() {
+  const { dateFrom, dateTo } = state.openAccountsFilters
+  if (!dateFrom || !dateTo) {
+    renderOpenAccounts()
+    return
+  }
+  const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
+  try {
+    state.periodSpendByAccount = Object.fromEntries(
+      (state.accountsFull || []).map((acc) => [String(acc.id), { loading: true }])
+    )
+    renderOpenAccounts()
+    const res = await fetch(`${apiBase}/accounts/spend?${params.toString()}`, {
+      headers: { ...authHeadersSafe() },
+    })
+    if (handleAuthFailure(res)) return
+    if (!res.ok) throw new Error('Failed to load period spend')
+    const data = await res.json()
+    const mapped = {}
+    for (const item of data.items || []) {
+      mapped[String(item.account_id)] = {
+        spend: item.spend,
+        currency: item.currency,
+        error: item.error || null,
+      }
+    }
+    state.periodSpendByAccount = mapped
+  } catch (e) {
+    state.periodSpendByAccount = {}
+    console.error(e)
+  } finally {
+    renderOpenAccounts()
+  }
 }
 
 function mapStatusFilter(status) {
@@ -562,9 +600,6 @@ function getFilteredOpenAccounts() {
   const q = String(filters.search || '').trim().toLowerCase()
   return state.openAccounts.filter((row) => {
     if (mapStatusFilter(row.status) === 'closed') return false
-    const rowDate = normalizeDateValue(row.created_at)
-    if (filters.dateFrom && rowDate && rowDate < filters.dateFrom) return false
-    if (filters.dateTo && rowDate && rowDate > filters.dateTo) return false
     if (filters.status !== 'all' && mapStatusFilter(row.status) !== filters.status) return false
     if (q) {
       const haystack = [
@@ -593,17 +628,22 @@ function bindOpenAccountsControls() {
   const nextBtn = document.getElementById('accounts-next')
 
   if (dateFrom) {
+    if (!state.openAccountsFilters.dateFrom || !state.openAccountsFilters.dateTo) {
+      const period = getCurrentMonthPeriod()
+      state.openAccountsFilters.dateFrom = period.dateFrom
+      state.openAccountsFilters.dateTo = period.dateTo
+    }
+    dateFrom.value = state.openAccountsFilters.dateFrom
     dateFrom.addEventListener('change', () => {
       state.openAccountsFilters.dateFrom = dateFrom.value
-      state.openAccountsFilters.page = 1
-      renderOpenAccounts()
+      fetchPeriodSpend()
     })
   }
   if (dateTo) {
+    dateTo.value = state.openAccountsFilters.dateTo
     dateTo.addEventListener('change', () => {
       state.openAccountsFilters.dateTo = dateTo.value
-      state.openAccountsFilters.page = 1
-      renderOpenAccounts()
+      fetchPeriodSpend()
     })
   }
   if (status) {
@@ -660,6 +700,18 @@ function extractLiveSpend(liveBilling) {
     if (Number.isFinite(num)) return num
   }
   return null
+}
+
+function formatPeriodSpendCell(row) {
+  if (!row?.account_db_id) return '<span class="muted small">—</span>'
+  const key = String(row.account_db_id)
+  const item = state.periodSpendByAccount[key]
+  if (!item) return '<span class="muted small">—</span>'
+  if (item.loading) return '<span class="muted small">Загрузка...</span>'
+  if (item.error) return '<span class="muted small">Ошибка API</span>'
+  const spend = Number(item.spend)
+  if (!Number.isFinite(spend)) return '<span class="muted small">Нет данных</span>'
+  return `${formatMoneyAmount(spend)} ${item.currency || row.currency || ''}`
 }
 
 function normalizeAccountStatus(status) {
@@ -1222,6 +1274,7 @@ async function fetchAccounts() {
       if (acc.platform === 'telegram') accounts.telegram.push(row)
       if (acc.platform === 'monochrome') accounts.monochrome.push(row)
     })
+    await fetchPeriodSpend()
     await fetchAccountRequests()
     syncOpenAccounts()
   } catch (e) {

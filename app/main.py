@@ -6650,6 +6650,75 @@ def list_accounts(current_user=Depends(get_current_user)):
         return _attach_live_billing_many([dict(row) for row in rows])
 
 
+@app.get("/accounts/spend")
+def list_accounts_period_spend(
+    date_from: str,
+    date_to: str,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        return {"date_from": date_from, "date_to": date_to, "items": []}
+    if not date_from or not date_to:
+        raise HTTPException(status_code=400, detail="date_from and date_to are required")
+    try:
+        from_dt = datetime.strptime(date_from, "%Y-%m-%d").date()
+        to_dt = datetime.strptime(date_to, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be in YYYY-MM-DD format")
+    if from_dt > to_dt:
+        raise HTTPException(status_code=400, detail="date_from must be less than or equal to date_to")
+
+    def _to_float(value: object) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, platform, external_id, account_code, name, currency FROM ad_accounts WHERE user_id=? ORDER BY created_at DESC",
+            (current_user["id"],),
+        ).fetchall()
+        accounts = [dict(row) for row in rows]
+
+    items: List[Dict[str, object]] = []
+    for acc in accounts:
+        account_id = acc.get("id")
+        platform = str(acc.get("platform") or "").lower().strip()
+        external_id = acc.get("external_id") or acc.get("account_code") or acc.get("name")
+        currency = acc.get("currency") or "USD"
+        payload: Dict[str, object] = {
+            "account_id": account_id,
+            "platform": platform,
+            "currency": currency,
+            "spend": None,
+        }
+
+        if platform not in {"meta", "google", "tiktok"}:
+            items.append(payload)
+            continue
+        if not external_id:
+            items.append(payload)
+            continue
+
+        try:
+            if platform == "meta":
+                daily_rows = _meta_fetch_daily(str(external_id), date_from, date_to)
+                payload["spend"] = sum(_to_float(row.get("spend")) for row in daily_rows)
+            elif platform == "google":
+                daily_rows = _google_fetch_daily(_google_normalize_customer_id(str(external_id)), date_from, date_to)
+                payload["spend"] = sum(_to_float(row.get("spend")) for row in daily_rows)
+            elif platform == "tiktok":
+                daily_rows = _tiktok_fetch_daily(_tiktok_normalize_advertiser_id(str(external_id)), date_from, date_to)
+                payload["spend"] = sum(_to_float(row.get("spend")) for row in daily_rows)
+        except Exception as exc:
+            payload["error"] = str(exc)
+
+        items.append(payload)
+
+    return {"date_from": date_from, "date_to": date_to, "items": items}
+
+
 @app.post("/accounts/{account_id}/refresh-live-billing")
 def refresh_account_live_billing(account_id: int, current_user=Depends(get_current_user)):
     if not get_conn:
