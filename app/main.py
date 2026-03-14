@@ -1187,7 +1187,8 @@ def build_plan(req: PlanRequest) -> PlanResponse:
         manual_total = sum(req.budget_split.values())
         if manual_total > 0:
             manual_split = {k: v / manual_total for k, v in req.budget_split.items()}
-    if smart_split:
+    # Smart preset is used only when there is no explicit split from assistant/user.
+    if smart_split and manual_split is None:
         manual_split = smart_split
 
     lines: List[PlanLine] = []

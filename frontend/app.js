@@ -349,6 +349,7 @@ function readPayload() {
       date_end: endDate.toISOString().slice(0, 10),
       avg_frequency: 1.6,
       pricing_mode: 'auto',
+      channel_inputs: hasChannelInputs ? channelInputs : null,
       budget_split: aiBudgetSplit,
     }
   }
