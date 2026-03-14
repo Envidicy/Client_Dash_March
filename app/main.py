@@ -2,6 +2,7 @@
 from io import BytesIO
 from typing import Dict, List, Literal, Optional, Tuple
 from enum import Enum
+import calendar
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Form, Request
 import logging
@@ -1361,6 +1362,41 @@ def _blend_platform_scores(
         if score > 0:
             scores[platform] = score
     return scores
+
+
+def _parse_iso_date(value: str) -> date:
+    return datetime.strptime(value, "%Y-%m-%d").date()
+
+
+def _shift_months(base: date, delta_months: int) -> date:
+    month_index = (base.month - 1) + delta_months
+    year = base.year + (month_index // 12)
+    month = (month_index % 12) + 1
+    day = min(base.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _meta_safe_date_from(date_from: str) -> str:
+    # Meta rejects ranges where start date is older than ~37 months.
+    start = _parse_iso_date(date_from)
+    min_allowed = _shift_months(date.today(), -37)
+    if start < min_allowed:
+        return min_allowed.isoformat()
+    return date_from
+
+
+def _date_chunks(date_from: str, date_to: str, max_days: int) -> List[Tuple[str, str]]:
+    start = _parse_iso_date(date_from)
+    end = _parse_iso_date(date_to)
+    if start > end:
+        return []
+    chunks: List[Tuple[str, str]] = []
+    cur = start
+    while cur <= end:
+        chunk_end = min(cur + timedelta(days=max_days - 1), end)
+        chunks.append((cur.isoformat(), chunk_end.isoformat()))
+        cur = chunk_end + timedelta(days=1)
+    return chunks
 
 
 def _assistant_call_llm(
@@ -5165,13 +5201,14 @@ def _build_insights_overview_for_user(
     daily_meta: Dict[str, Dict[str, object]] = {}
     daily_google: Dict[str, Dict[str, object]] = {}
     daily_tiktok: Dict[str, Dict[str, object]] = {}
+    safe_meta_from = _meta_safe_date_from(date_from)
 
     for acc in meta_accounts:
         external_id = acc.get("external_id") or acc.get("account_code")
         if not external_id:
             continue
         try:
-            rows = _meta_fetch_daily(str(external_id), date_from, date_to)
+            rows = _meta_fetch_daily(str(external_id), safe_meta_from, date_to)
             for row in rows:
                 _merge_daily(daily_meta, "date_start", row)
         except Exception:
@@ -5199,9 +5236,10 @@ def _build_insights_overview_for_user(
             advertiser_ids.append(str(env_adv))
     for adv_id in sorted(set(advertiser_ids)):
         try:
-            rows = _tiktok_fetch_daily(adv_id, date_from, date_to)
-            for row in rows:
-                _merge_daily(daily_tiktok, "date", row)
+            for chunk_from, chunk_to in _date_chunks(date_from, date_to, 30):
+                rows = _tiktok_fetch_daily(adv_id, chunk_from, chunk_to)
+                for row in rows:
+                    _merge_daily(daily_tiktok, "date", row)
         except Exception:
             continue
 
@@ -5300,10 +5338,11 @@ def _build_insights_overview_global(date_from: str, date_to: str) -> Dict[str, o
     daily_meta: Dict[str, Dict[str, object]] = {}
     daily_google: Dict[str, Dict[str, object]] = {}
     daily_tiktok: Dict[str, Dict[str, object]] = {}
+    safe_meta_from = _meta_safe_date_from(date_from)
 
     for external_id in sorted(ids_by_platform["meta"]):
         try:
-            rows = _meta_fetch_daily(external_id, date_from, date_to)
+            rows = _meta_fetch_daily(external_id, safe_meta_from, date_to)
             for row in rows:
                 _merge_daily(daily_meta, "date_start", row)
             debug["meta"]["api_ok"] = int(debug["meta"]["api_ok"]) + 1
@@ -5327,9 +5366,10 @@ def _build_insights_overview_global(date_from: str, date_to: str) -> Dict[str, o
 
     for advertiser_id in sorted(ids_by_platform["tiktok"]):
         try:
-            rows = _tiktok_fetch_daily(advertiser_id, date_from, date_to)
-            for row in rows:
-                _merge_daily(daily_tiktok, "date", row)
+            for chunk_from, chunk_to in _date_chunks(date_from, date_to, 30):
+                rows = _tiktok_fetch_daily(advertiser_id, chunk_from, chunk_to)
+                for row in rows:
+                    _merge_daily(daily_tiktok, "date", row)
             debug["tiktok"]["api_ok"] = int(debug["tiktok"]["api_ok"]) + 1
         except Exception:
             debug["tiktok"]["api_failed"] = int(debug["tiktok"]["api_failed"]) + 1
