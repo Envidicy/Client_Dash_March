@@ -74,6 +74,7 @@
         </div>
         <div class="actions-row">
           <button class="btn primary" id="btn-estimate">Рассчитать план</button>
+          <button class="btn ghost" id="btn-ai-draft">AI-черновик</button>
           <button class="btn ghost" id="btn-excel">Скачать Excel</button>
         </div>
       </section>
@@ -170,6 +171,7 @@
         </div>
         <div class="actions-row strategy-only">
           <button class="btn primary" id="btn-estimate">Рассчитать план</button>
+          <button class="btn ghost" id="btn-ai-draft">AI-черновик</button>
           <button class="btn ghost" id="btn-excel">Скачать Excel</button>
         </div>
         <details class="field details">
@@ -429,6 +431,17 @@
             <tbody></tbody>
           </table>
         </div>
+      </section>
+
+      <section class="panel" id="ai-assistant-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">AI ассистент</p>
+            <h2>Рекомендации по медиаплану</h2>
+          </div>
+          <span class="chip chip-ghost">MVP</span>
+        </div>
+        <div id="ai-assistant-output" class="muted">Нажмите «AI-черновик», чтобы получить рекомендации.</div>
       </section>
 
       <section class="panel">

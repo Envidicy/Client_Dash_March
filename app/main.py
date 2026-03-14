@@ -525,6 +525,16 @@ class PlanRequest(BaseModel):
     )
 
 
+class PlanAssistantResponse(BaseModel):
+    source: Literal["llm", "fallback"]
+    assumption_profile: Literal["base", "conservative", "aggressive"]
+    funnel_split: Dict[str, float]
+    assumptions: Dict[str, str]
+    recommendations: List[str]
+    confidence: float = Field(0.6, ge=0, le=1)
+    budget_split: Dict[str, float] = Field(default_factory=dict)
+
+
 rate_cards: Dict[PlatformKey, RateCard] = {
     "meta": RateCard(
         key="meta",
@@ -1226,6 +1236,175 @@ def build_plan(req: PlanRequest) -> PlanResponse:
         period_days=effective_period,
         planned_kpi=planned_kpi,
         fact_weekly=None,
+    )
+
+
+def _assistant_choose_profile(req: PlanRequest) -> Literal["base", "conservative", "aggressive"]:
+    goal = str(req.goal or "").lower()
+    budget = float(req.budget or 0)
+    if goal == "reach":
+        return "conservative"
+    if goal == "traffic":
+        return "aggressive" if budget < 5000 else "base"
+    if goal in {"conversions", "sales"}:
+        return "aggressive" if budget < 4000 else "base"
+    return "base"
+
+
+def _assistant_default_funnel(req: PlanRequest) -> Dict[str, float]:
+    goal = str(req.goal or "").lower()
+    if goal == "reach":
+        return {"awareness": 55.0, "consideration": 30.0, "performance": 15.0}
+    if goal == "traffic":
+        return {"awareness": 35.0, "consideration": 40.0, "performance": 25.0}
+    if goal in {"conversions", "sales"}:
+        return {"awareness": 20.0, "consideration": 30.0, "performance": 50.0}
+    return {"awareness": 25.0, "consideration": 35.0, "performance": 40.0}
+
+
+def _assistant_default_assumptions() -> Dict[str, str]:
+    return {
+        "benchmarks": "Historical Envidicy benchmarks",
+        "history": "Client campaign history",
+        "methodology": "Weighted mix by objective and benchmark efficiency",
+        "recalc": "Recalculate after 7 days using first factual spend and CTR/CPC",
+    }
+
+
+def _normalize_funnel(raw: Optional[Dict[str, object]], fallback: Dict[str, float]) -> Dict[str, float]:
+    if not isinstance(raw, dict):
+        return fallback
+    vals: Dict[str, float] = {}
+    for key in ("awareness", "consideration", "performance"):
+        value = raw.get(key)
+        try:
+            vals[key] = max(0.0, float(value))
+        except Exception:
+            vals[key] = 0.0
+    total = sum(vals.values())
+    if total <= 0:
+        return fallback
+    return {k: round((v / total) * 100.0, 2) for k, v in vals.items()}
+
+
+def _assistant_call_llm(req: PlanRequest, baseline: PlanResponse) -> Optional[Dict[str, object]]:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    system_prompt = (
+        "You are a senior media planner for performance marketing in Kazakhstan/CIS. "
+        "Return strict JSON only. "
+        "Keys: assumption_profile (base|conservative|aggressive), funnel_split "
+        "({awareness,consideration,performance} in percentages), assumptions "
+        "({benchmarks,history,methodology,recalc}), recommendations (array of short Russian strings), "
+        "confidence (0..1)."
+    )
+    user_payload = {
+        "request": req.model_dump(mode="json"),
+        "baseline_plan": {
+            "period_days": baseline.period_days,
+            "budget_usd": baseline.budget_usd,
+            "totals": baseline.totals.model_dump(mode="json"),
+            "lines": [
+                {"key": line.key, "name": line.name, "share": line.share, "budget": line.budget}
+                for line in baseline.lines
+            ],
+        },
+    }
+    body = {
+        "model": model,
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ],
+    }
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=body,
+            )
+        if resp.status_code >= 300:
+            logging.warning("LLM assistant request failed: %s %s", resp.status_code, resp.text[:300])
+            return None
+        data = resp.json()
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        if not content:
+            return None
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception as exc:
+        logging.warning("LLM assistant error: %s", exc)
+    return None
+
+
+def _build_assistant_response(req: PlanRequest, llm_data: Optional[Dict[str, object]] = None) -> PlanAssistantResponse:
+    fallback_profile = _assistant_choose_profile(req)
+    fallback_funnel = _assistant_default_funnel(req)
+    fallback_assumptions = _assistant_default_assumptions()
+    source: Literal["llm", "fallback"] = "fallback"
+
+    profile: Literal["base", "conservative", "aggressive"] = fallback_profile
+    funnel = fallback_funnel
+    assumptions = fallback_assumptions
+    recommendations: List[str] = []
+    confidence = 0.6
+
+    if isinstance(llm_data, dict):
+        raw_profile = str(llm_data.get("assumption_profile", "")).strip().lower()
+        if raw_profile in {"base", "conservative", "aggressive"}:
+            profile = raw_profile  # type: ignore[assignment]
+        funnel = _normalize_funnel(llm_data.get("funnel_split"), fallback_funnel)
+        raw_assumptions = llm_data.get("assumptions")
+        if isinstance(raw_assumptions, dict):
+            merged = dict(fallback_assumptions)
+            for k in ("benchmarks", "history", "methodology", "recalc"):
+                val = raw_assumptions.get(k)
+                if isinstance(val, str) and val.strip():
+                    merged[k] = val.strip()
+            assumptions = merged
+        raw_recos = llm_data.get("recommendations")
+        if isinstance(raw_recos, list):
+            recommendations = [str(x).strip() for x in raw_recos if str(x).strip()][:6]
+        try:
+            confidence = max(0.0, min(1.0, float(llm_data.get("confidence", confidence))))
+        except Exception:
+            pass
+        source = "llm"
+
+    req_for_preview = req.model_copy(deep=True)
+    req_for_preview.assumption_profile = profile
+    req_for_preview.funnel_split = funnel
+    preview = build_plan(req_for_preview)
+    budget_split = {
+        line.key: round(float(line.share) * 100.0, 2)
+        for line in preview.lines
+    }
+
+    if not recommendations:
+        top = sorted(preview.lines, key=lambda x: x.share, reverse=True)[:3]
+        if top:
+            joined = ", ".join(f"{line.name} ({round(line.share * 100, 1)}%)" for line in top)
+            recommendations.append(f"Фокус по бюджету: {joined}.")
+        recommendations.append("Через 7 дней загрузите фактические данные и пересчитайте план.")
+
+    return PlanAssistantResponse(
+        source=source,
+        assumption_profile=profile,
+        funnel_split=funnel,
+        assumptions=assumptions,
+        recommendations=recommendations,
+        confidence=round(confidence, 2),
+        budget_split=budget_split,
     )
 
 
@@ -2358,6 +2537,17 @@ def estimate_plan(payload: PlanRequest) -> PlanResponse:
     if payload.avg_frequency <= 0:
         raise HTTPException(status_code=400, detail="avg_frequency must be positive")
     return build_plan(payload)
+
+
+@app.post("/plans/assistant", response_model=PlanAssistantResponse)
+def plan_assistant(payload: PlanRequest) -> PlanAssistantResponse:
+    if payload.budget <= 0:
+        raise HTTPException(status_code=400, detail="Budget must be positive")
+    if payload.avg_frequency <= 0:
+        raise HTTPException(status_code=400, detail="avg_frequency must be positive")
+    baseline = build_plan(payload)
+    llm_data = _assistant_call_llm(payload, baseline)
+    return _build_assistant_response(payload, llm_data=llm_data)
 
 
 @app.post("/plans/estimate/excel")
