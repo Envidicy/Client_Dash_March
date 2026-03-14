@@ -1905,7 +1905,11 @@ def _build_assistant_response(
                 continue
             within_platform = base_share / max(base_platform_total.get(plat, 1e-9), 1e-9)
             fact_line_share = fact_platform_share[plat] * within_platform
-            adjusted_line_share[key] = 0.6 * base_share + 0.4 * fact_line_share
+            # In fallback mode, prioritize factual account data instead of baseline heuristics.
+            if source == "fallback":
+                adjusted_line_share[key] = fact_line_share
+            else:
+                adjusted_line_share[key] = 0.6 * base_share + 0.4 * fact_line_share
 
         norm = sum(adjusted_line_share.values())
         if norm > 0:

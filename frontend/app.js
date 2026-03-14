@@ -248,31 +248,14 @@ function renderAiAssistant() {
   const factsRows = Object.entries(factsTotals)
     .map(([platform, row]) => {
       const spend = row && typeof row === 'object' ? Number(row.spend || 0) : 0
-      const impressions = row && typeof row === 'object' ? Number(row.impressions || 0) : 0
-      const clicks = row && typeof row === 'object' ? Number(row.clicks || 0) : 0
-      return `<tr><td>${platform}</td><td>${usd(spend, 2)}</td><td>${num(impressions)}</td><td>${num(clicks)}</td></tr>`
+      return `<span class="chip chip-ghost">${platform}: ${usd(spend, 2)}</span>`
     })
     .join('')
   const globalFactsRows = Object.entries(globalFactsTotals)
     .map(([platform, row]) => {
       const spend = row && typeof row === 'object' ? Number(row.spend || 0) : 0
-      const impressions = row && typeof row === 'object' ? Number(row.impressions || 0) : 0
-      const clicks = row && typeof row === 'object' ? Number(row.clicks || 0) : 0
-      return `<tr><td>${platform}</td><td>${usd(spend, 2)}</td><td>${num(impressions)}</td><td>${num(clicks)}</td></tr>`
+      return `<span class="chip chip-ghost">${platform}: ${usd(spend, 2)}</span>`
     })
-    .join('')
-  const globalDebugRows = Object.entries(globalFactsDebug)
-    .map(([platform, row]) => {
-      if (!row || typeof row !== 'object') return ''
-      const accountsTotal = Number(row.accounts_total || 0)
-      const usedIds = Number(row.used_ids || 0)
-      const missingId = Number(row.missing_id || 0)
-      const apiOk = Number(row.api_ok || 0)
-      const apiFailed = Number(row.api_failed || 0)
-      const lastError = row.last_error ? String(row.last_error) : '—'
-      return `<tr><td>${platform}</td><td>${accountsTotal}</td><td>${usedIds}</td><td>${missingId}</td><td>${apiOk}</td><td>${apiFailed}</td><td>${lastError}</td></tr>`
-    })
-    .filter(Boolean)
     .join('')
   box.classList.remove('muted')
   box.innerHTML = `
@@ -293,75 +276,11 @@ function renderAiAssistant() {
     <div style="margin-top:8px;">
       <ul style="margin:0;padding-left:18px;">${recRows}</ul>
     </div>
-    ${
-      factsRows
-        ? `<div class="table-wrapper" style="margin-top:10px;">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Платформа</th>
-            <th>Spend (факт)</th>
-            <th>Impressions</th>
-            <th>Clicks</th>
-          </tr>
-        </thead>
-        <tbody>${factsRows}</tbody>
-      </table>
-    </div>`
-        : ''
-    }
-    ${
-      globalFactsRows
-        ? `<div class="table-wrapper" style="margin-top:10px;">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Global pool</th>
-            <th>Spend (факт)</th>
-            <th>Impressions</th>
-            <th>Clicks</th>
-          </tr>
-        </thead>
-        <tbody>${globalFactsRows}</tbody>
-      </table>
-    </div>`
-        : ''
-    }
-    ${
-      globalDebugRows
-        ? `<div class="table-wrapper" style="margin-top:10px;">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Global debug</th>
-            <th>Accounts</th>
-            <th>Used IDs</th>
-            <th>Missing ID</th>
-            <th>API OK</th>
-            <th>API Failed</th>
-            <th>Last error</th>
-          </tr>
-        </thead>
-        <tbody>${globalDebugRows}</tbody>
-      </table>
-    </div>`
-        : ''
-    }
-    <div class="table-wrapper" style="margin-top:10px;">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Метрика</th>
-            <th>Значение</th>
-            <th>Комментарий</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>Прогноз CPL</td><td>${cpl ? usd(cpl, 2) : '—'}</td><td>Оценка по текущему сплиту и вводным</td></tr>
-          <tr><td>Прогноз CPA</td><td>${cpa ? usd(cpa, 2) : '—'}</td><td>Оценка по текущему сплиту и вводным</td></tr>
-          <tr><td>Следующий шаг</td><td>Загрузить факт через 7 дней</td><td>Пересчитать план по реальным CTR/CPC/CVR</td></tr>
-        </tbody>
-      </table>
+    ${factsRows ? `<div class="chips small" style="margin-top:8px;"><span class="chip chip-ghost">Факт:</span> ${factsRows}</div>` : ''}
+    ${globalFactsRows ? `<div class="chips small" style="margin-top:8px;"><span class="chip chip-ghost">Global:</span> ${globalFactsRows}</div>` : ''}
+    <div class="chips small" style="margin-top:8px;">
+      <span class="chip chip-ghost">CPL: ${cpl ? usd(cpl, 2) : '—'}</span>
+      <span class="chip chip-ghost">CPA: ${cpa ? usd(cpa, 2) : '—'}</span>
     </div>
   `
 }
