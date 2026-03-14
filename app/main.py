@@ -1397,10 +1397,7 @@ def _build_assistant_response(
     req_for_preview.assumption_profile = profile
     req_for_preview.funnel_split = funnel
     preview = build_plan(req_for_preview)
-    budget_split = {
-        line.key: round(float(line.share) * 100.0, 2)
-        for line in preview.lines
-    }
+    budget_split = {line.key: round(float(line.share) * 100.0, 2) for line in preview.lines}
 
     facts_totals: Dict[str, Dict[str, float]] = {}
     facts_period: Optional[str] = None
@@ -1421,6 +1418,60 @@ def _build_assistant_response(
         date_to = overview_context.get("date_to")
         if date_from and date_to:
             facts_period = f"{date_from} — {date_to}"
+
+    # If we have factual spend+clicks, rebalance platform shares by inverse CPC
+    # and blend with baseline shares to avoid aggressive swings.
+    if facts_used:
+        platform_rows: Dict[str, Dict[str, float]] = {}
+        for platform in ("meta", "google", "tiktok"):
+            row = facts_totals.get(platform) or {}
+            spend = float(row.get("spend") or 0.0)
+            clicks = float(row.get("clicks") or 0.0)
+            if spend > 0 and clicks > 0:
+                cpc = spend / clicks
+                platform_rows[platform] = {"cpc": cpc, "score": 1.0 / max(cpc, 1e-9)}
+        score_sum = sum(v["score"] for v in platform_rows.values())
+        if score_sum > 0:
+            fact_platform_share = {k: v["score"] / score_sum for k, v in platform_rows.items()}
+
+            line_platform = {}
+            for line in preview.lines:
+                key = str(line.key)
+                if key.startswith("meta"):
+                    line_platform[key] = "meta"
+                elif key.startswith("google") or key.startswith("youtube"):
+                    line_platform[key] = "google"
+                elif key.startswith("tiktok"):
+                    line_platform[key] = "tiktok"
+                else:
+                    line_platform[key] = "other"
+
+            base_line_share = {str(line.key): float(line.share) for line in preview.lines}
+            base_platform_total: Dict[str, float] = {}
+            for key, share in base_line_share.items():
+                plat = line_platform.get(key, "other")
+                base_platform_total[plat] = base_platform_total.get(plat, 0.0) + share
+
+            adjusted_line_share: Dict[str, float] = {}
+            for key, base_share in base_line_share.items():
+                plat = line_platform.get(key, "other")
+                if plat not in fact_platform_share:
+                    adjusted_line_share[key] = base_share
+                    continue
+                within_platform = base_share / max(base_platform_total.get(plat, 1e-9), 1e-9)
+                fact_line_share = fact_platform_share[plat] * within_platform
+                adjusted_line_share[key] = 0.65 * base_share + 0.35 * fact_line_share
+
+            norm = sum(adjusted_line_share.values())
+            if norm > 0:
+                budget_split = {
+                    key: round((val / norm) * 100.0, 2)
+                    for key, val in adjusted_line_share.items()
+                }
+                recommendations.insert(
+                    0,
+                    "Бюджетный сплит скорректирован по фактической эффективности платформ (по CPC/кликам).",
+                )
 
     if not recommendations:
         top = sorted(preview.lines, key=lambda x: x.share, reverse=True)[:3]

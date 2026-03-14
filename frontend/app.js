@@ -42,6 +42,7 @@ const state = {
   activePlatform: null,
   planMode: 'smart',
   aiDraft: null,
+  aiDraftApply: false,
   placements: {
     meta: new Set(['fb_feed', 'fb_video_feeds', 'fb_instream', 'fb_reels', 'fb_stories', 'ig_feed', 'ig_reels', 'ig_stories']),
     google: new Set(['google_search', 'google_display_cpm', 'google_display_cpc', 'google_shopping', 'youtube_15s', 'youtube_30s']),
@@ -127,6 +128,7 @@ function applyAiDefaults(payload, profileKey) {
 
 async function runAiDraft() {
   const payload = readPayload()
+  state.aiDraftApply = true
   try {
     const res = await fetch(`${apiBase}/plans/assistant`, {
       method: 'POST',
@@ -317,6 +319,10 @@ function readPayload() {
   }
   const assumptions = Object.fromEntries(Object.entries(rawAssumptions).filter(([, v]) => v))
   const hasAssumptions = Object.keys(assumptions).length > 0
+  const aiBudgetSplit =
+    state.aiDraftApply && state.aiDraft?.budgetSplit && Object.keys(state.aiDraft.budgetSplit).length
+      ? state.aiDraft.budgetSplit
+      : null
   if (mode === 'smart') {
     const smartGoal = document.getElementById('smart-goal')?.value || 'leads'
     const mappedGoal = smartGoal === 'sales' ? 'conversions' : smartGoal
@@ -337,6 +343,7 @@ function readPayload() {
       date_end: endDate.toISOString().slice(0, 10),
       avg_frequency: 1.6,
       pricing_mode: 'auto',
+      budget_split: aiBudgetSplit,
     }
   }
 
@@ -391,6 +398,7 @@ function readPayload() {
     channel_inputs: hasChannelInputs ? channelInputs : null,
     assumption_profile: document.getElementById('assumption-profile')?.value || null,
     assumptions: hasAssumptions ? assumptions : null,
+    budget_split: aiBudgetSplit,
   }
 }
 
@@ -576,7 +584,12 @@ async function uploadFact() {
 }
 
 function bind() {
-  document.querySelectorAll('#btn-estimate').forEach((btn) => btn.addEventListener('click', fetchPlan))
+  document.querySelectorAll('#btn-estimate').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      state.aiDraftApply = false
+      fetchPlan()
+    })
+  )
   document.querySelectorAll('#btn-ai-draft').forEach((btn) => btn.addEventListener('click', runAiDraft))
   document.querySelectorAll('#btn-excel').forEach((btn) => btn.addEventListener('click', downloadExcel))
   const modeSelect = document.getElementById('plan-mode')
