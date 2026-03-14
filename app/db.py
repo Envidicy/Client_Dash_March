@@ -97,6 +97,9 @@ def _connect():
         except Exception as exc:
             raise RuntimeError("psycopg is required for Postgres support") from exc
         conn = psycopg.connect(DB_URL, row_factory=dict_row)
+        schema_name = _extract_search_path(DB_URL)
+        if schema_name:
+            conn.execute(f"SET search_path TO {schema_name}")
         return PgConn(conn)
     raise RuntimeError(f"Unsupported DATABASE_URL scheme: {urlparse(DB_URL).scheme}")
 
