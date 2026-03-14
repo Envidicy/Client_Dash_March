@@ -18,10 +18,13 @@ def _extract_search_path(url: str) -> str | None:
     options = qs.get("options")
     if not options:
         return None
-    # options may include --search_path%3Denvidicy or --search_path=envidicy
+    # Render/psycopg URLs may encode search_path in several equivalent forms.
     for opt in options:
         decoded = unquote(opt)
-        match = re.search(r"--search_path=([A-Za-z0-9_]+)", decoded)
+        match = re.search(
+            r"(?:--search_path=|-c\s*search_path=|-csearch_path=|search_path=)([A-Za-z0-9_]+)",
+            decoded,
+        )
         if match:
             return match.group(1)
     return None
