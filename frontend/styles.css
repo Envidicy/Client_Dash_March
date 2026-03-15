@@ -1226,25 +1226,21 @@ h1 {
 }
 
 .account-actions-cell {
-  width: 76px;
-  min-width: 76px;
-  max-width: 76px;
-  white-space: normal;
-  padding-left: 6px;
-  padding-right: 6px;
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
 }
 
 .account-row-actions {
-  display: flex;
+  display: inline-flex;
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
 }
 
 .account-row-actions .btn {
-  min-width: 0;
-  width: 100%;
-  padding: 6px 8px;
+  min-width: 122px;
+  padding: 6px 10px;
   text-align: center;
 }
 

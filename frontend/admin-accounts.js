@@ -93,8 +93,8 @@ function renderAccounts(rows) {
               data-code="${row.account_code || ''}"
               data-currency="${row.currency || ''}"
               data-status="${row.status || ''}"
-            >Edit</button>
-            <button class="btn ghost small" data-delete="1" data-id="${row.id}" data-name="${String(row.name || '').replace(/"/g, '&quot;')}">Del</button>
+            >${'\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c'}</button>
+            <button class="btn ghost small" data-delete="1" data-id="${row.id}" data-name="${String(row.name || '').replace(/"/g, '&quot;')}">${'\u0423\u0434\u0430\u043b\u0438\u0442\u044c'}</button>
           </div>
         </td>
       </tr>
