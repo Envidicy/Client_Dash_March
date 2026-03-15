@@ -7047,6 +7047,23 @@ def admin_update_account(account_id: int, payload: AdminAccountUpdate, admin_use
         return {"id": account_id, "status": "updated"}
 
 
+@app.delete("/admin/accounts/{account_id}")
+def admin_delete_account(account_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute("SELECT id, name FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+        topups_count = conn.execute("SELECT COUNT(1) AS cnt FROM topups WHERE account_id=?", (account_id,)).fetchone()["cnt"]
+        wallet_tx_count = conn.execute("SELECT COUNT(1) AS cnt FROM wallet_transactions WHERE account_id=?", (account_id,)).fetchone()["cnt"]
+        if int(topups_count or 0) > 0 or int(wallet_tx_count or 0) > 0:
+            raise HTTPException(status_code=409, detail="Account cannot be deleted because it already has linked operations")
+        conn.execute("DELETE FROM ad_accounts WHERE id=?", (account_id,))
+        conn.commit()
+        return {"id": account_id, "status": "deleted", "name": row["name"]}
+
+
 @app.get("/admin/topups")
 def admin_list_topups(admin_user=Depends(get_admin_user)):
     if not get_conn:

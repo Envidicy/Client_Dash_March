@@ -82,17 +82,20 @@ function renderAccounts(rows) {
         <td>${row.external_id || '—'}</td>
         <td>${formatLiveBillingCell(row.live_billing, row.currency)}</td>
         <td style="text-align:right;">
-          <button class="btn ghost small" data-edit="1"
-            data-id="${row.id}"
-            data-user-id="${row.user_id}"
-            data-user-email="${row.user_email || ''}"
-            data-platform="${row.platform || ''}"
-            data-name="${row.name || ''}"
-            data-external="${row.external_id || ''}"
-            data-code="${row.account_code || ''}"
-            data-currency="${row.currency || ''}"
-            data-status="${row.status || ''}"
-          >Редактировать</button>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button class="btn ghost small" data-edit="1"
+              data-id="${row.id}"
+              data-user-id="${row.user_id}"
+              data-user-email="${row.user_email || ''}"
+              data-platform="${row.platform || ''}"
+              data-name="${row.name || ''}"
+              data-external="${row.external_id || ''}"
+              data-code="${row.account_code || ''}"
+              data-currency="${row.currency || ''}"
+              data-status="${row.status || ''}"
+            >Редактировать</button>
+            <button class="btn ghost small" data-delete="1" data-id="${row.id}" data-name="${String(row.name || '').replace(/"/g, '&quot;')}">Удалить</button>
+          </div>
         </td>
       </tr>
     `
@@ -182,6 +185,27 @@ async function saveBindForm() {
   }
 }
 
+async function deleteAccount(accountId, accountName) {
+  if (!accountId) return
+  const confirmed = confirm(`Удалить аккаунт "${accountName || '#'+accountId}"?`)
+  if (!confirmed) return
+  if (accountsStatus) accountsStatus.textContent = 'Удаление аккаунта...'
+  try {
+    const res = await fetch(`${apiBase}/admin/accounts/${accountId}`, {
+      method: 'DELETE',
+      headers: authHeadersSafe(),
+    })
+    if (handleAuthFailure(res)) return
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data?.detail || 'Delete failed')
+    if (accountIdInput?.value === String(accountId)) resetBindForm()
+    if (accountsStatus) accountsStatus.textContent = 'Аккаунт удален.'
+    await fetchAccounts()
+  } catch (e) {
+    if (accountsStatus) accountsStatus.textContent = e?.message || 'Не удалось удалить аккаунт.'
+  }
+}
+
 function exportFile(path) {
   const token = localStorage.getItem('auth_token')
   if (!token) return
@@ -205,6 +229,11 @@ if (bindReset) bindReset.addEventListener('click', resetBindForm)
 
 if (accountsBody) {
   accountsBody.addEventListener('click', (event) => {
+    const deleteBtn = event.target.closest('button[data-delete]')
+    if (deleteBtn) {
+      deleteAccount(deleteBtn.dataset.id, deleteBtn.dataset.name)
+      return
+    }
     const btn = event.target.closest('button[data-edit]')
     if (!btn) return
     if (accountIdInput) accountIdInput.value = btn.dataset.id || ''
