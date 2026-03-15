@@ -3565,12 +3565,6 @@ def get_admin_user(current_user=Depends(get_current_user)):
     return current_user
 
 
-def _issue_user_token(conn, user_id: int) -> str:
-    token = secrets.token_hex(24)
-    conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (user_id, token))
-    return token
-
-
 @app.post("/admin/users/{user_id}/impersonate")
 def admin_impersonate_user(user_id: int, admin_user=Depends(get_admin_user)):
     if not get_conn:
