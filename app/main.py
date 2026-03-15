@@ -2,6 +2,7 @@
 from io import BytesIO
 from typing import Dict, List, Literal, Optional, Tuple
 from enum import Enum
+import calendar
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Form, Request
 import logging
@@ -39,6 +40,15 @@ _BCC_TOKEN_CACHE = {"token": None, "expires_at": 0.0}
 _BCC_DEFAULT_MARKUP = float(os.getenv("BCC_DEFAULT_MARKUP", "10") or 10)
 _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
+_ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
+_ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC = int(os.getenv("ASSISTANT_GLOBAL_CACHE_TTL_SEC", "3600") or 3600)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _default_fee_config() -> Dict[str, Optional[float]]:
@@ -529,10 +539,19 @@ class PlanAssistantResponse(BaseModel):
     source: Literal["llm", "fallback"]
     assumption_profile: Literal["base", "conservative", "aggressive"]
     funnel_split: Dict[str, float]
+    channel_inputs: Dict[str, Dict[str, float]] = Field(default_factory=dict)
     assumptions: Dict[str, str]
+    rationale: str = ""
     recommendations: List[str]
     confidence: float = Field(0.6, ge=0, le=1)
     budget_split: Dict[str, float] = Field(default_factory=dict)
+    facts_used: bool = False
+    facts_period: Optional[str] = None
+    facts_totals: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    global_facts_used: bool = False
+    global_facts_period: Optional[str] = None
+    global_facts_totals: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    global_facts_debug: Dict[str, object] = Field(default_factory=dict)
 
 
 rate_cards: Dict[PlatformKey, RateCard] = {
@@ -1120,7 +1139,13 @@ def build_plan(req: PlanRequest) -> PlanResponse:
     smart_rationale: Dict[PlatformKey, str] = {}
     if plan_mode == "smart":
         platforms, split, rationale = smart_media_mix(req.goal, req.business_type)
-        active_keys = platforms
+        active_keys = list(platforms)
+        # If assistant/user provides explicit split, include those channels in smart mode too.
+        if req.budget_split:
+            explicit_keys = [str(k) for k, v in req.budget_split.items() if float(v or 0) > 0]
+            for key in explicit_keys:
+                if key in rate_cards and key not in active_keys:
+                    active_keys.append(key)
         smart_split = split
         smart_rationale = rationale
     else:
@@ -1168,7 +1193,8 @@ def build_plan(req: PlanRequest) -> PlanResponse:
         manual_total = sum(req.budget_split.values())
         if manual_total > 0:
             manual_split = {k: v / manual_total for k, v in req.budget_split.items()}
-    if smart_split:
+    # Smart preset is used only when there is no explicit split from assistant/user.
+    if smart_split and manual_split is None:
         manual_split = smart_split
 
     lines: List[PlanLine] = []
@@ -1287,124 +1313,730 @@ def _normalize_funnel(raw: Optional[Dict[str, object]], fallback: Dict[str, floa
     return {k: round((v / total) * 100.0, 2) for k, v in vals.items()}
 
 
-def _assistant_call_llm(req: PlanRequest, baseline: PlanResponse) -> Optional[Dict[str, object]]:
+def _normalize_split_map(split: Dict[str, float]) -> Dict[str, float]:
+    cleaned: Dict[str, float] = {}
+    for k, v in split.items():
+        try:
+            num = max(0.0, float(v))
+        except Exception:
+            num = 0.0
+        cleaned[str(k)] = num
+    total = sum(cleaned.values())
+    if total <= 0:
+        return cleaned
+    return {k: round((v / total) * 100.0, 2) for k, v in cleaned.items()}
+
+
+def _extract_platform_facts(context: Optional[Dict[str, object]]) -> Tuple[Dict[str, Dict[str, float]], Optional[str], bool]:
+    facts_totals: Dict[str, Dict[str, float]] = {}
+    facts_period: Optional[str] = None
+    facts_used = False
+    if isinstance(context, dict):
+        totals_raw = context.get("totals")
+        if isinstance(totals_raw, dict):
+            for platform in ("meta", "google", "tiktok"):
+                row = totals_raw.get(platform) if isinstance(totals_raw, dict) else None
+                if isinstance(row, dict):
+                    facts_totals[platform] = {
+                        "spend": float(row.get("spend") or 0.0),
+                        "impressions": float(row.get("impressions") or 0.0),
+                        "clicks": float(row.get("clicks") or 0.0),
+                    }
+            facts_used = any((v.get("spend", 0.0) > 0 for v in facts_totals.values()))
+        date_from = context.get("date_from")
+        date_to = context.get("date_to")
+        if date_from and date_to:
+            facts_period = f"{date_from} — {date_to}"
+    return facts_totals, facts_period, facts_used
+
+
+def _blend_platform_scores(
+    client_facts: Dict[str, Dict[str, float]],
+    global_facts: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    client_clicks = sum(float(v.get("clicks") or 0.0) for v in client_facts.values())
+    global_clicks = sum(float(v.get("clicks") or 0.0) for v in global_facts.values())
+    if client_clicks <= 0 and global_clicks <= 0:
+        return {}
+    if client_clicks <= 0:
+        w_client = 0.0
+    else:
+        w_client = max(0.2, min(0.75, client_clicks / max(client_clicks + global_clicks, 1e-9)))
+    w_global = 1.0 - w_client
+
+    scores: Dict[str, float] = {}
+    for platform in ("meta", "google", "tiktok"):
+        c = client_facts.get(platform, {})
+        g = global_facts.get(platform, {})
+        c_spend = float(c.get("spend") or 0.0)
+        c_clicks = float(c.get("clicks") or 0.0)
+        g_spend = float(g.get("spend") or 0.0)
+        g_clicks = float(g.get("clicks") or 0.0)
+        c_score = (c_clicks / max(c_spend, 1e-9)) if (c_spend > 0 and c_clicks > 0) else 0.0
+        g_score = (g_clicks / max(g_spend, 1e-9)) if (g_spend > 0 and g_clicks > 0) else 0.0
+        score = (w_client * c_score) + (w_global * g_score)
+        if score > 0:
+            scores[platform] = score
+    return scores
+
+
+def _fallback_platform_share_from_spend(
+    client_facts: Dict[str, Dict[str, float]],
+    global_facts: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    spend_by_platform: Dict[str, float] = {}
+    for platform in ("meta", "google", "tiktok"):
+        c_spend = float((client_facts.get(platform) or {}).get("spend") or 0.0)
+        g_spend = float((global_facts.get(platform) or {}).get("spend") or 0.0)
+        # Prefer client facts; global is supportive prior only.
+        spend = c_spend + (0.4 * g_spend)
+        if spend > 0:
+            spend_by_platform[platform] = spend
+    total = sum(spend_by_platform.values())
+    if total <= 0:
+        return {}
+    return {k: (v / total) for k, v in spend_by_platform.items()}
+
+
+def _parse_iso_date(value: str) -> date:
+    return datetime.strptime(value, "%Y-%m-%d").date()
+
+
+def _shift_months(base: date, delta_months: int) -> date:
+    month_index = (base.month - 1) + delta_months
+    year = base.year + (month_index // 12)
+    month = (month_index % 12) + 1
+    day = min(base.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _meta_safe_date_from(date_from: str) -> str:
+    # Meta rejects ranges where start date is older than ~37 months.
+    start = _parse_iso_date(date_from)
+    min_allowed = _shift_months(date.today(), -37)
+    if start < min_allowed:
+        return min_allowed.isoformat()
+    return date_from
+
+
+def _date_chunks(date_from: str, date_to: str, max_days: int) -> List[Tuple[str, str]]:
+    start = _parse_iso_date(date_from)
+    end = _parse_iso_date(date_to)
+    if start > end:
+        return []
+    chunks: List[Tuple[str, str]] = []
+    cur = start
+    while cur <= end:
+        chunk_end = min(cur + timedelta(days=max_days - 1), end)
+        chunks.append((cur.isoformat(), chunk_end.isoformat()))
+        cur = chunk_end + timedelta(days=1)
+    return chunks
+
+
+_ASSISTANT_CHANNEL_GROUPS: Dict[str, List[str]] = {
+    "meta": ["meta"],
+    "google": [
+        "google_display_cpm",
+        "google_display_cpc",
+        "google_search",
+        "google_shopping",
+        "youtube",
+        "youtube_6s",
+        "youtube_15s",
+        "youtube_30s",
+    ],
+    "tiktok": ["tiktok"],
+    "telegram": ["telegrad_channels", "telegrad_users", "telegrad_bots", "telegrad_search"],
+    "yandex": ["yandex_search", "yandex_display"],
+}
+
+
+def _assistant_default_channel_inputs(profile: str) -> Dict[str, Dict[str, float]]:
+    base = {
+        "meta": {"cpm": 2.1, "ctr": 0.013, "cvr": 0.016},
+        "google_search": {"cpc": 0.55, "cvr": 0.028},
+        "tiktok": {"cpm": 2.0, "ctr": 0.012, "cvr": 0.014},
+        "telegrad_channels": {"cpm": 3.2, "ctr": 0.01},
+        "yandex_search": {"cpc": 0.48, "cvr": 0.024},
+    }
+    if profile == "conservative":
+        return {
+            "meta": {"cpm": 2.5, "ctr": 0.010, "cvr": 0.012},
+            "google_search": {"cpc": 0.7, "cvr": 0.02},
+            "tiktok": {"cpm": 2.5, "ctr": 0.009, "cvr": 0.011},
+            "telegrad_channels": {"cpm": 3.8, "ctr": 0.008},
+            "yandex_search": {"cpc": 0.6, "cvr": 0.019},
+        }
+    if profile == "aggressive":
+        return {
+            "meta": {"cpm": 1.8, "ctr": 0.016, "cvr": 0.02},
+            "google_search": {"cpc": 0.45, "cvr": 0.035},
+            "tiktok": {"cpm": 1.7, "ctr": 0.015, "cvr": 0.017},
+            "telegrad_channels": {"cpm": 2.8, "ctr": 0.012},
+            "yandex_search": {"cpc": 0.42, "cvr": 0.03},
+        }
+    return base
+
+
+def _assistant_derive_channel_shares(
+    req: PlanRequest,
+    overview_context: Optional[Dict[str, object]],
+    global_overview_context: Optional[Dict[str, object]],
+) -> Dict[str, float]:
+    active_keys = set(req.platforms or list(rate_cards.keys()))
+    channels: List[str] = []
+    for channel, keys in _ASSISTANT_CHANNEL_GROUPS.items():
+        if any(k in active_keys for k in keys):
+            channels.append(channel)
+    if not channels:
+        channels = ["meta", "google", "tiktok"]
+
+    facts_totals, _, _ = _extract_platform_facts(overview_context)
+    global_totals, _, _ = _extract_platform_facts(global_overview_context)
+    spend: Dict[str, float] = {c: 0.0 for c in channels}
+    for channel in channels:
+        if channel in {"meta", "google", "tiktok"}:
+            spend[channel] += float((facts_totals.get(channel) or {}).get("spend", 0.0))
+            spend[channel] += float((global_totals.get(channel) or {}).get("spend", 0.0)) * 0.7
+    total_spend = sum(spend.values())
+    if total_spend > 0:
+        return {k: (v / total_spend) * 100.0 for k, v in spend.items()}
+
+    equal = 100.0 / max(len(channels), 1)
+    return {k: equal for k in channels}
+
+
+def _assistant_build_constraints(
+    req: PlanRequest,
+    overview_context: Optional[Dict[str, object]],
+    global_overview_context: Optional[Dict[str, object]],
+) -> Dict[str, object]:
+    channel_shares = _assistant_derive_channel_shares(req, overview_context, global_overview_context)
+    min_split: Dict[str, float] = {}
+    max_split: Dict[str, float] = {}
+    for channel, share in channel_shares.items():
+        min_split[channel] = round(max(0.0, share - 20.0), 2)
+        max_split[channel] = round(min(100.0, share + 20.0), 2)
+
+    active_channels = list(channel_shares.keys())
+    confidence_min = float(os.getenv("ASSISTANT_MIN_CONFIDENCE", "0.55"))
+    return {
+        "allowed_channels": active_channels,
+        "budget_split": {
+            "sum": 100.0,
+            "min": min_split,
+            "max": max_split,
+        },
+        "channel_inputs_bounds": {
+            "cpm": {"min": 0.3, "max": 30.0},
+            "cpc": {"min": 0.03, "max": 10.0},
+            "cvr": {"min": 0.001, "max": 0.5},
+            "ctr": {"min": 0.001, "max": 0.3},
+            "cpv": {"min": 0.001, "max": 3.0},
+            "post_click": {"min": 0.01, "max": 0.8},
+        },
+        "confidence_min": confidence_min,
+    }
+
+
+def _assistant_normalize_and_clamp_split(
+    raw_split: Optional[Dict[str, object]],
+    constraints: Dict[str, object],
+    baseline: PlanResponse,
+) -> Dict[str, float]:
+    # Convert channel-level split into plan line-level split that build_plan understands.
+    min_cfg = ((constraints.get("budget_split") or {}).get("min") or {}) if isinstance(constraints, dict) else {}
+    max_cfg = ((constraints.get("budget_split") or {}).get("max") or {}) if isinstance(constraints, dict) else {}
+    channels = constraints.get("allowed_channels") if isinstance(constraints, dict) else []
+    allowed_channels = [str(x) for x in channels] if isinstance(channels, list) else ["meta", "google", "tiktok"]
+
+    parsed_channel: Dict[str, float] = {}
+    if isinstance(raw_split, dict):
+        for k, v in raw_split.items():
+            key = str(k).strip().lower()
+            try:
+                value = float(v)
+            except Exception:
+                continue
+            if key in allowed_channels:
+                parsed_channel[key] = max(0.0, value)
+
+    if not parsed_channel:
+        baseline_split = {str(line.key): float(line.share) * 100.0 for line in baseline.lines}
+        return _normalize_split_map(baseline_split)
+
+    clamped_channel: Dict[str, float] = {}
+    for channel, value in parsed_channel.items():
+        min_v = float(min_cfg.get(channel, 0.0)) if isinstance(min_cfg, dict) else 0.0
+        max_v = float(max_cfg.get(channel, 100.0)) if isinstance(max_cfg, dict) else 100.0
+        clamped_channel[channel] = min(max(value, min_v), max_v)
+    ch_total = sum(clamped_channel.values())
+    if ch_total <= 0:
+        baseline_split = {str(line.key): float(line.share) * 100.0 for line in baseline.lines}
+        return _normalize_split_map(baseline_split)
+    clamped_channel = {k: (v / ch_total) * 100.0 for k, v in clamped_channel.items()}
+
+    baseline_line = {str(line.key): float(line.share) for line in baseline.lines}
+    result: Dict[str, float] = {}
+    for channel, channel_pct in clamped_channel.items():
+        keys = _ASSISTANT_CHANNEL_GROUPS.get(channel, [])
+        line_keys = [k for k in keys if k in baseline_line]
+        if not line_keys:
+            continue
+        base_total = sum(baseline_line[k] for k in line_keys)
+        if base_total <= 0:
+            even = channel_pct / max(len(line_keys), 1)
+            for lk in line_keys:
+                result[lk] = even
+            continue
+        for lk in line_keys:
+            result[lk] = channel_pct * (baseline_line[lk] / base_total)
+
+    if not result:
+        baseline_split = {str(line.key): float(line.share) * 100.0 for line in baseline.lines}
+        return _normalize_split_map(baseline_split)
+    return _normalize_split_map(result)
+
+
+def _assistant_validate_channel_inputs(
+    raw_inputs: Optional[Dict[str, object]],
+    constraints: Dict[str, object],
+    fallback: Dict[str, Dict[str, float]],
+) -> Dict[str, Dict[str, float]]:
+    bounds = constraints.get("channel_inputs_bounds") if isinstance(constraints, dict) else {}
+    if not isinstance(raw_inputs, dict):
+        return fallback
+    out: Dict[str, Dict[str, float]] = {}
+    for channel, metrics in raw_inputs.items():
+        c_key = str(channel).strip()
+        if not isinstance(metrics, dict):
+            continue
+        metric_values: Dict[str, float] = {}
+        for metric_key, metric_val in metrics.items():
+            m_key = str(metric_key).strip().lower()
+            if not isinstance(bounds, dict) or m_key not in bounds or not isinstance(bounds.get(m_key), dict):
+                continue
+            try:
+                val = float(metric_val)
+            except Exception:
+                continue
+            b = bounds[m_key]
+            min_v = float((b or {}).get("min", val))
+            max_v = float((b or {}).get("max", val))
+            metric_values[m_key] = round(min(max(val, min_v), max_v), 6)
+        if metric_values:
+            out[c_key] = metric_values
+    return out or fallback
+
+
+def _assistant_take_llm_channel_inputs(raw_inputs: Optional[Dict[str, object]]) -> Dict[str, Dict[str, float]]:
+    if not isinstance(raw_inputs, dict):
+        return {}
+    out: Dict[str, Dict[str, float]] = {}
+    allowed_metrics = {"cpm", "cpc", "cvr", "ctr", "cpv", "post_click"}
+    for channel, metrics in raw_inputs.items():
+        if not isinstance(metrics, dict):
+            continue
+        c_key = str(channel).strip()
+        parsed: Dict[str, float] = {}
+        for mk, mv in metrics.items():
+            m_key = str(mk).strip().lower()
+            if m_key not in allowed_metrics:
+                continue
+            try:
+                val = float(mv)
+            except Exception:
+                continue
+            if val > 0:
+                parsed[m_key] = round(val, 6)
+        if parsed:
+            out[c_key] = parsed
+    return out
+
+
+def _assistant_compact_overview_for_llm(
+    context: Optional[Dict[str, object]],
+) -> Dict[str, object]:
+    if not isinstance(context, dict):
+        return {}
+    totals = context.get("totals") if isinstance(context.get("totals"), dict) else {}
+    compact_totals: Dict[str, Dict[str, float]] = {}
+    for platform in ("meta", "google", "tiktok"):
+        row = totals.get(platform) if isinstance(totals, dict) else None
+        if not isinstance(row, dict):
+            continue
+        spend = float(row.get("spend") or 0.0)
+        impressions = float(row.get("impressions") or 0.0)
+        clicks = float(row.get("clicks") or 0.0)
+        cpm = (spend / impressions * 1000.0) if impressions > 0 else 0.0
+        cpc = (spend / clicks) if clicks > 0 else 0.0
+        ctr = (clicks / impressions) if impressions > 0 else 0.0
+        compact_totals[platform] = {
+            "spend": round(spend, 2),
+            "impressions": round(impressions, 2),
+            "clicks": round(clicks, 2),
+            "cpm": round(cpm, 4),
+            "cpc": round(cpc, 4),
+            "ctr": round(ctr, 6),
+        }
+    return {
+        "date_from": context.get("date_from"),
+        "date_to": context.get("date_to"),
+        "totals": compact_totals,
+    }
+
+
+def _assistant_min_request_for_llm(req: PlanRequest) -> Dict[str, object]:
+    return {
+        "goal": req.goal,
+        "budget": req.budget,
+        "currency": req.currency,
+        "period_days": req.period_days,
+        "date_start": req.date_start.isoformat() if req.date_start else None,
+        "date_end": req.date_end.isoformat() if req.date_end else None,
+        "country": req.country,
+        "industry": req.industry,
+        "business_type": req.business_type,
+        "plan_mode": req.plan_mode,
+        "platforms": req.platforms or [],
+    }
+
+
+def _assistant_parse_llm_json(content: str) -> Optional[Dict[str, object]]:
+    text = (content or "").strip()
+    if not text:
+        return None
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+    # Fallback: try first JSON object boundaries.
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(text[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _assistant_call_llm(
+    req: PlanRequest,
+    constraints: Dict[str, object],
+    overview_context: Optional[Dict[str, object]] = None,
+    global_overview_context: Optional[Dict[str, object]] = None,
+) -> Optional[Dict[str, object]]:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
     model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    max_tokens = int(os.getenv("ASSISTANT_LLM_MAX_TOKENS", "280") or 280)
+    max_tokens_cap = int(os.getenv("ASSISTANT_LLM_MAX_TOKENS_CAP", "600") or 600)
+    max_retries = max(1, int(os.getenv("ASSISTANT_LLM_MAX_RETRIES", "2") or 2))
+    retry_backoff = float(os.getenv("ASSISTANT_LLM_RETRY_BACKOFF_SEC", "1.5") or 1.5)
     system_prompt = (
-        "You are a senior media planner for performance marketing in Kazakhstan/CIS. "
-        "Return strict JSON only. "
-        "Keys: assumption_profile (base|conservative|aggressive), funnel_split "
-        "({awareness,consideration,performance} in percentages), assumptions "
-        "({benchmarks,history,methodology,recalc}), recommendations (array of short Russian strings), "
-        "confidence (0..1)."
+        "You are a principal digital media strategist with 20+ years of hands-on performance planning experience "
+        "across Meta, Google, TikTok, Telegram, and Yandex in CIS markets. "
+        "Your task is to produce an actionable media-plan draft, not generic advice.\n\n"
+        "Decision policy (strict):\n"
+        "1) Data priority:\n"
+        "   - First: connected_accounts_overview.totals (client facts).\n"
+        "   - Second: global_anonymized_overview.totals (market prior).\n"
+        "   - Third: conservative assumptions from constraints and request context.\n"
+        "2) Objective alignment:\n"
+        "   - leads/conversions/sales -> prioritize high-intent/performance mix but keep test allocation.\n"
+        "   - traffic -> balance click efficiency and scalable reach.\n"
+        "   - reach -> prioritize CPM efficiency and scale, keep minimum performance coverage.\n"
+        "3) Diversification & risk control:\n"
+        "   - Avoid single-channel concentration unless constraints force it.\n"
+        "   - If data is sparse or uncertain, allocate controlled test shares to secondary channels.\n"
+        "   - Do not zero-out channels solely due to weak history if they are allowed; keep small testing share when feasible.\n"
+        "4) Constraints are mandatory:\n"
+        "   - Respect allowed channels.\n"
+        "   - Respect min/max bounds from constraints.\n"
+        "   - Keep total split = 100.\n"
+        "5) Practical channel_inputs:\n"
+        "   - Return realistic planning inputs (CPM/CPC/CVR/CTR etc.) per channel.\n"
+        "   - Use conservative but actionable values if data quality is low.\n"
+        "6) Confidence scoring:\n"
+        "   - Higher confidence when client facts are rich and consistent.\n"
+        "   - Lower confidence when major platforms are missing/erroring.\n\n"
+        "Output contract (strict JSON only, no markdown):\n"
+        "{\n"
+        "  \"budget_split\": {\"meta\": number, \"google\": number, \"tiktok\": number, \"telegram\": number, \"yandex\": number},\n"
+        "  \"channel_inputs\": {\"channel_key\": {\"cpm\": number, \"cpc\": number, \"ctr\": number, \"cvr\": number, \"cpv\": number, \"post_click\": number}},\n"
+        "  \"confidence\": number,\n"
+        "  \"rationale\": \"short but specific Russian explanation with data-based reasoning\"\n"
+        "}\n"
+        "Only include channels that are allowed and relevant. "
+        "Do not include any extra keys. "
+        "Do not include prose outside JSON."
     )
+    compact_user_overview = _assistant_compact_overview_for_llm(overview_context)
+    compact_global_overview = _assistant_compact_overview_for_llm(global_overview_context)
     user_payload = {
-        "request": req.model_dump(mode="json"),
-        "baseline_plan": {
-            "period_days": baseline.period_days,
-            "budget_usd": baseline.budget_usd,
-            "totals": baseline.totals.model_dump(mode="json"),
-            "lines": [
-                {"key": line.key, "name": line.name, "share": line.share, "budget": line.budget}
-                for line in baseline.lines
+        "request": _assistant_min_request_for_llm(req),
+        "connected_accounts_overview": compact_user_overview,
+        "global_anonymized_overview": compact_global_overview,
+        "constraints": constraints,
+    }
+    attempt_payload = user_payload
+    for attempt in range(1, max_retries + 1):
+        body = {
+            "model": model,
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(attempt_payload, ensure_ascii=False)},
             ],
-        },
-    }
-    body = {
-        "model": model,
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-        ],
-    }
-    try:
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=body,
-            )
-        if resp.status_code >= 300:
-            logging.warning("LLM assistant request failed: %s %s", resp.status_code, resp.text[:300])
-            return None
-        data = resp.json()
-        content = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
-        if not content:
-            return None
-        parsed = json.loads(content)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception as exc:
-        logging.warning("LLM assistant error: %s", exc)
+        }
+        try:
+            with httpx.Client(timeout=20.0) as client:
+                resp = client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=body,
+                )
+            if resp.status_code < 300:
+                data = resp.json()
+                choice = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                finish_reason = (choice or {}).get("finish_reason")
+                content = (
+                    choice
+                    .get("message", {})
+                    .get("content", "")
+                )
+                if not content:
+                    return None
+                parsed = _assistant_parse_llm_json(content)
+                if isinstance(parsed, dict):
+                    return parsed
+                if finish_reason == "length" and max_tokens < max_tokens_cap and attempt < max_retries:
+                    max_tokens = min(max_tokens_cap, max_tokens * 2)
+                    time.sleep(0.25)
+                    continue
+                logging.warning("LLM assistant JSON parse failed (finish_reason=%s)", finish_reason)
+                return None
+
+            text_preview = resp.text[:600]
+            logging.warning("LLM assistant request failed: %s %s", resp.status_code, text_preview[:300])
+            is_429 = resp.status_code == 429
+            too_large = "Request too large" in text_preview or "tokens per min" in text_preview
+            if not is_429 or attempt >= max_retries:
+                return None
+            # Retry with degraded context when hitting rate/size limits.
+            if too_large:
+                attempt_payload = {
+                    "request": _assistant_min_request_for_llm(req),
+                    "connected_accounts_overview": _assistant_compact_overview_for_llm(overview_context),
+                    "global_anonymized_overview": {"totals": (compact_global_overview.get("totals") if isinstance(compact_global_overview, dict) else {})},
+                    "constraints": constraints,
+                }
+            time.sleep(retry_backoff * attempt)
+            continue
+        except Exception as exc:
+            logging.warning("LLM assistant error: %s", exc)
+            if attempt >= max_retries:
+                return None
+            time.sleep(retry_backoff * attempt)
+            continue
     return None
 
 
-def _build_assistant_response(req: PlanRequest, llm_data: Optional[Dict[str, object]] = None) -> PlanAssistantResponse:
+def _build_assistant_response(
+    req: PlanRequest,
+    baseline: PlanResponse,
+    constraints: Dict[str, object],
+    llm_data: Optional[Dict[str, object]] = None,
+    overview_context: Optional[Dict[str, object]] = None,
+    global_overview_context: Optional[Dict[str, object]] = None,
+) -> PlanAssistantResponse:
+    llm_full_control = _env_flag("ASSISTANT_LLM_FULL_CONTROL", False)
+    llm_blend_with_facts = _env_flag("ASSISTANT_LLM_BLEND_WITH_FACTS", False)
     fallback_profile = _assistant_choose_profile(req)
     fallback_funnel = _assistant_default_funnel(req)
     fallback_assumptions = _assistant_default_assumptions()
+    fallback_channel_inputs = _assistant_default_channel_inputs(fallback_profile)
     source: Literal["llm", "fallback"] = "fallback"
 
     profile: Literal["base", "conservative", "aggressive"] = fallback_profile
     funnel = fallback_funnel
+    channel_inputs = fallback_channel_inputs
     assumptions = fallback_assumptions
     recommendations: List[str] = []
+    rationale = ""
     confidence = 0.6
+    confidence_min = float(constraints.get("confidence_min", 0.55)) if isinstance(constraints, dict) else 0.55
+    budget_split = {line.key: round(float(line.share) * 100.0, 2) for line in baseline.lines}
 
     if isinstance(llm_data, dict):
-        raw_profile = str(llm_data.get("assumption_profile", "")).strip().lower()
-        if raw_profile in {"base", "conservative", "aggressive"}:
-            profile = raw_profile  # type: ignore[assignment]
-        funnel = _normalize_funnel(llm_data.get("funnel_split"), fallback_funnel)
-        raw_assumptions = llm_data.get("assumptions")
-        if isinstance(raw_assumptions, dict):
-            merged = dict(fallback_assumptions)
-            for k in ("benchmarks", "history", "methodology", "recalc"):
-                val = raw_assumptions.get(k)
-                if isinstance(val, str) and val.strip():
-                    merged[k] = val.strip()
-            assumptions = merged
-        raw_recos = llm_data.get("recommendations")
-        if isinstance(raw_recos, list):
-            recommendations = [str(x).strip() for x in raw_recos if str(x).strip()][:6]
         try:
             confidence = max(0.0, min(1.0, float(llm_data.get("confidence", confidence))))
         except Exception:
             pass
-        source = "llm"
+        if confidence >= confidence_min:
+            raw_rationale = str(llm_data.get("rationale", "")).strip()
+            if raw_rationale:
+                rationale = raw_rationale
+            split_constraints = constraints
+            if llm_full_control and isinstance(constraints, dict):
+                allowed = constraints.get("allowed_channels")
+                allowed_list = [str(x) for x in allowed] if isinstance(allowed, list) else ["meta", "google", "tiktok"]
+                split_constraints = {
+                    **constraints,
+                    "budget_split": {
+                        "sum": 100.0,
+                        "min": {c: 0.0 for c in allowed_list},
+                        "max": {c: 100.0 for c in allowed_list},
+                    },
+                }
+            budget_split = _assistant_normalize_and_clamp_split(
+                llm_data.get("budget_split"),
+                split_constraints,
+                baseline,
+            )
+            if llm_full_control:
+                llm_inputs = _assistant_take_llm_channel_inputs(llm_data.get("channel_inputs"))
+                channel_inputs = llm_inputs or {}
+            else:
+                channel_inputs = _assistant_validate_channel_inputs(
+                    llm_data.get("channel_inputs"),
+                    constraints,
+                    fallback_channel_inputs,
+                )
+            source = "llm"
+        else:
+            recommendations.append(
+                f"Ответ LLM отклонен: confidence {round(confidence, 2)} ниже порога {round(confidence_min, 2)}."
+            )
 
     req_for_preview = req.model_copy(deep=True)
     req_for_preview.assumption_profile = profile
     req_for_preview.funnel_split = funnel
+    req_for_preview.channel_inputs = channel_inputs
+    req_for_preview.budget_split = budget_split
     preview = build_plan(req_for_preview)
-    budget_split = {
-        line.key: round(float(line.share) * 100.0, 2)
-        for line in preview.lines
-    }
+    budget_split = {line.key: round(float(line.share) * 100.0, 2) for line in preview.lines}
+    facts_totals, facts_period, facts_used = _extract_platform_facts(overview_context)
+    global_facts_totals, global_facts_period, global_facts_used = _extract_platform_facts(global_overview_context)
+
+    # Rebalance platform shares by blended efficiency score:
+    # client history + anonymized global history (all active accounts).
+    if source == "fallback":
+        fact_platform_share = _fallback_platform_share_from_spend(facts_totals, global_facts_totals)
+    else:
+        platform_scores = _blend_platform_scores(facts_totals, global_facts_totals)
+        score_sum = sum(platform_scores.values())
+        fact_platform_share = {k: v / score_sum for k, v in platform_scores.items()} if score_sum > 0 else {}
+    should_apply_blend = source == "fallback" or (source == "llm" and llm_blend_with_facts and not llm_full_control)
+    if fact_platform_share and should_apply_blend:
+
+        line_platform = {}
+        for line in preview.lines:
+            key = str(line.key)
+            if key.startswith("meta"):
+                line_platform[key] = "meta"
+            elif key.startswith("google") or key.startswith("youtube"):
+                line_platform[key] = "google"
+            elif key.startswith("tiktok"):
+                line_platform[key] = "tiktok"
+            else:
+                line_platform[key] = "other"
+
+        base_line_share = {str(line.key): float(line.share) for line in preview.lines}
+        base_platform_total: Dict[str, float] = {}
+        for key, share in base_line_share.items():
+            plat = line_platform.get(key, "other")
+            base_platform_total[plat] = base_platform_total.get(plat, 0.0) + share
+
+        adjusted_line_share: Dict[str, float] = {}
+        for key, base_share in base_line_share.items():
+            plat = line_platform.get(key, "other")
+            if plat not in fact_platform_share:
+                adjusted_line_share[key] = base_share
+                continue
+            within_platform = base_share / max(base_platform_total.get(plat, 1e-9), 1e-9)
+            fact_line_share = fact_platform_share[plat] * within_platform
+            # In fallback mode, prioritize factual account data instead of baseline heuristics.
+            if source == "fallback":
+                adjusted_line_share[key] = fact_line_share
+            else:
+                adjusted_line_share[key] = 0.6 * base_share + 0.4 * fact_line_share
+
+        norm = sum(adjusted_line_share.values())
+        if norm > 0:
+            budget_split = {
+                key: round((val / norm) * 100.0, 2)
+                for key, val in adjusted_line_share.items()
+            }
+            if source == "llm":
+                recommendations.insert(
+                    0,
+                    "Сплит LLM нормализован и дополнительно скорректирован по blended-истории (client + global).",
+                )
+            else:
+                recommendations.insert(
+                    0,
+                    "Бюджетный сплит скорректирован по blended-истории: клиент + обезличенный global pool.",
+                )
 
     if not recommendations:
         top = sorted(preview.lines, key=lambda x: x.share, reverse=True)[:3]
         if top:
             joined = ", ".join(f"{line.name} ({round(line.share * 100, 1)}%)" for line in top)
             recommendations.append(f"Фокус по бюджету: {joined}.")
+        if facts_used:
+            recommendations.append("Рекомендации скорректированы с учетом фактических данных подключенных аккаунтов.")
+        if global_facts_used:
+            recommendations.append("Для новых/пустых аккаунтов использован обезличенный global pool по всем активным кабинетам.")
         recommendations.append("Через 7 дней загрузите фактические данные и пересчитайте план.")
+    if source == "llm" and rationale:
+        if not any(str(r).strip() == rationale for r in recommendations):
+            recommendations.insert(0, rationale)
+
+    # Deduplicate recommendations preserving order.
+    deduped_recommendations: List[str] = []
+    seen_recommendations: set = set()
+    for rec in recommendations:
+        key = str(rec).strip()
+        if not key or key in seen_recommendations:
+            continue
+        seen_recommendations.add(key)
+        deduped_recommendations.append(key)
+    recommendations = deduped_recommendations
+
+    global_debug = {}
+    if isinstance(global_overview_context, dict):
+        raw_debug = global_overview_context.get("debug")
+        if isinstance(raw_debug, dict):
+            global_debug = raw_debug
 
     return PlanAssistantResponse(
         source=source,
         assumption_profile=profile,
         funnel_split=funnel,
+        channel_inputs=channel_inputs,
         assumptions=assumptions,
+        rationale=rationale,
         recommendations=recommendations,
         confidence=round(confidence, 2),
         budget_split=budget_split,
+        facts_used=facts_used,
+        facts_period=facts_period,
+        facts_totals=facts_totals,
+        global_facts_used=global_facts_used,
+        global_facts_period=global_facts_period,
+        global_facts_totals=global_facts_totals,
+        global_facts_debug=global_debug,
     )
 
 
@@ -1888,6 +2520,7 @@ _default_origins = [
     "http://127.0.0.1:8000",
     "http://localhost:8000",
     "https://envidicydashclientv20.vercel.app",
+    "https://envidicydashclientv20develop.vercel.app",
     "https://app.envidicy.kz",
     "https://www.envidicy.kz",
 ]
@@ -2540,14 +3173,49 @@ def estimate_plan(payload: PlanRequest) -> PlanResponse:
 
 
 @app.post("/plans/assistant", response_model=PlanAssistantResponse)
-def plan_assistant(payload: PlanRequest) -> PlanAssistantResponse:
+def plan_assistant(payload: PlanRequest, authorization: Optional[str] = Header(None)) -> PlanAssistantResponse:
     if payload.budget <= 0:
         raise HTTPException(status_code=400, detail="Budget must be positive")
     if payload.avg_frequency <= 0:
         raise HTTPException(status_code=400, detail="avg_frequency must be positive")
+    overview_context: Optional[Dict[str, object]] = None
+    global_overview_context: Optional[Dict[str, object]] = None
+    d_from, d_to = _assistant_history_range(payload)
+    token = _get_bearer_token(authorization)
+    current_user = _get_user_by_token(token)
+    if current_user:
+        try:
+            overview_context = _build_insights_overview_for_user(
+                current_user=current_user,
+                date_from=d_from,
+                date_to=d_to,
+            )
+        except Exception as exc:
+            logging.warning("Assistant insights context error: %s", exc)
+    try:
+        global_overview_context = _build_insights_overview_global(d_from, d_to)
+    except Exception as exc:
+        logging.warning("Assistant global insights context error: %s", exc)
     baseline = build_plan(payload)
-    llm_data = _assistant_call_llm(payload, baseline)
-    return _build_assistant_response(payload, llm_data=llm_data)
+    constraints = _assistant_build_constraints(
+        payload,
+        overview_context=overview_context,
+        global_overview_context=global_overview_context,
+    )
+    llm_data = _assistant_call_llm(
+        payload,
+        constraints,
+        overview_context=overview_context,
+        global_overview_context=global_overview_context,
+    )
+    return _build_assistant_response(
+        payload,
+        baseline=baseline,
+        constraints=constraints,
+        llm_data=llm_data,
+        overview_context=overview_context,
+        global_overview_context=global_overview_context,
+    )
 
 
 @app.post("/plans/estimate/excel")
@@ -2769,12 +3437,74 @@ class InvoicePendingPayload(BaseModel):
     order_ref: Optional[str] = None
 
 
+def _normalize_email(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
 def _hash_password(password: str, salt: str) -> str:
     return hashlib.sha256(f"{salt}{password}".encode("utf-8")).hexdigest()
 
 
 def _verify_password(password: str, salt: str, stored_hash: str) -> bool:
     return hmac.compare_digest(_hash_password(password, salt), stored_hash)
+
+
+def _ensure_owner_access(conn, user_id: int):
+    user = conn.execute("SELECT id, email, password_hash, salt FROM users WHERE id=?", (user_id,)).fetchone()
+    if not user or not user["email"]:
+        return None
+    owner_email = _normalize_email(user["email"])
+    row = conn.execute("SELECT * FROM user_accesses WHERE user_id=? AND role='owner' ORDER BY id LIMIT 1", (user_id,)).fetchone()
+    if row:
+        conn.execute(
+            "UPDATE user_accesses SET email=?, password_hash=?, salt=?, status='active' WHERE id=?",
+            (owner_email, user["password_hash"], user["salt"], row["id"]),
+        )
+        refreshed = conn.execute("SELECT * FROM user_accesses WHERE id=?", (row["id"],)).fetchone()
+        return dict(refreshed) if refreshed else dict(row)
+    conn.execute(
+        """
+        INSERT INTO user_accesses (user_id, email, password_hash, salt, role, status)
+        VALUES (?, ?, ?, ?, 'owner', 'active')
+        """,
+        (user_id, owner_email, user["password_hash"], user["salt"]),
+    )
+    row = conn.execute("SELECT * FROM user_accesses WHERE user_id=? AND role='owner' ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _get_access_by_email(conn, email: str):
+    normalized = _normalize_email(email)
+    row = conn.execute("SELECT * FROM user_accesses WHERE email=? AND status='active'", (normalized,)).fetchone()
+    if row:
+        return dict(row)
+    legacy_user = conn.execute("SELECT id FROM users WHERE email=?", (normalized,)).fetchone()
+    if legacy_user:
+        return _ensure_owner_access(conn, legacy_user["id"])
+    return None
+
+
+def _issue_user_token(conn, user_id: int, login_email: Optional[str] = None) -> str:
+    token = secrets.token_hex(24)
+    conn.execute("INSERT INTO user_tokens (user_id, token, login_email) VALUES (?, ?, ?)", (user_id, token, _normalize_email(login_email) or None))
+    return token
+
+
+def _can_manage_accesses(conn, user_id: int, login_email: str) -> bool:
+    access = _get_access_by_email(conn, login_email)
+    if access and access.get("user_id") == user_id:
+        return (access.get("role") or "member") == "owner"
+    user = conn.execute("SELECT email FROM users WHERE id=?", (user_id,)).fetchone()
+    return bool(user and _normalize_email(user["email"]) == _normalize_email(login_email))
+
+
+def _hydrate_token_user(conn, row):
+    user = dict(row)
+    login_email = _normalize_email(user.get("login_email") or user.get("email"))
+    user["primary_email"] = user.get("email")
+    user["email"] = login_email or user.get("email")
+    user["can_manage_accesses"] = _can_manage_accesses(conn, user["id"], user["email"])
+    return user
 
 
 def _get_bearer_token(authorization: Optional[str]) -> Optional[str]:
@@ -2794,13 +3524,14 @@ def _get_user_by_token(token: Optional[str]):
     with get_conn() as conn:
         row = conn.execute(
             """
-            SELECT u.* FROM user_tokens ut
+            SELECT u.*, ut.login_email
+            FROM user_tokens ut
             JOIN users u ON u.id = ut.user_id
             WHERE ut.token=?
             """,
             (token,),
         ).fetchone()
-        return dict(row) if row else None
+        return _hydrate_token_user(conn, row) if row else None
 
 
 def get_current_user(authorization: Optional[str] = Header(None)):
@@ -2812,7 +3543,8 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     with get_conn() as conn:
         row = conn.execute(
             """
-            SELECT u.* FROM user_tokens ut
+            SELECT u.*, ut.login_email
+            FROM user_tokens ut
             JOIN users u ON u.id = ut.user_id
             WHERE ut.token=?
             """,
@@ -2820,7 +3552,7 @@ def get_current_user(authorization: Optional[str] = Header(None)):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return dict(row)
+        return _hydrate_token_user(conn, row)
 
 
 def get_optional_user(authorization: Optional[str] = Header(None)):
@@ -2829,9 +3561,22 @@ def get_optional_user(authorization: Optional[str] = Header(None)):
 
 
 def get_admin_user(current_user=Depends(get_current_user)):
-    if current_user["email"] not in ADMIN_EMAILS:
+    if current_user["email"] not in ADMIN_EMAILS and current_user.get("primary_email") not in ADMIN_EMAILS:
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+
+@app.post("/admin/users/{user_id}/impersonate")
+def admin_impersonate_user(user_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        user = conn.execute("SELECT id, email FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        token = _issue_user_token(conn, user_id)
+        conn.commit()
+        return {"id": user_id, "email": user["email"], "token": token}
 
 
 @app.get("/admin/check-key")
@@ -2888,6 +3633,15 @@ class AdminAccountUpdate(BaseModel):
 class PasswordReset(BaseModel):
     email: str
     new_password: str
+
+
+class SetPasswordPayload(BaseModel):
+    email: str
+    new_password: str
+
+
+class AccessCreatePayload(BaseModel):
+    email: str
 
 
 class WalletAdjust(BaseModel):
@@ -2957,13 +3711,13 @@ def topup_request(payload: TopUpRequest):
 def register(payload: AuthPayload):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    email = payload.email.strip().lower()
+    email = _normalize_email(payload.email)
     password = payload.password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
     with get_conn() as conn:
         existing = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-        if existing:
+        if existing or _get_access_by_email(conn, email):
             raise HTTPException(status_code=400, detail="User already exists")
         salt = secrets.token_hex(8)
         password_hash = _hash_password(password, salt)
@@ -2971,62 +3725,121 @@ def register(payload: AuthPayload):
             "INSERT INTO users (email, password_hash, salt) VALUES (?, ?, ?)",
             (email, password_hash, salt),
         )
-        token = secrets.token_hex(24)
-        conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (cur.lastrowid, token))
-        conn.commit()
         user_id = cur.lastrowid
+        _ensure_owner_access(conn, user_id)
+        token = _issue_user_token(conn, user_id, email)
+        conn.commit()
         _send_telegram_alert(
             "\n".join(
                 [
-                    "👤 <b>Новая регистрация</b>",
+                    "?? <b>????? ???????????</b>",
                     f"ID: <code>{user_id}</code>",
                     f"Email: <code>{email}</code>",
                 ]
             ),
             channel="reg",
         )
-        return {"id": user_id, "email": email, "token": token}
+        return {"id": user_id, "email": email, "token": token, "can_manage_accesses": True}
 
 
 @app.post("/auth/login")
 def login(payload: AuthPayload):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    email = payload.email.strip().lower()
+    email = _normalize_email(payload.email)
     password = payload.password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
     with get_conn() as conn:
-        user = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-        if not user or not user["password_hash"] or not user["salt"]:
+        access = _get_access_by_email(conn, email)
+        if not access or not access.get("password_hash") or not access.get("salt"):
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        if not _verify_password(password, user["salt"], user["password_hash"]):
+        if not _verify_password(password, access["salt"], access["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        token = secrets.token_hex(24)
-        conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (user["id"], token))
+        user = conn.execute("SELECT * FROM users WHERE id=?", (access["user_id"],)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        token = _issue_user_token(conn, user["id"], access["email"])
         conn.commit()
-        return {"id": user["id"], "email": user["email"], "token": token}
+        return {
+            "id": user["id"],
+            "email": access["email"],
+            "token": token,
+            "can_manage_accesses": (access.get("role") or "member") == "owner",
+        }
+
+
+@app.get("/auth/access-status")
+def auth_access_status(email: str):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    normalized = _normalize_email(email)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Email is required")
+    with get_conn() as conn:
+        access = _get_access_by_email(conn, normalized)
+        if not access:
+            return {"exists": False, "needs_password": False}
+        needs_password = not access.get("password_hash") or not access.get("salt")
+        return {
+            "exists": True,
+            "needs_password": needs_password,
+            "email": access.get("email") or normalized,
+        }
+
+
+@app.post("/auth/set-password")
+def set_password(payload: SetPasswordPayload):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    email = _normalize_email(payload.email)
+    password = payload.new_password.strip()
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="email and new_password are required")
+    with get_conn() as conn:
+        access = _get_access_by_email(conn, email)
+        if not access:
+            raise HTTPException(status_code=404, detail="Email is not linked to any account")
+        salt = secrets.token_hex(8)
+        password_hash = _hash_password(password, salt)
+        conn.execute(
+            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
+            (password_hash, salt, access["id"]),
+        )
+        if (access.get("role") or "member") == "owner":
+            conn.execute(
+                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
+                (password_hash, salt, access["user_id"]),
+            )
+        conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
+        conn.commit()
+        return {"status": "ok"}
 
 
 @app.post("/admin/reset-password")
 def admin_reset_password(payload: PasswordReset, admin_user=Depends(get_admin_user)):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    email = payload.email.strip().lower()
+    email = _normalize_email(payload.email)
     password = payload.new_password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and new_password are required")
     salt = secrets.token_hex(8)
     password_hash = _hash_password(password, salt)
     with get_conn() as conn:
-        user = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
-        if not user:
+        access = _get_access_by_email(conn, email)
+        if not access:
             raise HTTPException(status_code=404, detail="User not found")
         conn.execute(
-            "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-            (password_hash, salt, user["id"]),
+            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
+            (password_hash, salt, access["id"]),
         )
-        conn.execute("DELETE FROM user_tokens WHERE user_id=?", (user["id"],))
+        if (access.get("role") or "member") == "owner":
+            conn.execute(
+                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
+                (password_hash, salt, access["user_id"]),
+            )
+        conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
         conn.commit()
         return {"status": "ok"}
 
@@ -4225,6 +5038,11 @@ def list_wallet_transactions(current_user=Depends(get_current_user)):
         return [dict(row) for row in rows]
 
 
+def _require_access_owner(current_user):
+    if not current_user.get("can_manage_accesses"):
+        raise HTTPException(status_code=403, detail="Owner access required")
+
+
 @app.get("/profile")
 def get_profile(current_user=Depends(get_current_user)):
     if not get_conn:
@@ -4232,6 +5050,8 @@ def get_profile(current_user=Depends(get_current_user)):
     with get_conn() as conn:
         profile = _get_or_create_profile(conn, current_user["id"])
         profile["email"] = current_user["email"]
+        profile["primary_email"] = current_user.get("primary_email") or current_user["email"]
+        profile["can_manage_accesses"] = bool(current_user.get("can_manage_accesses"))
         if profile.get("avatar_path"):
             profile["avatar_url"] = f"/profile/avatar?token={_ensure_token(conn, current_user['id'])}"
         return profile
@@ -4262,9 +5082,80 @@ def update_profile(payload: ProfilePayload, current_user=Depends(get_current_use
         row = conn.execute("SELECT * FROM user_profiles WHERE user_id=?", (current_user["id"],)).fetchone()
         result = dict(row) if row else {}
         result["email"] = current_user["email"]
+        result["primary_email"] = current_user.get("primary_email") or current_user["email"]
+        result["can_manage_accesses"] = bool(current_user.get("can_manage_accesses"))
         if result.get("avatar_path"):
             result["avatar_url"] = f"/profile/avatar?token={_ensure_token(conn, current_user['id'])}"
         return result
+
+
+@app.get("/profile/accesses")
+def list_profile_accesses(current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
+    if not get_conn:
+        return {"items": [], "can_manage_accesses": True}
+    with get_conn() as conn:
+        _ensure_owner_access(conn, current_user["id"])
+        rows = conn.execute(
+            """
+            SELECT id, user_id, email, role, status, created_at
+            FROM user_accesses
+            WHERE user_id=?
+            ORDER BY CASE WHEN role='owner' THEN 0 ELSE 1 END, created_at ASC
+            """,
+            (current_user["id"],),
+        ).fetchall()
+        return {"can_manage_accesses": True, "items": [dict(row) for row in rows]}
+
+
+@app.post("/profile/accesses")
+def create_profile_access(payload: AccessCreatePayload, current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    email = _normalize_email(payload.email)
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
+    with get_conn() as conn:
+        owner = _ensure_owner_access(conn, current_user["id"])
+        if owner and _normalize_email(owner.get("email")) == email:
+            raise HTTPException(status_code=400, detail="Main email is already linked")
+        existing = _get_access_by_email(conn, email)
+        if existing:
+            raise HTTPException(status_code=400, detail="Email is already linked to an account")
+        conn.execute(
+            """
+            INSERT INTO user_accesses (user_id, email, role, status)
+            VALUES (?, ?, 'member', 'active')
+            """,
+            (current_user["id"], email),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT id, user_id, email, role, status, created_at FROM user_accesses WHERE email=?",
+            (email,),
+        ).fetchone()
+        return dict(row) if row else {"status": "ok"}
+
+
+@app.delete("/profile/accesses/{access_id}")
+def delete_profile_access(access_id: int, current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_accesses WHERE id=? AND user_id=?",
+            (access_id, current_user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Access not found")
+        if (row["role"] or "member") == "owner":
+            raise HTTPException(status_code=400, detail="Main email cannot be deleted")
+        conn.execute("DELETE FROM user_tokens WHERE user_id=? AND login_email=?", (current_user["id"], row["email"]))
+        conn.execute("DELETE FROM user_accesses WHERE id=?", (access_id,))
+        conn.commit()
+        return {"status": "ok"}
 
 
 @app.get("/fees")
@@ -4481,20 +5372,24 @@ def change_password(payload: ChangePasswordPayload, current_user=Depends(get_cur
     if not payload.current_password or not payload.new_password:
         raise HTTPException(status_code=400, detail="current_password and new_password are required")
     with get_conn() as conn:
-        user = conn.execute("SELECT * FROM users WHERE id=?", (current_user["id"],)).fetchone()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        if not _verify_password(payload.current_password, user["salt"], user["password_hash"]):
+        access = _get_access_by_email(conn, current_user["email"])
+        if not access or not access.get("password_hash") or not access.get("salt"):
+            raise HTTPException(status_code=404, detail="Access not found")
+        if not _verify_password(payload.current_password, access["salt"], access["password_hash"]):
             raise HTTPException(status_code=400, detail="Invalid current password")
         salt = secrets.token_hex(8)
         password_hash = _hash_password(payload.new_password, salt)
         conn.execute(
-            "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-            (password_hash, salt, current_user["id"]),
+            "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
+            (password_hash, salt, access["id"]),
         )
+        if (access.get("role") or "member") == "owner":
+            conn.execute(
+                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
+                (password_hash, salt, current_user["id"]),
+            )
         conn.execute("DELETE FROM user_tokens WHERE user_id=?", (current_user["id"],))
-        new_token = secrets.token_hex(24)
-        conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (current_user["id"], new_token))
+        new_token = _issue_user_token(conn, current_user["id"], current_user["email"])
         conn.commit()
         return {"status": "ok", "token": new_token}
 
@@ -4936,20 +5831,15 @@ def google_audience(
         results.append(payload)
     return {"accounts": results}
 
-@app.get("/insights/overview")
-def insights_overview(
+
+def _build_insights_overview_for_user(
+    current_user: Dict[str, object],
     date_from: str,
     date_to: str,
     meta_account_id: Optional[int] = None,
     google_account_id: Optional[int] = None,
     tiktok_account_id: Optional[int] = None,
-    current_user=Depends(get_current_user),
-):
-    if not get_conn:
-        raise HTTPException(status_code=500, detail="DB not initialized")
-    if not date_from or not date_to:
-        raise HTTPException(status_code=400, detail="date_from and date_to are required")
-
+) -> Dict[str, object]:
     def _to_float(value: object) -> float:
         try:
             return float(value)
@@ -4984,20 +5874,22 @@ def insights_overview(
         google_accounts = _fetch_accounts(conn, "google", google_account_id)
         tiktok_accounts = _fetch_accounts(conn, "tiktok", tiktok_account_id)
 
-    totals = {"meta": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
-              "google": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
-              "tiktok": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0}}
-
+    totals = {
+        "meta": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+        "google": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+        "tiktok": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+    }
     daily_meta: Dict[str, Dict[str, object]] = {}
     daily_google: Dict[str, Dict[str, object]] = {}
     daily_tiktok: Dict[str, Dict[str, object]] = {}
+    safe_meta_from = _meta_safe_date_from(date_from)
 
     for acc in meta_accounts:
         external_id = acc.get("external_id") or acc.get("account_code")
         if not external_id:
             continue
         try:
-            rows = _meta_fetch_daily(str(external_id), date_from, date_to)
+            rows = _meta_fetch_daily(str(external_id), safe_meta_from, date_to)
             for row in rows:
                 _merge_daily(daily_meta, "date_start", row)
         except Exception:
@@ -5025,9 +5917,10 @@ def insights_overview(
             advertiser_ids.append(str(env_adv))
     for adv_id in sorted(set(advertiser_ids)):
         try:
-            rows = _tiktok_fetch_daily(adv_id, date_from, date_to)
-            for row in rows:
-                _merge_daily(daily_tiktok, "date", row)
+            for chunk_from, chunk_to in _date_chunks(date_from, date_to, 30):
+                rows = _tiktok_fetch_daily(adv_id, chunk_from, chunk_to)
+                for row in rows:
+                    _merge_daily(daily_tiktok, "date", row)
         except Exception:
             continue
 
@@ -5043,8 +5936,168 @@ def insights_overview(
         "google": _finalize(daily_google, "google"),
         "tiktok": _finalize(daily_tiktok, "tiktok"),
     }
+    return {"totals": totals, "daily": daily, "date_from": date_from, "date_to": date_to}
 
-    return {"totals": totals, "daily": daily}
+
+def _assistant_history_range(req: PlanRequest) -> Tuple[str, str]:
+    mode = str(os.getenv("ASSISTANT_HISTORY_MODE", "full") or "full").lower()
+    end_date = date.today()
+    if mode == "plan" and req.date_start and req.date_end and req.date_end >= req.date_start:
+        return req.date_start.isoformat(), req.date_end.isoformat()
+    if mode == "lookback":
+        days = int(os.getenv("ASSISTANT_HISTORY_DAYS", "365") or 365)
+        start_date = end_date - timedelta(days=max(1, min(days, 3650)) - 1)
+        return start_date.isoformat(), end_date.isoformat()
+    # full history (bounded by configured start date to avoid unbounded API lookups)
+    start_str = os.getenv("ASSISTANT_HISTORY_START_DATE", "2023-01-01")
+    return start_str, end_date.isoformat()
+
+
+def _build_insights_overview_global(date_from: str, date_to: str) -> Dict[str, object]:
+    cache_key = f"{date_from}:{date_to}"
+    now = time.time()
+    if (
+        _ASSISTANT_GLOBAL_OVERVIEW_CACHE.get("key") == cache_key
+        and float(_ASSISTANT_GLOBAL_OVERVIEW_CACHE.get("ts") or 0.0) + _ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC > now
+        and isinstance(_ASSISTANT_GLOBAL_OVERVIEW_CACHE.get("data"), dict)
+    ):
+        return dict(_ASSISTANT_GLOBAL_OVERVIEW_CACHE["data"])  # type: ignore[index]
+
+    def _to_float(value: object) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
+    def _merge_daily(target: Dict[str, Dict[str, object]], date_key: str, row: Dict[str, object]) -> None:
+        date_val = row.get(date_key)
+        if not date_val:
+            return
+        if date_val not in target:
+            target[date_val] = {"date": date_val, "spend": 0.0, "impressions": 0.0, "clicks": 0.0}
+        target[date_val]["spend"] += _to_float(row.get("spend"))
+        target[date_val]["impressions"] += _to_float(row.get("impressions"))
+        target[date_val]["clicks"] += _to_float(row.get("clicks"))
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, platform, external_id, account_code, status
+            FROM ad_accounts
+            WHERE platform IN ('meta', 'google', 'tiktok')
+            """,
+        ).fetchall()
+        accounts = [dict(r) for r in rows]
+
+    ids_by_platform: Dict[str, set] = {"meta": set(), "google": set(), "tiktok": set()}
+    debug: Dict[str, Dict[str, object]] = {
+        "meta": {"accounts_total": 0, "used_ids": 0, "missing_id": 0, "api_ok": 0, "api_failed": 0, "last_error": None},
+        "google": {"accounts_total": 0, "used_ids": 0, "missing_id": 0, "api_ok": 0, "api_failed": 0, "last_error": None},
+        "tiktok": {"accounts_total": 0, "used_ids": 0, "missing_id": 0, "api_ok": 0, "api_failed": 0, "last_error": None},
+    }
+    for acc in accounts:
+        status = str(acc.get("status") or "active").lower()
+        if status in {"archived", "disabled", "deleted"}:
+            continue
+        platform = str(acc.get("platform") or "").lower()
+        if platform in debug:
+            debug[platform]["accounts_total"] = int(debug[platform]["accounts_total"]) + 1
+        external_id = acc.get("external_id") or acc.get("account_code")
+        if platform in ids_by_platform and external_id:
+            ids_by_platform[platform].add(str(external_id))
+        elif platform in debug:
+            debug[platform]["missing_id"] = int(debug[platform]["missing_id"]) + 1
+
+    for platform in ("meta", "google", "tiktok"):
+        debug[platform]["used_ids"] = len(ids_by_platform[platform])
+
+    totals = {
+        "meta": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+        "google": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+        "tiktok": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+    }
+    daily_meta: Dict[str, Dict[str, object]] = {}
+    daily_google: Dict[str, Dict[str, object]] = {}
+    daily_tiktok: Dict[str, Dict[str, object]] = {}
+    safe_meta_from = _meta_safe_date_from(date_from)
+
+    for external_id in sorted(ids_by_platform["meta"]):
+        try:
+            rows = _meta_fetch_daily(external_id, safe_meta_from, date_to)
+            for row in rows:
+                _merge_daily(daily_meta, "date_start", row)
+            debug["meta"]["api_ok"] = int(debug["meta"]["api_ok"]) + 1
+        except Exception:
+            debug["meta"]["api_failed"] = int(debug["meta"]["api_failed"]) + 1
+            if not debug["meta"]["last_error"]:
+                debug["meta"]["last_error"] = traceback.format_exc(limit=1).strip().splitlines()[-1]
+            continue
+
+    for external_id in sorted(ids_by_platform["google"]):
+        try:
+            rows = _google_fetch_daily(external_id, date_from, date_to)
+            for row in rows:
+                _merge_daily(daily_google, "date", row)
+            debug["google"]["api_ok"] = int(debug["google"]["api_ok"]) + 1
+        except Exception:
+            debug["google"]["api_failed"] = int(debug["google"]["api_failed"]) + 1
+            if not debug["google"]["last_error"]:
+                debug["google"]["last_error"] = traceback.format_exc(limit=1).strip().splitlines()[-1]
+            continue
+
+    for advertiser_id in sorted(ids_by_platform["tiktok"]):
+        try:
+            for chunk_from, chunk_to in _date_chunks(date_from, date_to, 30):
+                rows = _tiktok_fetch_daily(advertiser_id, chunk_from, chunk_to)
+                for row in rows:
+                    _merge_daily(daily_tiktok, "date", row)
+            debug["tiktok"]["api_ok"] = int(debug["tiktok"]["api_ok"]) + 1
+        except Exception:
+            debug["tiktok"]["api_failed"] = int(debug["tiktok"]["api_failed"]) + 1
+            if not debug["tiktok"]["last_error"]:
+                debug["tiktok"]["last_error"] = traceback.format_exc(limit=1).strip().splitlines()[-1]
+            continue
+
+    def _finalize(daily_map: Dict[str, Dict[str, object]], platform: str) -> List[Dict[str, object]]:
+        rows = [daily_map[k] for k in sorted(daily_map.keys())]
+        totals[platform]["spend"] = sum(_to_float(r.get("spend")) for r in rows)
+        totals[platform]["impressions"] = sum(_to_float(r.get("impressions")) for r in rows)
+        totals[platform]["clicks"] = sum(_to_float(r.get("clicks")) for r in rows)
+        return rows
+
+    daily = {
+        "meta": _finalize(daily_meta, "meta"),
+        "google": _finalize(daily_google, "google"),
+        "tiktok": _finalize(daily_tiktok, "tiktok"),
+    }
+    payload = {"totals": totals, "daily": daily, "date_from": date_from, "date_to": date_to, "debug": debug}
+    _ASSISTANT_GLOBAL_OVERVIEW_CACHE["key"] = cache_key
+    _ASSISTANT_GLOBAL_OVERVIEW_CACHE["ts"] = now
+    _ASSISTANT_GLOBAL_OVERVIEW_CACHE["data"] = payload
+    return payload
+
+
+@app.get("/insights/overview")
+def insights_overview(
+    date_from: str,
+    date_to: str,
+    meta_account_id: Optional[int] = None,
+    google_account_id: Optional[int] = None,
+    tiktok_account_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    if not date_from or not date_to:
+        raise HTTPException(status_code=400, detail="date_from and date_to are required")
+    return _build_insights_overview_for_user(
+        current_user=current_user,
+        date_from=date_from,
+        date_to=date_to,
+        meta_account_id=meta_account_id,
+        google_account_id=google_account_id,
+        tiktok_account_id=tiktok_account_id,
+    )
 
 
 @app.post("/admin/documents/upload")
@@ -5993,6 +7046,23 @@ def admin_update_account(account_id: int, payload: AdminAccountUpdate, admin_use
         conn.execute(f"UPDATE ad_accounts SET {', '.join(updates)} WHERE id=?", params)
         conn.commit()
         return {"id": account_id, "status": "updated"}
+
+
+@app.delete("/admin/accounts/{account_id}")
+def admin_delete_account(account_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute("SELECT id, name FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+        topups_count = conn.execute("SELECT COUNT(1) AS cnt FROM topups WHERE account_id=?", (account_id,)).fetchone()["cnt"]
+        wallet_tx_count = conn.execute("SELECT COUNT(1) AS cnt FROM wallet_transactions WHERE account_id=?", (account_id,)).fetchone()["cnt"]
+        if int(topups_count or 0) > 0 or int(wallet_tx_count or 0) > 0:
+            raise HTTPException(status_code=409, detail="Account cannot be deleted because it already has linked operations")
+        conn.execute("DELETE FROM ad_accounts WHERE id=?", (account_id,))
+        conn.commit()
+        return {"id": account_id, "status": "deleted", "name": row["name"]}
 
 
 @app.get("/admin/topups")
