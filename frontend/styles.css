@@ -1225,6 +1225,22 @@ h1 {
   background: rgba(105, 227, 255, 0.05);
 }
 
+.account-actions-cell {
+  width: 1%;
+  white-space: normal;
+}
+
+.account-row-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.account-row-actions .btn {
+  min-width: 122px;
+}
+
 .table-wrapper-tight {
   overflow-x: auto;
   overflow-y: hidden;

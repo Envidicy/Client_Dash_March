@@ -81,8 +81,8 @@ function renderAccounts(rows) {
         <td>${row.account_code || '—'}</td>
         <td>${row.external_id || '—'}</td>
         <td>${formatLiveBillingCell(row.live_billing, row.currency)}</td>
-        <td style="text-align:right;">
-          <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <td class="account-actions-cell">
+          <div class="account-row-actions">
             <button class="btn ghost small" data-edit="1"
               data-id="${row.id}"
               data-user-id="${row.user_id}"
