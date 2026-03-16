@@ -27,6 +27,8 @@ import boto3
 from botocore.config import Config as BotoConfig
 from google.ads.googleads.client import GoogleAdsClient
 from google.api_core import exceptions as google_api_exceptions
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from dotenv import load_dotenv
 
 from app.db import get_conn
@@ -42,6 +44,7 @@ _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
 _ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
 _ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC = int(os.getenv("ASSISTANT_GLOBAL_CACHE_TTL_SEC", "3600") or 3600)
+_PASSWORD_HASHER = PasswordHasher()
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -3441,12 +3444,53 @@ def _normalize_email(value: Optional[str]) -> str:
     return (value or "").strip().lower()
 
 
-def _hash_password(password: str, salt: str) -> str:
+def _hash_password_legacy(password: str, salt: str) -> str:
     return hashlib.sha256(f"{salt}{password}".encode("utf-8")).hexdigest()
 
 
-def _verify_password(password: str, salt: str, stored_hash: str) -> bool:
-    return hmac.compare_digest(_hash_password(password, salt), stored_hash)
+def _is_argon2_hash(stored_hash: Optional[str]) -> bool:
+    return bool(stored_hash and str(stored_hash).startswith("$argon2"))
+
+
+def _hash_password(password: str, salt: Optional[str] = None) -> str:
+    return _PASSWORD_HASHER.hash(password)
+
+
+def _verify_password(password: str, salt: Optional[str], stored_hash: str) -> bool:
+    if not stored_hash:
+        return False
+    if _is_argon2_hash(stored_hash):
+        try:
+            return _PASSWORD_HASHER.verify(stored_hash, password)
+        except (VerifyMismatchError, InvalidHashError):
+            return False
+    if not salt:
+        return False
+    return hmac.compare_digest(_hash_password_legacy(password, salt), stored_hash)
+
+
+def _needs_password_rehash(stored_hash: Optional[str]) -> bool:
+    return bool(stored_hash) and not _is_argon2_hash(stored_hash)
+
+
+def _set_access_password(conn, access: Dict[str, object], password: str) -> str:
+    password_hash = _hash_password(password)
+    conn.execute(
+        "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
+        (password_hash, None, access["id"]),
+    )
+    if (access.get("role") or "member") == "owner":
+        conn.execute(
+            "UPDATE users SET password_hash=?, salt=? WHERE id=?",
+            (password_hash, None, access["user_id"]),
+        )
+    return password_hash
+
+
+def _upgrade_password_hash_if_needed(conn, access: Dict[str, object], password: str) -> None:
+    if not _needs_password_rehash(access.get("password_hash")):
+        return
+    _set_access_password(conn, access, password)
 
 
 def _ensure_owner_access(conn, user_id: int):
@@ -3719,11 +3763,10 @@ def register(payload: AuthPayload):
         existing = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         if existing or _get_access_by_email(conn, email):
             raise HTTPException(status_code=400, detail="User already exists")
-        salt = secrets.token_hex(8)
-        password_hash = _hash_password(password, salt)
+        password_hash = _hash_password(password)
         cur = conn.execute(
             "INSERT INTO users (email, password_hash, salt) VALUES (?, ?, ?)",
-            (email, password_hash, salt),
+            (email, password_hash, None),
         )
         user_id = cur.lastrowid
         _ensure_owner_access(conn, user_id)
@@ -3752,10 +3795,11 @@ def login(payload: AuthPayload):
         raise HTTPException(status_code=400, detail="Email and password are required")
     with get_conn() as conn:
         access = _get_access_by_email(conn, email)
-        if not access or not access.get("password_hash") or not access.get("salt"):
+        if not access or not access.get("password_hash"):
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        if not _verify_password(password, access["salt"], access["password_hash"]):
+        if not _verify_password(password, access.get("salt"), access["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
+        _upgrade_password_hash_if_needed(conn, access, password)
         user = conn.execute("SELECT * FROM users WHERE id=?", (access["user_id"],)).fetchone()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
@@ -3780,7 +3824,7 @@ def auth_access_status(email: str):
         access = _get_access_by_email(conn, normalized)
         if not access:
             return {"exists": False, "needs_password": False}
-        needs_password = not access.get("password_hash") or not access.get("salt")
+        needs_password = not access.get("password_hash")
         return {
             "exists": True,
             "needs_password": needs_password,
@@ -3800,17 +3844,7 @@ def set_password(payload: SetPasswordPayload):
         access = _get_access_by_email(conn, email)
         if not access:
             raise HTTPException(status_code=404, detail="Email is not linked to any account")
-        salt = secrets.token_hex(8)
-        password_hash = _hash_password(password, salt)
-        conn.execute(
-            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
-            (password_hash, salt, access["id"]),
-        )
-        if (access.get("role") or "member") == "owner":
-            conn.execute(
-                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                (password_hash, salt, access["user_id"]),
-            )
+        _set_access_password(conn, access, password)
         conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
         conn.commit()
         return {"status": "ok"}
@@ -3824,21 +3858,11 @@ def admin_reset_password(payload: PasswordReset, admin_user=Depends(get_admin_us
     password = payload.new_password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and new_password are required")
-    salt = secrets.token_hex(8)
-    password_hash = _hash_password(password, salt)
     with get_conn() as conn:
         access = _get_access_by_email(conn, email)
         if not access:
             raise HTTPException(status_code=404, detail="User not found")
-        conn.execute(
-            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
-            (password_hash, salt, access["id"]),
-        )
-        if (access.get("role") or "member") == "owner":
-            conn.execute(
-                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                (password_hash, salt, access["user_id"]),
-            )
+        _set_access_password(conn, access, password)
         conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
         conn.commit()
         return {"status": "ok"}
@@ -5373,21 +5397,11 @@ def change_password(payload: ChangePasswordPayload, current_user=Depends(get_cur
         raise HTTPException(status_code=400, detail="current_password and new_password are required")
     with get_conn() as conn:
         access = _get_access_by_email(conn, current_user["email"])
-        if not access or not access.get("password_hash") or not access.get("salt"):
+        if not access or not access.get("password_hash"):
             raise HTTPException(status_code=404, detail="Access not found")
-        if not _verify_password(payload.current_password, access["salt"], access["password_hash"]):
+        if not _verify_password(payload.current_password, access.get("salt"), access["password_hash"]):
             raise HTTPException(status_code=400, detail="Invalid current password")
-        salt = secrets.token_hex(8)
-        password_hash = _hash_password(payload.new_password, salt)
-        conn.execute(
-            "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
-            (password_hash, salt, access["id"]),
-        )
-        if (access.get("role") or "member") == "owner":
-            conn.execute(
-                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                (password_hash, salt, current_user["id"]),
-            )
+        _set_access_password(conn, access, payload.new_password)
         conn.execute("DELETE FROM user_tokens WHERE user_id=?", (current_user["id"],))
         new_token = _issue_user_token(conn, current_user["id"], current_user["email"])
         conn.commit()
