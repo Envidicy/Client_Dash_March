@@ -5936,6 +5936,26 @@ def _build_insights_overview_for_user(
         target[date_val]["impressions"] += _to_float(row.get("impressions"))
         target[date_val]["clicks"] += _to_float(row.get("clicks"))
 
+    def _merge_account_daily(
+        target: Dict[str, Dict[int, Dict[str, object]]],
+        platform: str,
+        account: Dict[str, object],
+        date_key: str,
+        row: Dict[str, object],
+    ) -> None:
+        account_id = int(account.get("id") or 0)
+        if not account_id:
+            return
+        platform_bucket = target.setdefault(platform, {})
+        if account_id not in platform_bucket:
+            platform_bucket[account_id] = {
+                "account_id": account_id,
+                "name": account.get("name") or account.get("external_id") or account.get("account_code") or f"ID {account_id}",
+                "platform": platform,
+                "_daily_map": {},
+            }
+        _merge_daily(platform_bucket[account_id]["_daily_map"], date_key, row)
+
     def _fetch_accounts(conn, platform: str, account_id: Optional[int]) -> List[Dict[str, object]]:
         if account_id:
             row = conn.execute(
@@ -5959,6 +5979,7 @@ def _build_insights_overview_for_user(
         "google": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
         "tiktok": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
     }
+    daily_by_account: Dict[str, Dict[int, Dict[str, object]]] = {"meta": {}, "google": {}, "tiktok": {}}
     daily_meta: Dict[str, Dict[str, object]] = {}
     daily_google: Dict[str, Dict[str, object]] = {}
     daily_tiktok: Dict[str, Dict[str, object]] = {}
@@ -5972,6 +5993,7 @@ def _build_insights_overview_for_user(
             rows = _meta_fetch_daily(str(external_id), safe_meta_from, date_to)
             for row in rows:
                 _merge_daily(daily_meta, "date_start", row)
+                _merge_account_daily(daily_by_account, "meta", acc, "date_start", row)
         except Exception:
             continue
 
@@ -5983,26 +6005,34 @@ def _build_insights_overview_for_user(
             rows = _google_fetch_daily(str(external_id), date_from, date_to)
             for row in rows:
                 _merge_daily(daily_google, "date", row)
+                _merge_account_daily(daily_by_account, "google", acc, "date", row)
         except Exception:
             continue
 
-    advertiser_ids: List[str] = []
+    has_tiktok_accounts = False
     for acc in tiktok_accounts:
         adv_id = acc.get("external_id") or acc.get("account_code")
-        if adv_id:
-            advertiser_ids.append(str(adv_id))
-    if not advertiser_ids:
-        env_adv = os.getenv("TIKTOK_ADVERTISER_ID")
-        if env_adv:
-            advertiser_ids.append(str(env_adv))
-    for adv_id in sorted(set(advertiser_ids)):
+        if not adv_id:
+            continue
+        has_tiktok_accounts = True
         try:
             for chunk_from, chunk_to in _date_chunks(date_from, date_to, 30):
-                rows = _tiktok_fetch_daily(adv_id, chunk_from, chunk_to)
+                rows = _tiktok_fetch_daily(str(adv_id), chunk_from, chunk_to)
                 for row in rows:
                     _merge_daily(daily_tiktok, "date", row)
+                    _merge_account_daily(daily_by_account, "tiktok", acc, "date", row)
         except Exception:
             continue
+    if not has_tiktok_accounts:
+        env_adv = os.getenv("TIKTOK_ADVERTISER_ID")
+        if env_adv:
+            try:
+                for chunk_from, chunk_to in _date_chunks(date_from, date_to, 30):
+                    rows = _tiktok_fetch_daily(str(env_adv), chunk_from, chunk_to)
+                    for row in rows:
+                        _merge_daily(daily_tiktok, "date", row)
+            except Exception:
+                pass
 
     def _finalize(daily_map: Dict[str, Dict[str, object]], platform: str) -> List[Dict[str, object]]:
         rows = [daily_map[k] for k in sorted(daily_map.keys())]
@@ -6016,7 +6046,23 @@ def _build_insights_overview_for_user(
         "google": _finalize(daily_google, "google"),
         "tiktok": _finalize(daily_tiktok, "tiktok"),
     }
-    return {"totals": totals, "daily": daily, "date_from": date_from, "date_to": date_to}
+
+    serialized_daily_by_account: Dict[str, List[Dict[str, object]]] = {}
+    for platform, accounts_map in daily_by_account.items():
+        serialized_daily_by_account[platform] = []
+        for account_id in sorted(accounts_map.keys()):
+            account_payload = dict(accounts_map[account_id])
+            daily_map = account_payload.pop("_daily_map", {})
+            account_payload["daily"] = [daily_map[k] for k in sorted(daily_map.keys())]
+            serialized_daily_by_account[platform].append(account_payload)
+
+    return {
+        "totals": totals,
+        "daily": daily,
+        "daily_by_account": serialized_daily_by_account,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
 
 
 def _assistant_history_range(req: PlanRequest) -> Tuple[str, str]:
