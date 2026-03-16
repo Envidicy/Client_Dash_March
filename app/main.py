@@ -42,6 +42,8 @@ _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
 _ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
 _ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC = int(os.getenv("ASSISTANT_GLOBAL_CACHE_TTL_SEC", "3600") or 3600)
+_AUTH_TOKEN_TTL_SEC = int(os.getenv("AUTH_TOKEN_TTL_SEC", "2592000") or 2592000)
+_FILE_TOKEN_TTL_SEC = int(os.getenv("FILE_TOKEN_TTL_SEC", "3600") or 3600)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -3484,9 +3486,49 @@ def _get_access_by_email(conn, email: str):
     return None
 
 
-def _issue_user_token(conn, user_id: int, login_email: Optional[str] = None) -> str:
+def _utc_now() -> datetime:
+    return datetime.utcnow()
+
+
+def _token_expiry(ttl_sec: int) -> str:
+    return (_utc_now() + timedelta(seconds=max(60, int(ttl_sec or 0)))).isoformat()
+
+
+def _parse_token_expiry(value) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo else value
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+
+
+def _is_token_expired(expires_at) -> bool:
+    parsed = _parse_token_expiry(expires_at)
+    return bool(parsed and parsed <= _utc_now())
+
+
+def _issue_user_token(
+    conn,
+    user_id: int,
+    login_email: Optional[str] = None,
+    *,
+    ttl_sec: int = _AUTH_TOKEN_TTL_SEC,
+    token_scope: str = "auth",
+) -> str:
     token = secrets.token_hex(24)
-    conn.execute("INSERT INTO user_tokens (user_id, token, login_email) VALUES (?, ?, ?)", (user_id, token, _normalize_email(login_email) or None))
+    conn.execute(
+        "INSERT INTO user_tokens (user_id, token, login_email, expires_at, token_scope) VALUES (?, ?, ?, ?, ?)",
+        (user_id, token, _normalize_email(login_email) or None, _token_expiry(ttl_sec), token_scope),
+    )
     return token
 
 
@@ -3516,7 +3558,7 @@ def _get_bearer_token(authorization: Optional[str]) -> Optional[str]:
     return parts[1].strip()
 
 
-def _get_user_by_token(token: Optional[str]):
+def _get_user_by_token(token: Optional[str], allowed_scopes: Optional[Tuple[Optional[str], ...]] = None):
     if not token:
         return None
     if not get_conn:
@@ -3524,14 +3566,22 @@ def _get_user_by_token(token: Optional[str]):
     with get_conn() as conn:
         row = conn.execute(
             """
-            SELECT u.*, ut.login_email
+            SELECT u.*, ut.login_email, ut.expires_at, ut.token_scope
             FROM user_tokens ut
             JOIN users u ON u.id = ut.user_id
             WHERE ut.token=?
             """,
             (token,),
         ).fetchone()
-        return _hydrate_token_user(conn, row) if row else None
+        if not row:
+            return None
+        if allowed_scopes is not None and row.get("token_scope") not in allowed_scopes:
+            return None
+        if _is_token_expired(row.get("expires_at")):
+            conn.execute("DELETE FROM user_tokens WHERE token=?", (token,))
+            conn.commit()
+            return None
+        return _hydrate_token_user(conn, row)
 
 
 def get_current_user(authorization: Optional[str] = Header(None)):
@@ -3540,24 +3590,15 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     token = _get_bearer_token(authorization)
     if not token:
         raise HTTPException(status_code=401, detail="Missing token")
-    with get_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT u.*, ut.login_email
-            FROM user_tokens ut
-            JOIN users u ON u.id = ut.user_id
-            WHERE ut.token=?
-            """,
-            (token,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return _hydrate_token_user(conn, row)
+    user = _get_user_by_token(token, allowed_scopes=(None, "auth"))
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user
 
 
 def get_optional_user(authorization: Optional[str] = Header(None)):
     token = _get_bearer_token(authorization)
-    return _get_user_by_token(token)
+    return _get_user_by_token(token, allowed_scopes=(None, "auth"))
 
 
 def get_admin_user(current_user=Depends(get_current_user)):
@@ -5168,11 +5209,17 @@ def get_fees(current_user=Depends(get_current_user)):
 
 
 def _ensure_token(conn, user_id: int) -> str:
-    row = conn.execute("SELECT token FROM user_tokens WHERE user_id=? ORDER BY created_at DESC LIMIT 1", (user_id,)).fetchone()
-    if row and row["token"]:
+    row = conn.execute(
+        "SELECT token, expires_at FROM user_tokens WHERE user_id=? AND token_scope='file' ORDER BY created_at DESC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    if row and row["token"] and not _is_token_expired(row.get("expires_at")):
         return row["token"]
     token = secrets.token_hex(32)
-    conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (user_id, token))
+    conn.execute(
+        "INSERT INTO user_tokens (user_id, token, expires_at, token_scope) VALUES (?, ?, ?, 'file')",
+        (user_id, token, _token_expiry(_FILE_TOKEN_TTL_SEC)),
+    )
     conn.commit()
     return token
 

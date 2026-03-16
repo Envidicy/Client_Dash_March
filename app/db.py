@@ -140,6 +140,8 @@ def apply_schema():
             conn.execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS notifications_seen_at TIMESTAMPTZ")
             conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS hold_applied INTEGER DEFAULT 0")
             conn.execute("ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS login_email TEXT")
+            conn.execute("ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
+            conn.execute("ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS token_scope TEXT DEFAULT 'auth'")
             conn.execute("""
             CREATE TABLE IF NOT EXISTS user_accesses (
               id BIGSERIAL PRIMARY KEY,
@@ -168,6 +170,8 @@ def apply_schema():
               user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
               token TEXT NOT NULL UNIQUE,
               login_email TEXT,
+              expires_at TEXT,
+              token_scope TEXT DEFAULT 'auth',
               created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             """,
@@ -402,6 +406,8 @@ def apply_schema():
         _ensure_column(conn, "users", "password_hash", "TEXT")
         _ensure_column(conn, "users", "salt", "TEXT")
         _ensure_column(conn, "user_tokens", "login_email", "TEXT")
+        _ensure_column(conn, "user_tokens", "expires_at", "TEXT")
+        _ensure_column(conn, "user_tokens", "token_scope", "TEXT")
         _ensure_column(conn, "users", "is_client", "INTEGER")
         _ensure_column(conn, "ad_accounts", "user_id", "INTEGER")
         _ensure_column(conn, "ad_accounts", "account_code", "TEXT")
