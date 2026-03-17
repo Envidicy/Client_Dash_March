@@ -6,6 +6,8 @@ import AuthShell from '../../components/auth/AuthShell'
 import { apiFetch } from '../../lib/api'
 import { setAuth } from '../../lib/auth'
 
+const ADMIN_EMAILS = new Set(['romant997@gmail.com', 'kolyadov.denis@gmail.com'])
+
 export default function LoginPage() {
   const router = useRouter()
   const [mode, setMode] = useState('login')
@@ -43,7 +45,8 @@ export default function LoginPage() {
       if (!res.ok) throw new Error(data?.detail || 'Не удалось войти')
       setAuth(data)
       setStatus('Вход выполнен. Перенаправление...')
-      router.push('/plan')
+      const nextEmail = String(data?.email || email || '').toLowerCase()
+      router.push(ADMIN_EMAILS.has(nextEmail) ? '/admin/requests' : '/plan')
     } catch (error) {
       setStatus(error?.message || 'Не удалось войти. Проверьте почту и пароль.')
     } finally {
