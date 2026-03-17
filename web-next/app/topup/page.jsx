@@ -74,6 +74,12 @@ function withMarkup(rate) {
   return Number(rate) + MARKUP
 }
 
+function getTopupAccountAmount(row) {
+  if (row?.amount_account != null) return Number(row.amount_account)
+  if (row?.amount_net != null) return Number(row.amount_net)
+  return Number(row?.amount_input || 0)
+}
+
 function platformLabel(key) {
   if (key === 'meta') return 'Meta'
   if (key === 'google') return 'Google Ads'
@@ -435,7 +441,7 @@ export default function TopupPage() {
         const key = String(t.account_id || '')
         if (!key) return
         const curr = map.get(key) || 0
-        map.set(key, curr + Number(t.amount_input || 0))
+        map.set(key, curr + getTopupAccountAmount(t))
       })
     return map
   }, [topups])
@@ -862,7 +868,7 @@ export default function TopupPage() {
                     </div>
                     <div className="account-metric">
                       <div className="account-metric-label">Пополнено (факт)</div>
-                      <div className="account-metric-value">{row.account_db_id ? `${money(topupFactByAccountId.get(String(row.account_db_id)) || 0)} ${row.currency || ''}` : '—'}</div>
+                      <div className="account-metric-value">{formatTopupFactCell(row)}</div>
                     </div>
                     <div className="account-metric">
                       <div className="account-metric-label">Потрачено</div>
