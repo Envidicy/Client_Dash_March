@@ -741,6 +741,8 @@ export default function TopupPage() {
         amount_input: calc.kzt,
         fee_percent: Number.isFinite(topupFeePercent) ? topupFeePercent : 0,
         vat_percent: 0,
+        currency: 'KZT',
+        fx_rate: selectedCurrency !== 'KZT' && selectedRate ? selectedRate : null,
       }
       const res = await safeFetch('/topups', {
         method: 'POST',
