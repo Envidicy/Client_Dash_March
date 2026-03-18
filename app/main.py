@@ -2699,6 +2699,117 @@ def _format_legal_entity_name(entity: Dict[str, object]) -> Optional[str]:
     return full or short or None
 
 
+def _normalize_legal_entity_text(value: Optional[object]) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _resolve_wallet_request_legal_entity(
+    conn,
+    user_id: int,
+    legal_entity_id: Optional[int],
+    client_name: Optional[str],
+    client_bin: Optional[str],
+    client_address: Optional[str],
+    client_email: Optional[str],
+) -> Optional[Dict[str, object]]:
+    if legal_entity_id:
+        row = conn.execute(
+            """
+            SELECT le.*
+            FROM legal_entities le
+            JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
+            WHERE le.id=? AND ule.user_id=?
+            """,
+            (legal_entity_id, user_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Legal entity not found")
+        return dict(row)
+
+    name = _normalize_legal_entity_text(client_name)
+    entity_bin = _normalize_legal_entity_text(client_bin)
+    address = _normalize_legal_entity_text(client_address)
+    email = _normalize_email(client_email)
+    if not name and not entity_bin:
+        return None
+
+    row = None
+    if entity_bin:
+        row = conn.execute(
+            """
+            SELECT le.*
+            FROM legal_entities le
+            JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
+            WHERE ule.user_id=? AND le.bin=?
+            ORDER BY le.id DESC
+            LIMIT 1
+            """,
+            (user_id, entity_bin),
+        ).fetchone()
+    if not row and name:
+        row = conn.execute(
+            """
+            SELECT le.*
+            FROM legal_entities le
+            JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
+            WHERE ule.user_id=? AND LOWER(le.name)=LOWER(?)
+            ORDER BY le.id DESC
+            LIMIT 1
+            """,
+            (user_id, name),
+        ).fetchone()
+
+    if row:
+        entity_id = row["id"]
+        conn.execute(
+            """
+            UPDATE legal_entities
+            SET name=?, short_name=?, full_name=?, bin=?, address=?, legal_address=?, email=?
+            WHERE id=?
+            """,
+            (
+                name or row.get("name"),
+                name or row.get("short_name") or row.get("name"),
+                name or row.get("full_name") or row.get("name"),
+                entity_bin or row.get("bin"),
+                address or row.get("address"),
+                address or row.get("legal_address") or row.get("address"),
+                email or row.get("email"),
+                entity_id,
+            ),
+        )
+    else:
+        cur = conn.execute(
+            """
+            INSERT INTO legal_entities (name, short_name, full_name, bin, address, legal_address, email)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name or entity_bin or "Legal entity",
+                name or entity_bin or "Legal entity",
+                name or entity_bin or "Legal entity",
+                entity_bin,
+                address,
+                address,
+                email or None,
+            ),
+        )
+        entity_id = cur.lastrowid
+
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO user_legal_entities (user_id, legal_entity_id, is_default)
+        VALUES (?, ?, 0)
+        """,
+        (user_id, entity_id),
+    )
+    row = conn.execute("SELECT * FROM legal_entities WHERE id=?", (entity_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def _invoice_number(prefix: str, created_at, inv_id: int) -> str:
     if isinstance(created_at, datetime):
         dt = created_at
@@ -7061,26 +7172,22 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     with get_conn() as conn:
-        legal_entity = None
-        if payload.legal_entity_id:
-            legal_entity = conn.execute(
-                """
-                SELECT le.*
-                FROM legal_entities le
-                JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
-                WHERE le.id=? AND ule.user_id=?
-                """,
-                (payload.legal_entity_id, current_user["id"]),
-            ).fetchone()
-            if not legal_entity:
-                raise HTTPException(status_code=404, detail="Legal entity not found")
-            legal_entity = dict(legal_entity)
+        legal_entity = _resolve_wallet_request_legal_entity(
+            conn,
+            current_user["id"],
+            payload.legal_entity_id,
+            payload.client_name,
+            payload.client_bin,
+            payload.client_address,
+            payload.client_email,
+        )
         entity_name = _format_legal_entity_name(legal_entity) if legal_entity else None
         entity_address = (legal_entity.get("legal_address") or legal_entity.get("address")) if legal_entity else None
         client_name = payload.client_name or entity_name
         client_bin = payload.client_bin or (legal_entity.get("bin") if legal_entity else None)
         client_address = payload.client_address or entity_address
         client_email = payload.client_email or (legal_entity.get("email") if legal_entity else None)
+        resolved_legal_entity_id = legal_entity.get("id") if legal_entity else None
         cur = conn.execute(
             """
             INSERT INTO wallet_topup_requests
@@ -7093,7 +7200,7 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
                 payload.currency,
                 payload.note,
                 "requested",
-                payload.legal_entity_id,
+                resolved_legal_entity_id,
                 client_name,
                 client_bin,
                 client_address,
@@ -7115,7 +7222,7 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
                         "amount": payload.amount,
                         "currency": payload.currency,
                         "note": payload.note,
-                        "legal_entity_id": payload.legal_entity_id,
+                        "legal_entity_id": resolved_legal_entity_id,
                         "client_name": client_name,
                         "client_bin": client_bin,
                         "client_address": client_address,
