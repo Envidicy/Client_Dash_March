@@ -90,6 +90,18 @@ function platformLabel(key) {
   return key
 }
 
+function defaultPlatformCurrency(platform) {
+  if (platform === 'yandex') return 'KZT'
+  if (platform === 'telegram') return 'EUR'
+  return 'USD'
+}
+
+function currencySymbol(code) {
+  if (code === 'EUR') return 'EUR'
+  if (code === 'KZT') return 'KZT'
+  return '$'
+}
+
 function platformLogoNode(platform) {
   if (platform === 'google') {
     return (
@@ -314,9 +326,9 @@ export default function TopupPage() {
     [accountsFull, topupAccountId]
   )
 
-  const selectedCurrency = String(topupAccount?.currency || 'USD').toUpperCase()
+  const selectedCurrency = String(topupAccount?.currency || defaultPlatformCurrency(topupPlatform)).toUpperCase()
   const selectedSymbol = selectedCurrency === 'EUR' ? '€' : '$'
-  const selectedRate = selectedCurrency === 'EUR' ? rates.EUR : rates.USD
+  const selectedRate = selectedCurrency === 'EUR' ? rates.EUR : selectedCurrency === 'KZT' ? 1 : rates.USD
   const topupFeePercent = Number((fees && fees[String(topupPlatform || '').toLowerCase()]) ?? 0)
 
   const amountKzt = Number(topupKzt || 0)
@@ -460,7 +472,7 @@ export default function TopupPage() {
         created_at: acc.created_at || null,
         live_billing: acc.live_billing || null,
         email: '—',
-        currency: acc.currency || (acc.platform === 'telegram' ? 'EUR' : 'USD'),
+        currency: acc.currency || defaultPlatformCurrency(acc.platform),
         status: normalizedStatus,
       }
     })
@@ -482,7 +494,7 @@ export default function TopupPage() {
           account_ref: row.external_id || row.account_code || null,
           account_db_id: accountDbId,
           email: payload?.access?.[0]?.email || payload?.mcc_email || payload?.yandex_email || payload?.telegram_channel || '',
-          currency: row.account_currency || (row.platform === 'telegram' ? 'EUR' : 'USD'),
+          currency: row.account_currency || defaultPlatformCurrency(row.platform),
           status: normalizeRequestStatus(row.status),
         }
       })
