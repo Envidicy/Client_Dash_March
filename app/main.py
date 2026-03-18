@@ -9025,20 +9025,28 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
         )
         conn.commit()
         account_name = conn.execute("SELECT name FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
-        _send_telegram_alert(
-            "\n".join(
-                [
-                    "💳 <b>Новая заявка на пополнение</b>",
-                    f"ID: <code>{topup_id}</code>",
-                    f"Пользователь: <code>{current_user['email']}</code> (id={resolved_user_id})",
-                    f"Платформа: <b>{acc['platform']}</b>",
-                    f"Аккаунт: <b>{account_name['name'] if account_name else account_id}</b> (id={account_id})",
-                    f"Сумма: <b>{amount_input:.2f} {currency}</b>",
-                    f"Комиссия: <b>{fee_percent:.2f}%</b>",
-                    f"Холд в кошельке: <b>{gross_amount:.2f} {currency}</b>",
-                ]
-            )
-        )
+        account_currency = str(acc["currency"] or currency).upper()
+        input_currency = str(currency or "KZT").upper()
+        amount_line = f"Amount: <b>{amount_input:.2f} {currency}</b>"
+        fx_line = None
+        if fx_rate and fx_rate > 0 and account_currency != input_currency:
+            amount_line = f"Amount: <b>{amount_input:.2f} {currency}</b> (<b>{amount_net:.2f} {account_currency}</b>)"
+            fx_line = f"Rate: <b>{fx_rate:.4f} {input_currency}/{account_currency}</b>"
+        alert_lines = [
+            "?? <b>New topup request</b>",
+            f"ID: <code>{topup_id}</code>",
+            f"User: <code>{current_user['email']}</code> (id={resolved_user_id})",
+            f"Platform: <b>{acc['platform']}</b>",
+            f"Account: <b>{account_name['name'] if account_name else account_id}</b> (id={account_id})",
+            amount_line,
+        ]
+        if fx_line:
+            alert_lines.append(fx_line)
+        alert_lines.extend([
+            f"Fee: <b>{fee_percent:.2f}%</b>",
+            f"Wallet hold: <b>{gross_amount:.2f} {currency}</b>",
+        ])
+        _send_telegram_alert("\n".join(alert_lines))
         return {
             "id": topup_id,
             "account_id": account_id,
