@@ -221,6 +221,18 @@ function formatLiveBillingCell(liveBilling, fallbackCurrency) {
   return `${money(spend)} ${currency}`
 }
 
+function formatAccountBalanceCell(row, topupFactByAccountId) {
+  if (!row?.account_db_id) return '-'
+  if (!row.live_billing) return '-'
+  if (row.live_billing.error) return 'API error'
+  const spend = extractLiveSpend(row.live_billing)
+  if (spend == null) return 'No data'
+  const topupsTotal = Number(topupFactByAccountId.get(String(row.account_db_id)) || 0)
+  const balance = topupsTotal - spend
+  const currency = row.live_billing.currency || row.currency || ''
+  return `${money(balance)} ${currency}`
+}
+
 function getPeriodFromPreset(preset) {
   const now = new Date()
   const today = now.toISOString().slice(0, 10)
@@ -891,6 +903,10 @@ export default function TopupPage() {
                     <div className="account-metric">
                       <div className="account-metric-label">Потрачено за период</div>
                       <div className="account-metric-value">{formatPeriodSpendCell(row)}</div>
+                    </div>
+                    <div className="account-metric">
+                      <div className="account-metric-label">Balance</div>
+                      <div className="account-metric-value">{formatAccountBalanceCell(row, topupFactByAccountId)}</div>
                     </div>
                   </div>
 

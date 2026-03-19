@@ -9033,7 +9033,7 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
             amount_line = f"Amount: <b>{amount_input:.2f} {currency}</b> (<b>{amount_net:.2f} {account_currency}</b>)"
             fx_line = f"Rate: <b>{fx_rate:.4f} {input_currency}/{account_currency}</b>"
         alert_lines = [
-            "?? <b>New topup request</b>",
+            "TOPUP <b>New topup request</b>",
             f"ID: <code>{topup_id}</code>",
             f"User: <code>{current_user['email']}</code> (id={resolved_user_id})",
             f"Platform: <b>{acc['platform']}</b>",
