@@ -221,15 +221,18 @@ function formatLiveBillingCell(liveBilling, fallbackCurrency) {
   return `${money(spend)} ${currency}`
 }
 
-function formatAccountBalanceCell(row, topupFactByAccountId) {
+function formatAccountBalanceCell(row, topupFactByAccountId, balanceSpendByAccount) {
   if (!row?.account_db_id) return '-'
-  if (!row.live_billing) return '-'
-  if (row.live_billing.error) return 'API error'
-  const spend = extractLiveSpend(row.live_billing)
-  if (spend == null) return 'No data'
   const topupsTotal = Number(topupFactByAccountId.get(String(row.account_db_id)) || 0)
+  if (!topupsTotal) return '-'
+  const item = balanceSpendByAccount[String(row.account_db_id)]
+  if (!item) return '-'
+  if (item.loading) return 'Loading...'
+  if (item.error) return 'API error'
+  const spend = Number(item.spend)
+  if (!Number.isFinite(spend)) return 'No data'
   const balance = topupsTotal - spend
-  const currency = row.live_billing.currency || row.currency || ''
+  const currency = item.currency || row.currency || ''
   return `${money(balance)} ${currency}`
 }
 
@@ -271,6 +274,7 @@ export default function TopupPage() {
   const [walletKzt, setWalletKzt] = useState(0)
   const [rates, setRates] = useState({ USD: null, EUR: null })
   const [periodSpendByAccount, setPeriodSpendByAccount] = useState({})
+  const [balanceSpendByAccount, setBalanceSpendByAccount] = useState({})
 
   const [filters, setFilters] = useState(() => ({
     periodPreset: 'this_month',
@@ -457,6 +461,67 @@ export default function TopupPage() {
     }
   }
 
+  async function fetchBalanceSpendFromFirstTopup(firstTopupDateByAccount, accountIds = null) {
+    const entries = [...firstTopupDateByAccount.entries()].filter(([accountId]) => {
+      if (!accountIds) return true
+      return accountIds.includes(String(accountId))
+    })
+    if (!entries.length) {
+      if (!accountIds) setBalanceSpendByAccount({})
+      return
+    }
+
+    setBalanceSpendByAccount((prev) => {
+      const next = accountIds ? { ...prev } : {}
+      entries.forEach(([accountId]) => {
+        next[String(accountId)] = { ...(prev[String(accountId)] || {}), loading: true, error: null }
+      })
+      return next
+    })
+
+    const today = new Date().toISOString().slice(0, 10)
+    const results = await Promise.all(
+      entries.map(async ([accountId, dateFrom]) => {
+        try {
+          const params = new URLSearchParams({ date_from: dateFrom, date_to: today })
+          const res = await safeFetch(`/accounts/spend?${params.toString()}`)
+          if (!res.ok) throw new Error('Failed to load balance spend')
+          const data = await res.json()
+          const item = (data.items || []).find((row) => String(row.account_id) === String(accountId))
+          return [
+            String(accountId),
+            {
+              loading: false,
+              spend: item?.spend,
+              currency: item?.currency || null,
+              error: item?.error || null,
+              dateFrom,
+            },
+          ]
+        } catch (e) {
+          return [
+            String(accountId),
+            {
+              loading: false,
+              spend: null,
+              currency: null,
+              error: e?.message || 'Failed to load balance spend',
+              dateFrom,
+            },
+          ]
+        }
+      })
+    )
+
+    setBalanceSpendByAccount((prev) => {
+      const next = accountIds ? { ...prev } : {}
+      results.forEach(([accountId, payload]) => {
+        next[accountId] = payload
+      })
+      return next
+    })
+  }
+
   const topupFactByAccountId = useMemo(() => {
     const map = new Map()
     topups
@@ -466,6 +531,21 @@ export default function TopupPage() {
         if (!key) return
         const curr = map.get(key) || 0
         map.set(key, curr + getTopupAccountAmount(t))
+      })
+    return map
+  }, [topups])
+
+  const firstCompletedTopupDateByAccount = useMemo(() => {
+    const map = new Map()
+    topups
+      .filter((t) => t.status === 'completed')
+      .forEach((t) => {
+        const key = String(t.account_id || '')
+        const createdAt = String(t.created_at || '')
+        const date = createdAt.slice(0, 10)
+        if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return
+        const prev = map.get(key)
+        if (!prev || date < prev) map.set(key, date)
       })
     return map
   }, [topups])
@@ -792,6 +872,14 @@ export default function TopupPage() {
     fetchPeriodSpend(filters.dateFrom, filters.dateTo)
   }, [accountsFull, filters.dateFrom, filters.dateTo])
 
+  useEffect(() => {
+    if (!accountsFull.length || !firstCompletedTopupDateByAccount.size) {
+      setBalanceSpendByAccount({})
+      return
+    }
+    fetchBalanceSpendFromFirstTopup(firstCompletedTopupDateByAccount)
+  }, [accountsFull, firstCompletedTopupDateByAccount])
+
   function updatePreset(preset) {
     if (preset === 'custom') {
       setFilters((s) => ({ ...s, periodPreset: 'custom', page: 1 }))
@@ -906,7 +994,7 @@ export default function TopupPage() {
                     </div>
                     <div className="account-metric">
                       <div className="account-metric-label">Balance</div>
-                      <div className="account-metric-value">{formatAccountBalanceCell(row, topupFactByAccountId)}</div>
+                      <div className="account-metric-value">{formatAccountBalanceCell(row, topupFactByAccountId, balanceSpendByAccount)}</div>
                     </div>
                   </div>
 
@@ -933,7 +1021,10 @@ export default function TopupPage() {
                           onClick={async () => {
                             setRefreshingAccountId(String(row.account_db_id))
                             try {
-                              await refreshAccountLiveBilling(row.account_db_id)
+                              await Promise.all([
+                                refreshAccountLiveBilling(row.account_db_id),
+                                fetchBalanceSpendFromFirstTopup(firstCompletedTopupDateByAccount, [String(row.account_db_id)]),
+                              ])
                             } catch (e) {
                               alert(e?.message || 'Не удалось обновить данные по аккаунту.')
                             } finally {
