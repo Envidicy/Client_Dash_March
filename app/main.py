@@ -3577,6 +3577,38 @@ def _verify_password(password: str, salt: str, stored_hash: str) -> bool:
     return hmac.compare_digest(_hash_password(password, salt), stored_hash)
 
 
+def _sync_owner_user_from_access(conn, access: Dict[str, object]) -> None:
+    if not access or (access.get("role") or "member") != "owner" or not access.get("user_id"):
+        return
+    conn.execute(
+        "UPDATE users SET email=?, password_hash=?, salt=? WHERE id=?",
+        (
+            _normalize_email(access.get("email")),
+            access.get("password_hash"),
+            access.get("salt"),
+            access["user_id"],
+        ),
+    )
+
+
+def _set_access_password(conn, access: Dict[str, object], password: str, activate: bool = True) -> tuple[str, str]:
+    salt = secrets.token_hex(8)
+    password_hash = _hash_password(password, salt)
+    if activate:
+        conn.execute(
+            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
+            (password_hash, salt, access["id"]),
+        )
+    else:
+        conn.execute(
+            "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
+            (password_hash, salt, access["id"]),
+        )
+    refreshed = dict(conn.execute("SELECT * FROM user_accesses WHERE id=?", (access["id"],)).fetchone())
+    _sync_owner_user_from_access(conn, refreshed)
+    return password_hash, salt
+
+
 def _ensure_owner_access(conn, user_id: int):
     user = conn.execute("SELECT id, email, password_hash, salt FROM users WHERE id=?", (user_id,)).fetchone()
     if not user or not user["email"]:
@@ -3584,11 +3616,16 @@ def _ensure_owner_access(conn, user_id: int):
     owner_email = _normalize_email(user["email"])
     row = conn.execute("SELECT * FROM user_accesses WHERE user_id=? AND role='owner' ORDER BY id LIMIT 1", (user_id,)).fetchone()
     if row:
-        conn.execute(
-            "UPDATE user_accesses SET email=?, password_hash=?, salt=?, status='active' WHERE id=?",
-            (owner_email, user["password_hash"], user["salt"], row["id"]),
-        )
+        updates = ["email=?", "status='active'"]
+        params: List[object] = [owner_email]
+        if (not row.get("password_hash") or not row.get("salt")) and user.get("password_hash") and user.get("salt"):
+            updates.extend(["password_hash=?", "salt=?"])
+            params.extend([user["password_hash"], user["salt"]])
+        params.append(row["id"])
+        conn.execute(f"UPDATE user_accesses SET {', '.join(updates)} WHERE id=?", params)
         refreshed = conn.execute("SELECT * FROM user_accesses WHERE id=?", (row["id"],)).fetchone()
+        if refreshed:
+            _sync_owner_user_from_access(conn, dict(refreshed))
         return dict(refreshed) if refreshed else dict(row)
     conn.execute(
         """
@@ -3598,6 +3635,8 @@ def _ensure_owner_access(conn, user_id: int):
         (user_id, owner_email, user["password_hash"], user["salt"]),
     )
     row = conn.execute("SELECT * FROM user_accesses WHERE user_id=? AND role='owner' ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
+    if row:
+        _sync_owner_user_from_access(conn, dict(row))
     return dict(row) if row else None
 
 
@@ -3605,7 +3644,9 @@ def _get_access_by_email(conn, email: str):
     normalized = _normalize_email(email)
     row = conn.execute("SELECT * FROM user_accesses WHERE email=? AND status='active'", (normalized,)).fetchone()
     if row:
-        return dict(row)
+        payload = dict(row)
+        _sync_owner_user_from_access(conn, payload)
+        return payload
     legacy_user = conn.execute("SELECT id FROM users WHERE email=?", (normalized,)).fetchone()
     if legacy_user:
         return _ensure_owner_access(conn, legacy_user["id"])
@@ -3928,17 +3969,7 @@ def set_password(payload: SetPasswordPayload):
         access = _get_access_by_email(conn, email)
         if not access:
             raise HTTPException(status_code=404, detail="Email is not linked to any account")
-        salt = secrets.token_hex(8)
-        password_hash = _hash_password(password, salt)
-        conn.execute(
-            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
-            (password_hash, salt, access["id"]),
-        )
-        if (access.get("role") or "member") == "owner":
-            conn.execute(
-                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                (password_hash, salt, access["user_id"]),
-            )
+        _set_access_password(conn, access, password, activate=True)
         conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
         conn.commit()
         return {"status": "ok"}
@@ -3952,21 +3983,11 @@ def admin_reset_password(payload: PasswordReset, admin_user=Depends(get_admin_us
     password = payload.new_password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and new_password are required")
-    salt = secrets.token_hex(8)
-    password_hash = _hash_password(password, salt)
     with get_conn() as conn:
         access = _get_access_by_email(conn, email)
         if not access:
             raise HTTPException(status_code=404, detail="User not found")
-        conn.execute(
-            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
-            (password_hash, salt, access["id"]),
-        )
-        if (access.get("role") or "member") == "owner":
-            conn.execute(
-                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                (password_hash, salt, access["user_id"]),
-            )
+        _set_access_password(conn, access, password, activate=True)
         conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
         conn.commit()
         return {"status": "ok"}
@@ -5613,17 +5634,7 @@ def change_password(payload: ChangePasswordPayload, current_user=Depends(get_cur
             raise HTTPException(status_code=404, detail="Access not found")
         if not _verify_password(payload.current_password, access["salt"], access["password_hash"]):
             raise HTTPException(status_code=400, detail="Invalid current password")
-        salt = secrets.token_hex(8)
-        password_hash = _hash_password(payload.new_password, salt)
-        conn.execute(
-            "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
-            (password_hash, salt, access["id"]),
-        )
-        if (access.get("role") or "member") == "owner":
-            conn.execute(
-                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                (password_hash, salt, current_user["id"]),
-            )
+        _set_access_password(conn, access, payload.new_password, activate=False)
         conn.execute("DELETE FROM user_tokens WHERE user_id=?", (current_user["id"],))
         new_token = _issue_user_token(conn, current_user["id"], current_user["email"])
         conn.commit()
