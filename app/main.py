@@ -4143,20 +4143,11 @@ def _meta_fetch_account_billing(account_external_id: str, force_refresh: bool = 
     data = resp.json()
     currency = data.get("currency") or "USD"
 
-    def _meta_money_from_minor(value: object) -> float:
-        try:
-            raw = float(value or 0)
-        except (TypeError, ValueError):
-            return 0.0
-        zero_decimal = {"JPY", "KRW", "VND", "CLP", "PYG", "UGX", "XAF", "XOF", "XPF"}
-        divisor = 1 if currency in zero_decimal else 100
-        return raw / divisor
-
-    spend = _meta_money_from_minor(data.get("amount_spent"))
+    spend = _meta_money_from_minor(currency, data.get("amount_spent"))
     spend_cap_raw = data.get("spend_cap")
     spend_cap = None
     try:
-        spend_cap_value = _meta_money_from_minor(spend_cap_raw) if spend_cap_raw not in (None, "") else None
+        spend_cap_value = _meta_money_from_minor(currency, spend_cap_raw) if spend_cap_raw not in (None, "") else None
         if spend_cap_value and spend_cap_value > 0:
             spend_cap = spend_cap_value
     except (TypeError, ValueError):
@@ -4172,6 +4163,59 @@ def _meta_fetch_account_billing(account_external_id: str, force_refresh: bool = 
         "updated_at": datetime.utcnow().isoformat() + "Z",
     }
     return _live_billing_cache_set(cache_key, payload)
+
+
+def _meta_money_from_minor(currency: str, value: object) -> float:
+    try:
+        raw = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    zero_decimal = {"JPY", "KRW", "VND", "CLP", "PYG", "UGX", "XAF", "XOF", "XPF"}
+    divisor = 1 if str(currency or "").upper() in zero_decimal else 100
+    return raw / divisor
+
+
+def _meta_money_to_minor(currency: str, value: object) -> int:
+    try:
+        raw = float(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    zero_decimal = {"JPY", "KRW", "VND", "CLP", "PYG", "UGX", "XAF", "XOF", "XPF"}
+    multiplier = 1 if str(currency or "").upper() in zero_decimal else 100
+    return int(round(raw * multiplier))
+
+
+def _meta_update_account_spend_cap(account_external_id: str, target_spend_cap: float) -> Dict[str, object]:
+    token = os.getenv("META_ACCESS_TOKEN")
+    if not token:
+        raise HTTPException(status_code=500, detail="META_ACCESS_TOKEN is not set")
+
+    billing = _meta_fetch_account_billing(account_external_id, force_refresh=True)
+    currency = str(billing.get("currency") or "USD").upper()
+    spend = float(billing.get("spend") or 0)
+    normalized_target = max(float(target_spend_cap or 0), spend)
+
+    url = f"https://graph.facebook.com/v20.0/act_{account_external_id}"
+    payload = {
+        "access_token": token,
+        "spend_cap": str(_meta_money_to_minor(currency, normalized_target)),
+    }
+    resp = httpx.post(url, data=payload, timeout=20)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Meta spend cap update error: {resp.text}")
+
+    cache_key = f"meta:{account_external_id}"
+    _LIVE_BILLING_CACHE.pop(cache_key, None)
+    return _meta_fetch_account_billing(account_external_id, force_refresh=True)
+
+
+def _meta_increment_account_spend_cap(account_external_id: str, amount_delta: float) -> Dict[str, object]:
+    billing = _meta_fetch_account_billing(account_external_id, force_refresh=True)
+    current_limit = billing.get("limit")
+    current_spend = float(billing.get("spend") or 0)
+    base_limit = float(current_limit) if current_limit is not None else current_spend
+    target_spend_cap = max(base_limit, current_spend) + max(float(amount_delta or 0), 0.0)
+    return _meta_update_account_spend_cap(account_external_id, target_spend_cap)
 
 
 def _google_ads_client() -> GoogleAdsClient:
@@ -8506,16 +8550,21 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                 )
                 conn.execute("UPDATE topups SET status=? WHERE id=?", (next_status, topup_id))
 
-            acc = conn.execute("SELECT budget_total FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
+            acc = conn.execute("SELECT budget_total, platform, name, external_id FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
             base_amount = row["amount_net"] if row["amount_net"] else row["amount_input"]
             new_total = (acc["budget_total"] or 0) + (base_amount or 0)
             conn.execute(
                 "UPDATE ad_accounts SET budget_total=? WHERE id=?",
                 (new_total, row["account_id"]),
             )
+            if acc and str(acc["platform"] or "").lower() == "meta":
+                external_id = str(acc["external_id"] or "").strip()
+                if not external_id:
+                    raise HTTPException(status_code=400, detail="Meta account external_id is required to update spend cap")
+                _meta_increment_account_spend_cap(external_id, float(base_amount or 0))
             conn.execute("UPDATE users SET is_client=1 WHERE id=?", (row["user_id"],))
             user_row = conn.execute("SELECT email FROM users WHERE id=?", (row["user_id"],)).fetchone()
-            account_row = conn.execute("SELECT platform, name FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
+            account_row = {"platform": acc["platform"], "name": acc["name"]} if acc else conn.execute("SELECT platform, name FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
             _send_telegram_alert(
                 "\n".join(
                     [
