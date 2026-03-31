@@ -38,7 +38,7 @@ _R2_CLIENT = None
 _BCC_RATES_CACHE = {"ts": 0.0, "data": None}
 _BCC_RATES_TTL_SEC = 900
 _BCC_TOKEN_CACHE = {"token": None, "expires_at": 0.0}
-_BCC_DEFAULT_MARKUP = float(os.getenv("BCC_DEFAULT_MARKUP", "10") or 10)
+_BCC_DEFAULT_MARKUP_PERCENT = float(os.getenv("BCC_DEFAULT_MARKUP_PERCENT", "5") or 5)
 _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
 _ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
@@ -272,7 +272,7 @@ def _get_marked_bcc_sell_rate(code: str, rates_data: Optional[Dict[str, object]]
         return None
     if sell_value is None:
         return None
-    return sell_value + _BCC_DEFAULT_MARKUP
+    return sell_value * (1 + (_BCC_DEFAULT_MARKUP_PERCENT / 100.0))
 
 
 def _convert_amount_to_usd(amount: object, currency: object, rates_data: Optional[Dict[str, object]] = None) -> Optional[float]:
@@ -3420,11 +3420,13 @@ class ChangePasswordPayload(BaseModel):
 class MetaInsightsResponse(BaseModel):
     summary: Dict[str, object]
     campaigns: List[Dict[str, object]]
+    status: Optional[str] = None
 
 
 class GoogleInsightsResponse(BaseModel):
     summary: Dict[str, object]
     campaigns: List[Dict[str, object]]
+    status: Optional[str] = None
 
 
 class TikTokInsightsResponse(BaseModel):
@@ -3522,6 +3524,165 @@ def _hydrate_token_user(conn, row):
     user["email"] = login_email or user.get("email")
     user["can_manage_accesses"] = _can_manage_accesses(conn, user["id"], user["email"])
     return user
+
+
+def _agency_slugify(value: Optional[str], fallback: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    return text or fallback
+
+
+def _ensure_agency_member(conn, agency_id: int, user_id: int, role: str = "client_viewer", status: str = "active") -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO agency_members (agency_id, user_id, role, status)
+        VALUES (?, ?, ?, ?)
+        """,
+        (agency_id, user_id, role, status),
+    )
+
+
+def _ensure_agency_account_mapping(conn, agency_id: int, ad_account_id: int, label: Optional[str] = None, status: str = "active") -> Optional[int]:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO agency_ad_accounts (agency_id, ad_account_id, label, status)
+        VALUES (?, ?, ?, ?)
+        """,
+        (agency_id, ad_account_id, label, status),
+    )
+    row = conn.execute(
+        "SELECT id FROM agency_ad_accounts WHERE agency_id=? AND ad_account_id=?",
+        (agency_id, ad_account_id),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def _get_or_create_default_agency(conn, user_id: int) -> Optional[Dict[str, object]]:
+    row = conn.execute(
+        """
+        SELECT a.*
+        FROM agencies a
+        JOIN agency_members m ON m.agency_id = a.id
+        WHERE m.user_id=? AND m.role='owner'
+        ORDER BY a.id
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+    if row:
+        agency = dict(row)
+    else:
+        user = conn.execute(
+            """
+            SELECT u.id, u.email, up.company
+            FROM users u
+            LEFT JOIN user_profiles up ON up.user_id = u.id
+            WHERE u.id=?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not user:
+            return None
+        base_name = user.get("company") or f"Agency {user_id}"
+        slug_base = _agency_slugify(base_name, f"agency-{user_id}")
+        slug = slug_base
+        suffix = 2
+        while conn.execute("SELECT id FROM agencies WHERE slug=?", (slug,)).fetchone():
+            slug = f"{slug_base}-{suffix}"
+            suffix += 1
+        cur = conn.execute(
+            """
+            INSERT INTO agencies (name, slug, owner_user_id, status)
+            VALUES (?, ?, ?, ?)
+            """,
+            (base_name, slug, user_id, "active"),
+        )
+        agency_id = cur.lastrowid
+        if agency_id is None:
+            row = conn.execute("SELECT id FROM agencies WHERE slug=?", (slug,)).fetchone()
+            agency_id = row["id"] if row else None
+        if agency_id is None:
+            return None
+        _ensure_agency_member(conn, int(agency_id), user_id, role="owner", status="active")
+        agency = dict(
+            conn.execute("SELECT * FROM agencies WHERE id=?", (agency_id,)).fetchone()
+        )
+
+    _ensure_agency_member(conn, int(agency["id"]), user_id, role="owner", status="active")
+    account_rows = conn.execute(
+        "SELECT id, name, status FROM ad_accounts WHERE user_id=? ORDER BY id",
+        (user_id,),
+    ).fetchall()
+    for account in account_rows:
+        _ensure_agency_account_mapping(
+            conn,
+            int(agency["id"]),
+            int(account["id"]),
+            label=account.get("name"),
+            status=account.get("status") or "active",
+        )
+    return agency
+
+
+def _list_user_agency_memberships(conn, user_id: int) -> List[Dict[str, object]]:
+    rows = conn.execute(
+        """
+        SELECT
+          m.*,
+          a.name as agency_name,
+          a.slug as agency_slug,
+          a.owner_user_id,
+          a.status as agency_status
+        FROM agency_members m
+        JOIN agencies a ON a.id = m.agency_id
+        WHERE m.user_id=? AND COALESCE(m.status, 'active')='active'
+        ORDER BY m.id
+        """,
+        (user_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _list_accessible_accounts(conn, current_user) -> List[Dict[str, object]]:
+    if current_user["email"] in ADMIN_EMAILS or current_user.get("primary_email") in ADMIN_EMAILS:
+        rows = conn.execute("SELECT * FROM ad_accounts ORDER BY created_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
+    memberships = _list_user_agency_memberships(conn, current_user["id"])
+    if not memberships:
+        _get_or_create_default_agency(conn, current_user["id"])
+        memberships = _list_user_agency_memberships(conn, current_user["id"])
+
+    if not memberships:
+        rows = conn.execute("SELECT * FROM ad_accounts WHERE user_id=? ORDER BY created_at DESC", (current_user["id"],)).fetchall()
+        return [dict(row) for row in rows]
+
+    admin_agency_ids = [int(row["agency_id"]) for row in memberships if row.get("role") in {"owner", "agency_admin"}]
+    if admin_agency_ids:
+        placeholders = ",".join(["?"] * len(admin_agency_ids))
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT a.*
+            FROM ad_accounts a
+            JOIN agency_ad_accounts aa ON aa.ad_account_id = a.id
+            WHERE aa.agency_id IN ({placeholders})
+            ORDER BY a.created_at DESC
+            """,
+            admin_agency_ids,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    rows = conn.execute(
+        """
+        SELECT DISTINCT a.*
+        FROM ad_accounts a
+        JOIN agency_ad_accounts aa ON aa.ad_account_id = a.id
+        JOIN agency_user_account_access aua ON aua.agency_ad_account_id = aa.id
+        WHERE aua.user_id=?
+        ORDER BY a.created_at DESC
+        """,
+        (current_user["id"],),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def _get_bearer_token(authorization: Optional[str]) -> Optional[str]:
@@ -3676,6 +3837,28 @@ class AdminAccountFundingCreate(BaseModel):
 
 class AdminAccountFundingReverse(BaseModel):
     note: Optional[str] = None
+
+
+class AgencyCreatePayload(BaseModel):
+    name: str
+    slug: Optional[str] = None
+    owner_user_id: Optional[int] = None
+
+
+class AgencyMemberCreatePayload(BaseModel):
+    user_id: int
+    role: Literal["owner", "agency_admin", "manager", "client_viewer"] = "client_viewer"
+    status: Optional[str] = "active"
+
+
+class AgencyAccountAttachPayload(BaseModel):
+    label: Optional[str] = None
+    status: Optional[str] = "active"
+
+
+class AgencyAccountAccessPayload(BaseModel):
+    user_id: int
+    access_level: Literal["viewer", "manager", "admin"] = "viewer"
 
 
 class FeeConfigPayload(BaseModel):
@@ -5700,12 +5883,17 @@ def meta_insights(
     total_clicks = 0.0
     total_reach = 0.0
     currency = None
+    errors: List[str] = []
 
     for acc in accounts:
         external_id = acc.get("external_id") or acc.get("account_code")
         if not external_id:
             continue
-        rows = _meta_fetch_insights(external_id, date_from, date_to)
+        try:
+            rows = _meta_fetch_insights(external_id, date_from, date_to)
+        except Exception as exc:
+            errors.append(f"{acc.get('name') or external_id}: {exc}")
+            continue
         for row in rows:
             spend = float(row.get("spend") or 0)
             impressions = float(row.get("impressions") or 0)
@@ -5748,7 +5936,12 @@ def meta_insights(
         "clicks": total_clicks,
         "currency": currency or "USD",
     }
-    return {"summary": summary, "campaigns": campaigns}
+    status = "Данные обновлены."
+    if errors and not campaigns:
+        status = "Meta token expired or Meta API is unavailable."
+    elif errors:
+        status = f"Часть Meta аккаунтов недоступна: {len(errors)}"
+    return {"summary": summary, "campaigns": campaigns, "status": status}
 
 
 @app.get("/google/insights", response_model=GoogleInsightsResponse)
@@ -5784,6 +5977,7 @@ def google_insights(
     total_clicks = 0.0
     total_conversions = 0.0
     currency = None
+    errors: List[str] = []
 
     for acc in accounts:
         external_id = _google_valid_customer_id_or_none(acc.get("external_id") or acc.get("account_code"))
@@ -5791,11 +5985,10 @@ def google_insights(
             continue
         try:
             rows, acc_currency = _google_fetch_insights(str(external_id), date_from, date_to)
-        except google_api_exceptions.GoogleAPICallError as exc:
-            message = getattr(exc, "message", None) or str(exc)
-            raise HTTPException(status_code=502, detail=f"Google Ads API error: {message}")
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Google Ads error: {exc}")
+            message = getattr(exc, "message", None) or str(exc)
+            errors.append(f"{acc.get('name') or external_id}: {message}")
+            continue
         currency = currency or acc_currency
         for row in rows:
             total_spend += float(row.get("spend") or 0)
@@ -5818,7 +6011,12 @@ def google_insights(
         "conversions": total_conversions,
         "currency": currency or "USD",
     }
-    return {"summary": summary, "campaigns": campaigns}
+    status = "Данные обновлены."
+    if errors and not campaigns:
+        status = "Google token expired or Google Ads API is unavailable."
+    elif errors:
+        status = f"Часть Google аккаунтов недоступна: {len(errors)}"
+    return {"summary": summary, "campaigns": campaigns, "status": status}
 
 
 @app.get("/tiktok/insights", response_model=TikTokInsightsResponse)
@@ -6001,21 +6199,24 @@ def meta_audience(
         if not external_id:
             continue
         payload: Dict[str, object] = {"account_id": acc.get("id"), "name": acc.get("name") or external_id}
-        if group == "age_gender":
-            payload["age_gender"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["age", "gender"])
-        elif group == "geo":
-            payload["country"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["country"])
-            payload["region"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["region"])
-        else:
-            payload["publisher_platform"] = _meta_fetch_breakdowns(
-                str(external_id), date_from, date_to, ["publisher_platform"]
-            )
-            payload["impression_device"] = _meta_fetch_breakdowns(
-                str(external_id), date_from, date_to, ["impression_device"]
-            )
-            payload["device_platform"] = _meta_fetch_breakdowns(
-                str(external_id), date_from, date_to, ["device_platform"]
-            )
+        try:
+            if group == "age_gender":
+                payload["age_gender"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["age", "gender"])
+            elif group == "geo":
+                payload["country"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["country"])
+                payload["region"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["region"])
+            else:
+                payload["publisher_platform"] = _meta_fetch_breakdowns(
+                    str(external_id), date_from, date_to, ["publisher_platform"]
+                )
+                payload["impression_device"] = _meta_fetch_breakdowns(
+                    str(external_id), date_from, date_to, ["impression_device"]
+                )
+                payload["device_platform"] = _meta_fetch_breakdowns(
+                    str(external_id), date_from, date_to, ["device_platform"]
+                )
+        except Exception as exc:
+            payload["error"] = str(exc)
         results.append(payload)
     return {"accounts": results}
 
@@ -7896,6 +8097,204 @@ def admin_list_accounts(admin_user=Depends(get_admin_user)):
         return _attach_live_billing_many([dict(row) for row in rows])
 
 
+@app.get("/admin/agencies")
+def admin_list_agencies(admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        return []
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.*, u.email as owner_email
+            FROM agencies a
+            LEFT JOIN users u ON u.id = a.owner_user_id
+            ORDER BY a.created_at DESC, a.id DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.post("/admin/agencies")
+def admin_create_agency(payload: AgencyCreatePayload, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        owner_user_id = payload.owner_user_id
+        if owner_user_id is not None:
+            owner = conn.execute("SELECT id FROM users WHERE id=?", (owner_user_id,)).fetchone()
+            if not owner:
+                raise HTTPException(status_code=404, detail="Owner user not found")
+        slug_base = _agency_slugify(payload.slug or payload.name, f"agency-{secrets.token_hex(3)}")
+        slug = slug_base
+        suffix = 2
+        while conn.execute("SELECT id FROM agencies WHERE slug=?", (slug,)).fetchone():
+            slug = f"{slug_base}-{suffix}"
+            suffix += 1
+        cur = conn.execute(
+            """
+            INSERT INTO agencies (name, slug, owner_user_id, status)
+            VALUES (?, ?, ?, ?)
+            """,
+            (payload.name.strip(), slug, owner_user_id, "active"),
+        )
+        agency_id = cur.lastrowid
+        if owner_user_id is not None:
+            _ensure_agency_member(conn, int(agency_id), owner_user_id, role="owner", status="active")
+        conn.commit()
+        return {"id": agency_id, "name": payload.name.strip(), "slug": slug, "owner_user_id": owner_user_id, "status": "active"}
+
+
+@app.get("/admin/agencies/{agency_id}")
+def admin_get_agency_detail(agency_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        agency = conn.execute(
+            """
+            SELECT a.*, u.email as owner_email
+            FROM agencies a
+            LEFT JOIN users u ON u.id = a.owner_user_id
+            WHERE a.id=?
+            """,
+            (agency_id,),
+        ).fetchone()
+        if not agency:
+            raise HTTPException(status_code=404, detail="Agency not found")
+
+        members = conn.execute(
+            """
+            SELECT m.*, u.email
+            FROM agency_members m
+            JOIN users u ON u.id = m.user_id
+            WHERE m.agency_id=?
+            ORDER BY m.created_at DESC, m.id DESC
+            """,
+            (agency_id,),
+        ).fetchall()
+        accounts = conn.execute(
+            """
+            SELECT
+              aa.*,
+              a.platform,
+              a.name,
+              a.external_id,
+              a.account_code,
+              a.currency,
+              a.status as ad_account_status,
+              u.email as user_email
+            FROM agency_ad_accounts aa
+            JOIN ad_accounts a ON a.id = aa.ad_account_id
+            LEFT JOIN users u ON u.id = a.user_id
+            WHERE aa.agency_id=?
+            ORDER BY aa.created_at DESC, aa.id DESC
+            """,
+            (agency_id,),
+        ).fetchall()
+        accesses = conn.execute(
+            """
+            SELECT
+              aua.*,
+              aa.ad_account_id,
+              a.name as account_name,
+              a.platform,
+              u.email
+            FROM agency_user_account_access aua
+            JOIN agency_ad_accounts aa ON aa.id = aua.agency_ad_account_id
+            JOIN ad_accounts a ON a.id = aa.ad_account_id
+            JOIN users u ON u.id = aua.user_id
+            WHERE aua.agency_id=?
+            ORDER BY aua.created_at DESC, aua.id DESC
+            """,
+            (agency_id,),
+        ).fetchall()
+        return {
+            "agency": dict(agency),
+            "members": [dict(row) for row in members],
+            "accounts": [dict(row) for row in accounts],
+            "accesses": [dict(row) for row in accesses],
+        }
+
+
+@app.post("/admin/agencies/{agency_id}/members")
+def admin_add_agency_member(agency_id: int, payload: AgencyMemberCreatePayload, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        agency = conn.execute("SELECT id FROM agencies WHERE id=?", (agency_id,)).fetchone()
+        if not agency:
+            raise HTTPException(status_code=404, detail="Agency not found")
+        user = conn.execute("SELECT id FROM users WHERE id=?", (payload.user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        _ensure_agency_member(conn, agency_id, payload.user_id, role=payload.role, status=payload.status or "active")
+        conn.execute(
+            "UPDATE agency_members SET role=?, status=? WHERE agency_id=? AND user_id=?",
+            (payload.role, payload.status or "active", agency_id, payload.user_id),
+        )
+        conn.commit()
+        return {"status": "ok", "agency_id": agency_id, "user_id": payload.user_id, "role": payload.role}
+
+
+@app.post("/admin/agencies/{agency_id}/accounts/{account_id}")
+def admin_attach_agency_account(agency_id: int, account_id: int, payload: AgencyAccountAttachPayload, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        agency = conn.execute("SELECT id FROM agencies WHERE id=?", (agency_id,)).fetchone()
+        if not agency:
+            raise HTTPException(status_code=404, detail="Agency not found")
+        account = conn.execute("SELECT id, name FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        agency_account_id = _ensure_agency_account_mapping(conn, agency_id, account_id, label=payload.label or account.get("name"), status=payload.status or "active")
+        conn.execute(
+            "UPDATE agency_ad_accounts SET label=?, status=? WHERE id=?",
+            (payload.label or account.get("name"), payload.status or "active", agency_account_id),
+        )
+        conn.commit()
+        return {"status": "ok", "agency_id": agency_id, "ad_account_id": account_id, "agency_ad_account_id": agency_account_id}
+
+
+@app.post("/admin/agencies/{agency_id}/accounts/{account_id}/access")
+def admin_grant_agency_account_access(
+    agency_id: int,
+    account_id: int,
+    payload: AgencyAccountAccessPayload,
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        agency_account = conn.execute(
+            "SELECT id FROM agency_ad_accounts WHERE agency_id=? AND ad_account_id=?",
+            (agency_id, account_id),
+        ).fetchone()
+        if not agency_account:
+            raise HTTPException(status_code=404, detail="Agency account mapping not found")
+        member = conn.execute(
+            "SELECT id FROM agency_members WHERE agency_id=? AND user_id=? AND COALESCE(status, 'active')='active'",
+            (agency_id, payload.user_id),
+        ).fetchone()
+        if not member:
+            raise HTTPException(status_code=400, detail="User is not an active member of this agency")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO agency_user_account_access (agency_id, user_id, agency_ad_account_id, access_level)
+            VALUES (?, ?, ?, ?)
+            """,
+            (agency_id, payload.user_id, agency_account["id"], payload.access_level),
+        )
+        conn.execute(
+            """
+            UPDATE agency_user_account_access
+            SET access_level=?
+            WHERE agency_id=? AND user_id=? AND agency_ad_account_id=?
+            """,
+            (payload.access_level, agency_id, payload.user_id, agency_account["id"]),
+        )
+        conn.commit()
+        return {"status": "ok", "agency_id": agency_id, "user_id": payload.user_id, "ad_account_id": account_id, "access_level": payload.access_level}
+
+
 @app.post("/admin/accounts")
 def admin_create_account(payload: AdminAccountCreate, admin_user=Depends(get_admin_user)):
     if not get_conn:
@@ -7920,6 +8319,15 @@ def admin_create_account(payload: AdminAccountCreate, admin_user=Depends(get_adm
                 payload.status or "pending",
             ),
         )
+        agency = _get_or_create_default_agency(conn, payload.user_id)
+        if agency:
+            _ensure_agency_account_mapping(
+                conn,
+                int(agency["id"]),
+                int(cur.lastrowid),
+                label=payload.name,
+                status=payload.status or "pending",
+            )
         conn.commit()
         return {
             "id": cur.lastrowid,
@@ -8874,11 +9282,22 @@ def list_accounts(current_user=Depends(get_current_user)):
     if not get_conn:
         return []
     with get_conn() as conn:
-        query = "SELECT * FROM ad_accounts WHERE user_id=?"
-        params: List[object] = [current_user["id"]]
-        query += " ORDER BY created_at DESC"
-        rows = conn.execute(query, params).fetchall()
-        return _attach_live_billing_many([dict(row) for row in rows])
+        rows = _list_accessible_accounts(conn, current_user)
+        conn.commit()
+        return _attach_live_billing_many(rows)
+
+
+@app.get("/agencies/mine")
+def list_my_agencies(current_user=Depends(get_current_user)):
+    if not get_conn:
+        return {"items": []}
+    with get_conn() as conn:
+        memberships = _list_user_agency_memberships(conn, current_user["id"])
+        if not memberships:
+            _get_or_create_default_agency(conn, current_user["id"])
+            memberships = _list_user_agency_memberships(conn, current_user["id"])
+        conn.commit()
+        return {"items": memberships}
 
 
 @app.get("/accounts/spend")
@@ -8906,11 +9325,18 @@ def list_accounts_period_spend(
             return 0.0
 
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, platform, external_id, account_code, name, currency FROM ad_accounts WHERE user_id=? ORDER BY created_at DESC",
-            (current_user["id"],),
-        ).fetchall()
-        accounts = [dict(row) for row in rows]
+        accounts = [
+            {
+                "id": row["id"],
+                "platform": row["platform"],
+                "external_id": row.get("external_id"),
+                "account_code": row.get("account_code"),
+                "name": row.get("name"),
+                "currency": row.get("currency"),
+            }
+            for row in _list_accessible_accounts(conn, current_user)
+        ]
+        conn.commit()
 
     items: List[Dict[str, object]] = []
     for acc in accounts:

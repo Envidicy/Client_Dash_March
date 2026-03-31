@@ -42,7 +42,7 @@ const state = {
 
 let accounts = { meta: [], google: [], tiktok: [], yandex: [], telegram: [], monochrome: [] }
 let bccRatesCache = { ts: 0, data: null }
-const BCC_DEFAULT_MARKUP = 10
+const BCC_DEFAULT_MARKUP_PERCENT = 5
 const SIDEBAR_RATES_PANEL_ID = 'sidebar-rates-panel'
 
 const platforms = [
@@ -252,7 +252,7 @@ function getPeriodFromPreset(preset) {
 
 function withDefaultMarkup(rate) {
   if (rate == null || Number.isNaN(Number(rate))) return null
-  return Number(rate) + BCC_DEFAULT_MARKUP
+  return Number(rate) * (1 + BCC_DEFAULT_MARKUP_PERCENT / 100)
 }
 
 function getMarkedRateByCode(code) {

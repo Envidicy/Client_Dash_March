@@ -6,7 +6,7 @@ import { apiFetch } from '../../lib/api'
 import { clearAuth, getAuthToken } from '../../lib/auth'
 import AppShell from '../../components/layout/AppShell'
 
-const MARKUP = 10
+const MARKUP_PERCENT = 5
 const PAGE_SIZE = 5
 
 const PLATFORMS = [
@@ -71,7 +71,7 @@ function authHeaders() {
 
 function withMarkup(rate) {
   if (!Number.isFinite(Number(rate))) return null
-  return Number(rate) + MARKUP
+  return Number(rate) * (1 + MARKUP_PERCENT / 100)
 }
 
 function accountDisplayCurrency(platform, currency) {
