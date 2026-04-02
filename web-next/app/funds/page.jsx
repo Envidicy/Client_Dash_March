@@ -32,6 +32,10 @@ function platformLabel(key) {
   return key || '—'
 }
 
+function financeDocumentTypeLabel(value) {
+  return String(value || '').toLowerCase() === 'avr' ? 'АВР' : 'Счет'
+}
+
 function authHeaders() {
   const token = getAuthToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
@@ -49,6 +53,7 @@ export default function FundsPage() {
   const [funds, setFunds] = useState([])
   const [topups, setTopups] = useState([])
   const [invoices, setInvoices] = useState([])
+  const [financeDocs, setFinanceDocs] = useState([])
   const [legalEntities, setLegalEntities] = useState([])
 
   const [status, setStatus] = useState('Загрузка...')
@@ -161,11 +166,18 @@ export default function FundsPage() {
     }
   }
 
+  async function loadFinanceDocuments() {
+    const res = await safeFetch('/client-finance-documents')
+    if (!res.ok) throw new Error('Failed to load finance documents')
+    const data = await res.json()
+    setFinanceDocs(Array.isArray(data) ? data : [])
+  }
+
   async function reloadAll() {
     setStatus('Загрузка...')
     try {
       await loadTopups()
-      await Promise.all([loadInvoices(), loadLegalEntities()])
+      await Promise.all([loadInvoices(), loadLegalEntities(), loadFinanceDocuments()])
       setStatus('Данные обновлены.')
     } catch {
       setStatus('Ошибка загрузки данных.')
@@ -429,8 +441,45 @@ export default function FundsPage() {
           ) : null}
 
           {tab === 'docs' ? (
-            <div className="empty-state">
-              <p className="muted">Пока нет закрывающих документов. Они появятся после подтверждения оплат.</p>
+            <div className="table-wrapper">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Тип</th>
+                    <th>Название</th>
+                    <th>Номер</th>
+                    <th>Дата</th>
+                    <th>Сумма</th>
+                    <th>Файл</th>
+                    <th style={{ textAlign: 'right' }}>Действие</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!financeDocs.length ? (
+                    <tr>
+                      <td colSpan={7}>Нет документов</td>
+                    </tr>
+                  ) : (
+                    financeDocs.map((row) => {
+                      const token = getAuthToken()
+                      const href = `${(process.env.NEXT_PUBLIC_API_BASE || 'https://envidicy-dash-client.onrender.com').replace(/\/$/, '')}/client-finance-documents/${row.id}${token ? `?token=${encodeURIComponent(token)}` : ''}`
+                      return (
+                        <tr key={row.id}>
+                          <td>{financeDocumentTypeLabel(row.document_type)}</td>
+                          <td>{row.title || '—'}</td>
+                          <td>{row.document_number || '—'}</td>
+                          <td>{fmtDate(row.document_date || row.created_at)}</td>
+                          <td>{row.amount != null ? fmtAmt(row.amount, row.currency || 'KZT') : '—'}</td>
+                          <td>{row.file_name || '—'}</td>
+                          <td style={{ textAlign: 'right' }}>
+                            <a className="btn ghost" href={href} target="_blank" rel="noopener">Скачать</a>
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
           ) : null}
         </div>

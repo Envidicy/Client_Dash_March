@@ -141,6 +141,27 @@ def apply_schema():
             conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS hold_applied INTEGER DEFAULT 0")
             conn.execute("ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS login_email TEXT")
             conn.execute("""
+            CREATE TABLE IF NOT EXISTS agencies (
+              id BIGSERIAL PRIMARY KEY,
+              name TEXT NOT NULL,
+              slug TEXT NOT NULL UNIQUE,
+              owner_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+              status TEXT DEFAULT 'active',
+              created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS agency_members (
+              id BIGSERIAL PRIMARY KEY,
+              agency_id BIGINT REFERENCES agencies(id) ON DELETE CASCADE,
+              user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+              role TEXT NOT NULL DEFAULT 'client_viewer',
+              status TEXT DEFAULT 'active',
+              created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id, user_id)
+            )
+            """)
+            conn.execute("""
             CREATE TABLE IF NOT EXISTS account_funding_events (
               id BIGSERIAL PRIMARY KEY,
               account_id BIGINT REFERENCES ad_accounts(id) ON DELETE CASCADE,
@@ -160,6 +181,28 @@ def apply_schema():
               voided_at TIMESTAMPTZ,
               voided_by TEXT,
               created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS agency_ad_accounts (
+              id BIGSERIAL PRIMARY KEY,
+              agency_id BIGINT REFERENCES agencies(id) ON DELETE CASCADE,
+              ad_account_id BIGINT REFERENCES ad_accounts(id) ON DELETE CASCADE,
+              label TEXT,
+              status TEXT DEFAULT 'active',
+              created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id, ad_account_id)
+            )
+            """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS agency_user_account_access (
+              id BIGSERIAL PRIMARY KEY,
+              agency_id BIGINT REFERENCES agencies(id) ON DELETE CASCADE,
+              user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+              agency_ad_account_id BIGINT REFERENCES agency_ad_accounts(id) ON DELETE CASCADE,
+              access_level TEXT DEFAULT 'viewer',
+              created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id, user_id, agency_ad_account_id)
             )
             """)
             conn.execute("ALTER TABLE account_funding_events ADD COLUMN IF NOT EXISTS reversed_by_event_id BIGINT")
@@ -307,6 +350,29 @@ def apply_schema():
         )
         _ensure_table(
             conn,
+            "client_finance_documents",
+            """
+            CREATE TABLE IF NOT EXISTS client_finance_documents (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+              document_type TEXT NOT NULL DEFAULT 'invoice',
+              title TEXT NOT NULL,
+              document_number TEXT,
+              document_date TEXT,
+              amount DOUBLE PRECISION,
+              currency TEXT DEFAULT 'KZT',
+              note TEXT,
+              file_name TEXT,
+              file_path TEXT NOT NULL,
+              mime_type TEXT,
+              uploaded_by TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
             "wallet_topup_requests",
             """
             CREATE TABLE IF NOT EXISTS wallet_topup_requests (
@@ -349,6 +415,65 @@ def apply_schema():
               voided_at TEXT,
               voided_by TEXT,
               created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
+            "agencies",
+            """
+            CREATE TABLE IF NOT EXISTS agencies (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT NOT NULL,
+              slug TEXT NOT NULL UNIQUE,
+              owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+              status TEXT DEFAULT 'active',
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
+            "agency_members",
+            """
+            CREATE TABLE IF NOT EXISTS agency_members (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+              user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+              role TEXT NOT NULL DEFAULT 'client_viewer',
+              status TEXT DEFAULT 'active',
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id, user_id)
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
+            "agency_ad_accounts",
+            """
+            CREATE TABLE IF NOT EXISTS agency_ad_accounts (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+              ad_account_id INTEGER REFERENCES ad_accounts(id) ON DELETE CASCADE,
+              label TEXT,
+              status TEXT DEFAULT 'active',
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id, ad_account_id)
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
+            "agency_user_account_access",
+            """
+            CREATE TABLE IF NOT EXISTS agency_user_account_access (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+              user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+              agency_ad_account_id INTEGER REFERENCES agency_ad_accounts(id) ON DELETE CASCADE,
+              access_level TEXT DEFAULT 'viewer',
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id, user_id, agency_ad_account_id)
             );
             """,
         )
@@ -436,6 +561,17 @@ def apply_schema():
             """,
         )
         _ensure_column(conn, "wallet_transactions", "account_id", "INTEGER")
+        _ensure_column(conn, "client_finance_documents", "document_type", "TEXT")
+        _ensure_column(conn, "client_finance_documents", "title", "TEXT")
+        _ensure_column(conn, "client_finance_documents", "document_number", "TEXT")
+        _ensure_column(conn, "client_finance_documents", "document_date", "TEXT")
+        _ensure_column(conn, "client_finance_documents", "amount", "DOUBLE PRECISION")
+        _ensure_column(conn, "client_finance_documents", "currency", "TEXT")
+        _ensure_column(conn, "client_finance_documents", "note", "TEXT")
+        _ensure_column(conn, "client_finance_documents", "file_name", "TEXT")
+        _ensure_column(conn, "client_finance_documents", "mime_type", "TEXT")
+        _ensure_column(conn, "client_finance_documents", "uploaded_by", "TEXT")
+        _ensure_column(conn, "client_finance_documents", "updated_at", "TEXT")
         _ensure_column(conn, "user_profiles", "whatsapp_phone", "TEXT")
         _ensure_column(conn, "user_profiles", "telegram_handle", "TEXT")
         _ensure_column(conn, "user_profiles", "avatar_path", "TEXT")
