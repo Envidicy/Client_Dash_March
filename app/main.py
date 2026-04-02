@@ -4140,6 +4140,25 @@ def _save_document(file: UploadFile) -> str:
     return path
 
 
+def _finance_document_storage_dir() -> str:
+    base_dir = os.path.join(os.path.dirname(__file__), "..", "storage", "finance_documents")
+    os.makedirs(base_dir, exist_ok=True)
+    return base_dir
+
+
+def _save_finance_document(file: UploadFile) -> str:
+    safe_ext = os.path.splitext(file.filename or "")[1] or ".pdf"
+    filename = f"finance_doc_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(6)}{safe_ext}"
+    content_type = file.content_type or "application/octet-stream"
+    if _r2_enabled():
+        key = f"finance_documents/{filename}"
+        return _r2_upload_fileobj(key, file.file, content_type)
+    path = os.path.join(_finance_document_storage_dir(), filename)
+    with open(path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return path
+
+
 def _avatar_storage_dir() -> str:
     base_dir = os.path.join(os.path.dirname(__file__), "..", "storage", "avatars")
     os.makedirs(base_dir, exist_ok=True)
@@ -5875,6 +5894,210 @@ def download_document(
         if not row:
             raise HTTPException(status_code=404, detail="Document not found")
         return FileResponse(row["file_path"], filename=os.path.basename(row["file_path"]))
+
+
+@app.get("/client-finance-documents")
+def list_client_finance_documents(current_user=Depends(get_current_user)):
+    if not get_conn:
+        return []
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+              id,
+              document_type,
+              title,
+              document_number,
+              document_date,
+              amount,
+              currency,
+              note,
+              file_name,
+              mime_type,
+              created_at,
+              updated_at
+            FROM client_finance_documents
+            WHERE user_id=?
+            ORDER BY COALESCE(document_date, created_at) DESC, id DESC
+            """,
+            (current_user["id"],),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.get("/client-finance-documents/{doc_id}")
+def download_client_finance_document(
+    doc_id: int,
+    token: Optional[str] = None,
+    current_user=Depends(get_optional_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    if token:
+        current_user = _get_user_by_token(token)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Missing token")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM client_finance_documents WHERE id=? AND user_id=?",
+            (doc_id, current_user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Document not found")
+        payload = dict(row)
+        file_path = payload.get("file_path")
+        file_name = payload.get("file_name") or os.path.basename(file_path or "")
+        r2_ref = _r2_parse_path(file_path)
+        if r2_ref:
+            bucket, key = r2_ref
+            url = _r2_presigned_url(key, bucket=bucket)
+            if not url:
+                raise HTTPException(status_code=500, detail="R2 not configured")
+            return RedirectResponse(url)
+        return FileResponse(
+            file_path,
+            media_type=payload.get("mime_type") or "application/octet-stream",
+            filename=file_name,
+        )
+
+
+@app.get("/admin/clients/{user_id}/documents")
+def admin_client_finance_documents(user_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        return []
+    with get_conn() as conn:
+        user = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        rows = conn.execute(
+            """
+            SELECT
+              id,
+              document_type,
+              title,
+              document_number,
+              document_date,
+              amount,
+              currency,
+              note,
+              file_name,
+              mime_type,
+              uploaded_by,
+              created_at,
+              updated_at
+            FROM client_finance_documents
+            WHERE user_id=?
+            ORDER BY COALESCE(document_date, created_at) DESC, id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.get("/admin/clients/{user_id}/documents/{doc_id}")
+def admin_download_client_finance_document(
+    user_id: int,
+    doc_id: int,
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM client_finance_documents WHERE id=? AND user_id=?",
+            (doc_id, user_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Document not found")
+        payload = dict(row)
+        file_path = payload.get("file_path")
+        file_name = payload.get("file_name") or os.path.basename(file_path or "")
+        r2_ref = _r2_parse_path(file_path)
+        if r2_ref:
+            bucket, key = r2_ref
+            url = _r2_presigned_url(key, bucket=bucket)
+            if not url:
+                raise HTTPException(status_code=500, detail="R2 not configured")
+            return RedirectResponse(url)
+        return FileResponse(
+            file_path,
+            media_type=payload.get("mime_type") or "application/octet-stream",
+            filename=file_name,
+        )
+
+
+@app.post("/admin/clients/{user_id}/documents/upload")
+def admin_upload_client_finance_document(
+    user_id: int,
+    document_type: str = Form(...),
+    title: str = Form(...),
+    file: UploadFile = File(...),
+    document_number: Optional[str] = Form(None),
+    document_date: Optional[str] = Form(None),
+    amount: Optional[float] = Form(None),
+    currency: Optional[str] = Form(None),
+    note: Optional[str] = Form(None),
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    doc_type = str(document_type or "").strip().lower()
+    if doc_type not in {"invoice", "avr"}:
+        raise HTTPException(status_code=400, detail="document_type must be invoice or avr")
+    safe_title = (title or "").strip()
+    if not safe_title:
+        raise HTTPException(status_code=400, detail="title is required")
+    if not file:
+        raise HTTPException(status_code=400, detail="file is required")
+    with get_conn() as conn:
+        user = conn.execute("SELECT id, email FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        file_path = _save_finance_document(file)
+        cur = conn.execute(
+            """
+            INSERT INTO client_finance_documents
+            (user_id, document_type, title, document_number, document_date, amount, currency, note, file_name, file_path, mime_type, uploaded_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                doc_type,
+                safe_title,
+                (document_number or "").strip() or None,
+                (document_date or "").strip() or None,
+                amount,
+                (currency or "KZT").strip().upper(),
+                (note or "").strip() or None,
+                file.filename or None,
+                file_path,
+                file.content_type or "application/octet-stream",
+                admin_user.get("email"),
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT
+              id,
+              document_type,
+              title,
+              document_number,
+              document_date,
+              amount,
+              currency,
+              note,
+              file_name,
+              mime_type,
+              uploaded_by,
+              created_at,
+              updated_at
+            FROM client_finance_documents
+            WHERE id=?
+            """,
+            (cur.lastrowid,),
+        ).fetchone()
+        return dict(row)
 
 
 @app.get("/meta/insights", response_model=MetaInsightsResponse)

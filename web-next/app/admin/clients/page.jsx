@@ -23,6 +23,10 @@ function formatDate(value) {
   return str.split(' ')[0]
 }
 
+function financeDocumentTypeLabel(value) {
+  return String(value || '').toLowerCase() === 'avr' ? 'АВР' : 'Счет'
+}
+
 function walletTypeLabel(value) {
   const key = String(value || '')
   if (key === 'adjustment') return 'Ручная корректировка'
@@ -73,6 +77,17 @@ export default function AdminClientsPage() {
   const [clientAccounts, setClientAccounts] = useState([])
   const [clientProfile, setClientProfile] = useState(null)
   const [clientFees, setClientFees] = useState(null)
+  const [clientDocuments, setClientDocuments] = useState([])
+  const [documentsForm, setDocumentsForm] = useState({
+    document_type: 'invoice',
+    title: '',
+    document_number: '',
+    document_date: '',
+    amount: '',
+    currency: 'KZT',
+    note: '',
+    file: null,
+  })
 
   const [requestEdits, setRequestEdits] = useState({})
   const [feesForm, setFeesForm] = useState({
@@ -108,13 +123,14 @@ export default function AdminClientsPage() {
   }
 
   async function fetchClientDetails(userId) {
-    const [requestsRes, topupsRes, walletRes, accountsRes, profileRes, feesRes] = await Promise.all([
+    const [requestsRes, topupsRes, walletRes, accountsRes, profileRes, feesRes, documentsRes] = await Promise.all([
       safeFetch(`/admin/clients/${userId}/requests`),
       safeFetch(`/admin/clients/${userId}/topups`),
       safeFetch(`/admin/clients/${userId}/wallet-transactions`),
       safeFetch(`/admin/clients/${userId}/accounts`),
       safeFetch(`/admin/clients/${userId}/profile`),
       safeFetch(`/admin/users/${userId}/fees`),
+      safeFetch(`/admin/clients/${userId}/documents`),
     ])
 
     const requests = requestsRes.ok ? await requestsRes.json() : []
@@ -123,6 +139,7 @@ export default function AdminClientsPage() {
     const accounts = accountsRes.ok ? await accountsRes.json() : []
     const profile = profileRes.ok ? await profileRes.json() : null
     const fees = feesRes.ok ? await feesRes.json() : null
+    const documents = documentsRes.ok ? await documentsRes.json() : []
 
     setClientRequests(Array.isArray(requests) ? requests : [])
     setClientTopups(Array.isArray(topups) ? topups : [])
@@ -130,6 +147,7 @@ export default function AdminClientsPage() {
     setClientAccounts(Array.isArray(accounts) ? accounts : [])
     setClientProfile(profile || null)
     setClientFees(fees || null)
+    setClientDocuments(Array.isArray(documents) ? documents : [])
     setFeesForm({
       meta: fees?.meta ?? '',
       google: fees?.google ?? '',
@@ -149,6 +167,49 @@ export default function AdminClientsPage() {
         ])
       )
     )
+  }
+
+  async function uploadClientDocument() {
+    if (!selected) return
+    if (!documentsForm.title.trim()) {
+      setModalStatus('Укажите название документа.')
+      return
+    }
+    if (!documentsForm.file) {
+      setModalStatus('Выберите файл для загрузки.')
+      return
+    }
+    try {
+      const form = new FormData()
+      form.append('document_type', documentsForm.document_type)
+      form.append('title', documentsForm.title.trim())
+      form.append('file', documentsForm.file)
+      if (documentsForm.document_number.trim()) form.append('document_number', documentsForm.document_number.trim())
+      if (documentsForm.document_date) form.append('document_date', documentsForm.document_date)
+      if (documentsForm.amount !== '') form.append('amount', documentsForm.amount)
+      if (documentsForm.currency.trim()) form.append('currency', documentsForm.currency.trim().toUpperCase())
+      if (documentsForm.note.trim()) form.append('note', documentsForm.note.trim())
+      const res = await safeFetch(`/admin/clients/${selected.id}/documents/upload`, {
+        method: 'POST',
+        body: form,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || 'Ошибка загрузки документа.')
+      setClientDocuments((prev) => [data, ...prev])
+      setDocumentsForm({
+        document_type: 'invoice',
+        title: '',
+        document_number: '',
+        document_date: '',
+        amount: '',
+        currency: 'KZT',
+        note: '',
+        file: null,
+      })
+      setModalStatus('Документ загружен.')
+    } catch (e) {
+      setModalStatus(e?.message || 'Ошибка загрузки документа.')
+    }
   }
 
   async function openClientModal(row) {
@@ -363,6 +424,7 @@ export default function AdminClientsPage() {
                   <button className={`tab-button ${activeTab === 'requests' ? 'active' : ''}`} onClick={() => setActiveTab('requests')} type="button">Заявки</button>
                   <button className={`tab-button ${activeTab === 'topups' ? 'active' : ''}`} onClick={() => setActiveTab('topups')} type="button">Пополнения</button>
                   <button className={`tab-button ${activeTab === 'accounts' ? 'active' : ''}`} onClick={() => setActiveTab('accounts')} type="button">Аккаунты</button>
+                  <button className={`tab-button ${activeTab === 'documents' ? 'active' : ''}`} onClick={() => setActiveTab('documents')} type="button">Документы</button>
                   <button className={`tab-button ${activeTab === 'fees' ? 'active' : ''}`} onClick={() => setActiveTab('fees')} type="button">Комиссии</button>
                   <button className={`tab-button ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => setActiveTab('profile')} type="button">Профиль</button>
                 </div>
@@ -495,6 +557,92 @@ export default function AdminClientsPage() {
                                 <td>{formatLiveBillingCell(row.live_billing, row.currency)}</td>
                               </tr>
                             ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : null}
+
+                {activeTab === 'documents' ? (
+                  <div className="tab-panel active">
+                    <div className="form-grid">
+                      <label className="field">
+                        <span>Тип документа</span>
+                        <select value={documentsForm.document_type} onChange={(e) => setDocumentsForm((s) => ({ ...s, document_type: e.target.value }))}>
+                          <option value="invoice">Счет</option>
+                          <option value="avr">АВР</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Название</span>
+                        <input type="text" value={documentsForm.title} onChange={(e) => setDocumentsForm((s) => ({ ...s, title: e.target.value }))} />
+                      </label>
+                      <label className="field">
+                        <span>Номер</span>
+                        <input type="text" value={documentsForm.document_number} onChange={(e) => setDocumentsForm((s) => ({ ...s, document_number: e.target.value }))} />
+                      </label>
+                      <label className="field">
+                        <span>Дата документа</span>
+                        <input type="date" value={documentsForm.document_date} onChange={(e) => setDocumentsForm((s) => ({ ...s, document_date: e.target.value }))} />
+                      </label>
+                      <label className="field">
+                        <span>Сумма</span>
+                        <input type="number" step="0.01" value={documentsForm.amount} onChange={(e) => setDocumentsForm((s) => ({ ...s, amount: e.target.value }))} />
+                      </label>
+                      <label className="field">
+                        <span>Валюта</span>
+                        <input type="text" value={documentsForm.currency} onChange={(e) => setDocumentsForm((s) => ({ ...s, currency: e.target.value }))} />
+                      </label>
+                      <label className="field" style={{ gridColumn: '1 / -1' }}>
+                        <span>Комментарий</span>
+                        <input type="text" value={documentsForm.note} onChange={(e) => setDocumentsForm((s) => ({ ...s, note: e.target.value }))} />
+                      </label>
+                      <label className="field" style={{ gridColumn: '1 / -1' }}>
+                        <span>Файл</span>
+                        <input
+                          type="file"
+                          onChange={(e) => setDocumentsForm((s) => ({ ...s, file: e.target.files?.[0] || null }))}
+                        />
+                      </label>
+                    </div>
+                    <div className="panel-actions" style={{ marginTop: 12 }}>
+                      <button className="btn primary" type="button" onClick={uploadClientDocument}>Загрузить документ</button>
+                    </div>
+
+                    <div className="table-wrapper" style={{ marginTop: 14 }}>
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Тип</th>
+                            <th>Название</th>
+                            <th>Номер</th>
+                            <th>Дата</th>
+                            <th>Сумма</th>
+                            <th>Файл</th>
+                            <th style={{ textAlign: 'right' }}>Действие</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {!clientDocuments.length ? (
+                            <tr><td colSpan={7} className="muted">Нет документов.</td></tr>
+                          ) : (
+                            clientDocuments.map((row) => {
+                              const href = `${(process.env.NEXT_PUBLIC_API_BASE || 'https://envidicy-dash-client.onrender.com').replace(/\/$/, '')}/admin/clients/${selected.id}/documents/${row.id}`
+                              return (
+                                <tr key={row.id}>
+                                  <td>{financeDocumentTypeLabel(row.document_type)}</td>
+                                  <td>{row.title || '—'}</td>
+                                  <td>{row.document_number || '—'}</td>
+                                  <td>{formatDate(row.document_date || row.created_at)}</td>
+                                  <td>{row.amount != null ? `${formatMoney(row.amount)} ${row.currency || ''}` : '—'}</td>
+                                  <td>{row.file_name || '—'}</td>
+                                  <td style={{ textAlign: 'right' }}>
+                                    <a className="btn ghost small" href={href} target="_blank" rel="noopener">Скачать</a>
+                                  </td>
+                                </tr>
+                              )
+                            })
                           )}
                         </tbody>
                       </table>
