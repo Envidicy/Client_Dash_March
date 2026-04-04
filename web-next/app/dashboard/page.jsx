@@ -459,15 +459,15 @@ function AccountMetricChart({ series, metricLabel, metricType }) {
 
 export default function DashboardPage() {
   const router = useRouter()
-  const initialDates = useMemo(() => dateInput(30), [])
-  const [metaDateFrom, setMetaDateFrom] = useState(initialDates.from)
-  const [metaDateTo, setMetaDateTo] = useState(initialDates.to)
-  const [googleDateFrom, setGoogleDateFrom] = useState(initialDates.from)
-  const [googleDateTo, setGoogleDateTo] = useState(initialDates.to)
-  const [tiktokDateFrom, setTiktokDateFrom] = useState(initialDates.from)
-  const [tiktokDateTo, setTiktokDateTo] = useState(initialDates.to)
-  const [vizDateFrom, setVizDateFrom] = useState(initialDates.from)
-  const [vizDateTo, setVizDateTo] = useState(initialDates.to)
+  const [metaDateFrom, setMetaDateFrom] = useState('')
+  const [metaDateTo, setMetaDateTo] = useState('')
+  const [googleDateFrom, setGoogleDateFrom] = useState('')
+  const [googleDateTo, setGoogleDateTo] = useState('')
+  const [tiktokDateFrom, setTiktokDateFrom] = useState('')
+  const [tiktokDateTo, setTiktokDateTo] = useState('')
+  const [vizDateFrom, setVizDateFrom] = useState('')
+  const [vizDateTo, setVizDateTo] = useState('')
+  const [datesReady, setDatesReady] = useState(false)
 
   const [accounts, setAccounts] = useState([])
   const [accountsStatus, setAccountsStatus] = useState('')
@@ -682,6 +682,7 @@ export default function DashboardPage() {
   }
 
   async function loadMeta() {
+    if (!metaDateFrom || !metaDateTo) return
     setMeta((s) => ({ ...s, pending: true, status: 'Загрузка...' }))
     try {
       const res = await safeFetch(`/meta/insights?${buildParams(metaAccount, metaDateFrom, metaDateTo).toString()}`)
@@ -694,6 +695,7 @@ export default function DashboardPage() {
   }
 
   async function loadGoogle() {
+    if (!googleDateFrom || !googleDateTo) return
     setGoogle((s) => ({ ...s, pending: true, status: 'Загрузка...' }))
     try {
       const res = await safeFetch(`/google/insights?${buildParams(googleAccount, googleDateFrom, googleDateTo).toString()}`)
@@ -706,6 +708,7 @@ export default function DashboardPage() {
   }
 
   async function loadTiktok() {
+    if (!tiktokDateFrom || !tiktokDateTo) return
     setTiktok((s) => ({ ...s, pending: true, status: 'Загрузка...' }))
     try {
       const res = await safeFetch(`/tiktok/insights?${buildParams(tiktokAccount, tiktokDateFrom, tiktokDateTo).toString()}`)
@@ -721,6 +724,7 @@ export default function DashboardPage() {
   }
 
   async function loadOverview() {
+    if (!vizDateFrom || !vizDateTo) return
     setOverview((s) => ({ ...s, status: 'Загрузка отчета...' }))
     const params = new URLSearchParams()
     params.set('date_from', vizDateFrom)
@@ -744,6 +748,7 @@ export default function DashboardPage() {
   }
 
   async function loadAudience(group) {
+    if (!vizDateFrom || !vizDateTo) return { rows: [], errors: [] }
     const params = new URLSearchParams()
     params.set('date_from', vizDateFrom)
     params.set('date_to', vizDateTo)
@@ -838,13 +843,27 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
+    const defaults = dateInput(30)
+    setMetaDateFrom(defaults.from)
+    setMetaDateTo(defaults.to)
+    setGoogleDateFrom(defaults.from)
+    setGoogleDateTo(defaults.to)
+    setTiktokDateFrom(defaults.from)
+    setTiktokDateTo(defaults.to)
+    setVizDateFrom(defaults.from)
+    setVizDateTo(defaults.to)
+    setDatesReady(true)
+  }, [])
+
+  useEffect(() => {
+    if (!datesReady) return
     loadAccounts()
     if (!initialLoadStarted) {
       setInitialLoadStarted(true)
       reloadAll()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialLoadStarted])
+  }, [datesReady, initialLoadStarted])
 
   useEffect(() => {
     if (deepLinkApplied || !accounts.length) return
