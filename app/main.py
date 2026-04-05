@@ -4795,6 +4795,7 @@ def _record_account_funding_event(
     created_by: Optional[str] = None,
     occurred_at: Optional[str] = None,
     reversal_for_event_id: Optional[int] = None,
+    update_existing: bool = False,
 ) -> Optional[int]:
     platform_code = str(platform or "").lower()
     currency_code = str(currency or "USD").upper()
@@ -4806,6 +4807,38 @@ def _record_account_funding_event(
     if source_key:
         existing = conn.execute("SELECT id FROM account_funding_events WHERE source_key=?", (source_key,)).fetchone()
         if existing:
+            if update_existing:
+                conn.execute(
+                    """
+                    UPDATE account_funding_events
+                    SET account_id=?,
+                        user_id=?,
+                        platform=?,
+                        amount=?,
+                        currency=?,
+                        amount_usd=?,
+                        amount_kzt=?,
+                        note=?,
+                        created_by=?,
+                        reversal_for_event_id=?,
+                        created_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        account_id,
+                        user_id,
+                        platform,
+                        float(amount or 0),
+                        currency_code,
+                        amount_usd,
+                        amount_kzt,
+                        note,
+                        created_by,
+                        reversal_for_event_id,
+                        occurred_at or datetime.utcnow().isoformat(),
+                        int(existing["id"]),
+                    ),
+                )
             return int(existing["id"])
     created_at = occurred_at or datetime.utcnow().isoformat()
     cur = conn.execute(
@@ -4885,6 +4918,7 @@ def _sync_completed_topup_funding_events(conn, user_id: Optional[int] = None, ac
             source_id=row.get("id"),
             note=f"Topup #{row.get('id')}",
             occurred_at=row.get("created_at"),
+            update_existing=True,
         )
 
 
