@@ -474,6 +474,11 @@ export default function TopupPage() {
     return map
   }, [fundingTotals])
 
+  const accountIdsKey = useMemo(
+    () => accountsFull.map((acc) => String(acc.id)).sort().join(','),
+    [accountsFull]
+  )
+
   const openAccounts = useMemo(() => {
     const index = new Map()
     const accountRows = accountsFull.map((acc) => {
@@ -558,15 +563,8 @@ export default function TopupPage() {
     return `${money(total - spend)} ${currency}`
   }
 
-  function formatPeriodSpendCell(row) {
-    if (!row?.account_db_id) return '—'
-    const item = periodSpendByAccount[String(row.account_db_id)]
-    if (!item) return '—'
-    if (item.loading) return 'Загрузка...'
-    if (item.error) return summarizeApiError(item.error)
-    const spend = Number(item.spend)
-    if (!Number.isFinite(spend)) return 'Нет данных'
-    return `${money(spend)} ${item.currency || row.currency || ''}`
+  function formatSpendCell(row) {
+    return formatLiveBillingCell(row.live_billing, row.currency)
   }
 
   function openCreateModal(platformKey) {
@@ -802,7 +800,7 @@ export default function TopupPage() {
   useEffect(() => {
     if (!accountsFull.length) return
     fetchPeriodSpend(filters.dateFrom, filters.dateTo)
-  }, [accountsFull, filters.dateFrom, filters.dateTo])
+  }, [accountIdsKey, filters.dateFrom, filters.dateTo])
 
   function updatePreset(preset) {
     if (preset === 'custom') {
@@ -913,8 +911,8 @@ export default function TopupPage() {
                       <div className="account-metric-value">{formatBalanceCell(row)}</div>
                     </div>
                     <div className="account-metric">
-                      <div className="account-metric-label">Потрачено за период</div>
-                      <div className="account-metric-value">{formatPeriodSpendCell(row)}</div>
+                      <div className="account-metric-label">Потрачено</div>
+                      <div className="account-metric-value">{formatSpendCell(row)}</div>
                     </div>
                   </div>
 
