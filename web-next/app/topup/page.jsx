@@ -194,15 +194,16 @@ function statusHint(status) {
   return String(status || 'Статус аккаунта')
 }
 
-function extractLiveLimit(liveBilling) {
+function extractLiveSpend(liveBilling) {
   if (!liveBilling || typeof liveBilling !== 'object') return null
   const candidates = [
-    liveBilling.limit,
-    liveBilling.spend_cap,
-    liveBilling.budget,
-    liveBilling.total_budget,
-    liveBilling.metrics?.limit,
-    liveBilling.data?.limit,
+    liveBilling.spend,
+    liveBilling.spent,
+    liveBilling.amount_spent,
+    liveBilling.total_spent,
+    liveBilling.total_spend,
+    liveBilling.metrics?.spend,
+    liveBilling.data?.spend,
   ]
   for (const item of candidates) {
     const num = Number(item)
@@ -232,10 +233,9 @@ function summarizeApiError(error) {
 function formatLiveBillingCell(liveBilling, fallbackCurrency) {
   if (!liveBilling) return '—'
   if (liveBilling.error) return summarizeApiError(liveBilling.error)
-  const currency = liveBilling.currency || fallbackCurrency || ''
-  const limit = extractLiveLimit(liveBilling)
-  if (limit == null) return 'Нет данных'
-  return `${money(limit)} ${currency}`
+  const spend = extractLiveSpend(liveBilling)
+  if (spend == null) return 'Нет данных'
+  return `${money(spend)} ${liveBilling.currency || fallbackCurrency || ''}`
 }
 
 function getPeriodFromPreset(preset) {
@@ -552,6 +552,14 @@ export default function TopupPage() {
     const total = topupFactByAccountId.get(String(row.account_db_id))
     if (total == null) return 'Нет пополнений'
     return `${money(total)} ${row.currency || ''}`
+  }
+
+  function formatBalanceCell(row) {
+    if (!row?.account_db_id) return '—'
+    const total = topupFactByAccountId.get(String(row.account_db_id))
+    const spend = extractLiveSpend(row.live_billing)
+    if (total == null || spend == null) return 'Нет данных'
+    return `${money(total - spend)} ${row.currency || ''}`
   }
 
   function formatPeriodSpendCell(row) {
@@ -897,8 +905,8 @@ export default function TopupPage() {
                       <div className="account-metric-value">{formatTopupFactCell(row)}</div>
                     </div>
                     <div className="account-metric">
-                      <div className="account-metric-label">Лимит</div>
-                      <div className="account-metric-value">{formatLiveBillingCell(row.live_billing, row.currency)}</div>
+                      <div className="account-metric-label">Баланс</div>
+                      <div className="account-metric-value">{formatBalanceCell(row)}</div>
                     </div>
                     <div className="account-metric">
                       <div className="account-metric-label">Потрачено за период</div>

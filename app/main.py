@@ -9837,17 +9837,40 @@ def account_funding_totals(current_user=Depends(get_current_user)):
     if not get_conn:
         return {"items": []}
     with get_conn() as conn:
-        totals_map = _account_funding_totals_map(conn, current_user["id"])
-        items = [
-            {
-                "account_id": int(account_id),
-                "amount": payload["amount"],
-                "currency": payload["currency"],
-                "amount_kzt": payload["amount_kzt"],
-                "amount_usd": payload["amount_usd"],
-            }
-            for account_id, payload in sorted(totals_map.items(), key=lambda item: int(item[0]))
-        ]
+        rows = conn.execute(
+            """
+            SELECT
+              t.*,
+              a.platform as account_platform,
+              a.currency as account_currency
+            FROM topups t
+            JOIN ad_accounts a ON a.id = t.account_id
+            WHERE t.user_id=? AND t.status='completed'
+            ORDER BY t.created_at DESC
+            """,
+            (current_user["id"],),
+        ).fetchall()
+        prepared = _attach_topup_account_amount([dict(row) for row in rows])
+        totals_map: Dict[str, Dict[str, object]] = {}
+        for row in prepared:
+            account_id = row.get("account_id")
+            if not account_id:
+                continue
+            key = str(account_id)
+            bucket = totals_map.setdefault(
+                key,
+                {
+                    "account_id": int(account_id),
+                    "amount": 0.0,
+                    "currency": row.get("account_currency") or row.get("currency") or "USD",
+                    "amount_kzt": 0.0,
+                    "amount_usd": 0.0,
+                },
+            )
+            bucket["amount"] = float(bucket["amount"] or 0) + float(row.get("amount_account") or 0)
+            bucket["amount_kzt"] = float(bucket["amount_kzt"] or 0) + float(row.get("amount_account_kzt") or 0)
+            bucket["amount_usd"] = float(bucket["amount_usd"] or 0) + float(row.get("amount_account_usd") or 0)
+        items = [totals_map[key] for key in sorted(totals_map.keys(), key=lambda value: int(value))]
         conn.commit()
         return {"items": items}
 
