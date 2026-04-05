@@ -6,8 +6,6 @@ import { apiFetch } from '../../lib/api'
 import { clearAuth, getAuthToken } from '../../lib/auth'
 import AppShell from '../../components/layout/AppShell'
 
-const PAGE_SIZE = 5
-
 const PLATFORMS = [
   { key: 'meta', title: 'Meta', subtitle: 'Facebook / Instagram', badge: 'ADS MANAGER' },
   { key: 'google', title: 'Google Ads', subtitle: 'Search / YouTube / Display', badge: 'ADS' },
@@ -537,20 +535,6 @@ export default function TopupPage() {
     })
   }, [openAccounts, filters])
 
-  const pagedOpenAccounts = useMemo(() => {
-    const totalPages = Math.max(1, Math.ceil(filteredOpenAccounts.length / PAGE_SIZE))
-    const page = Math.min(Math.max(1, filters.page), totalPages)
-    const start = (page - 1) * PAGE_SIZE
-    return {
-      page,
-      totalPages,
-      total: filteredOpenAccounts.length,
-      from: filteredOpenAccounts.length ? start + 1 : 0,
-      to: Math.min(start + PAGE_SIZE, filteredOpenAccounts.length),
-      rows: filteredOpenAccounts.slice(start, start + PAGE_SIZE),
-    }
-  }, [filteredOpenAccounts, filters.page])
-
   function formatTopupFactCell(row) {
     if (!row?.account_db_id) return '—'
     const totals = topupFactByAccountId.get(String(row.account_db_id))
@@ -881,10 +865,10 @@ export default function TopupPage() {
         </div>
 
         <div className="accounts-cards" style={{ marginTop: 12 }}>
-          {!pagedOpenAccounts.rows.length ? (
+          {!filteredOpenAccounts.length ? (
             <div className="accounts-empty">По выбранным фильтрам ничего не найдено.</div>
           ) : (
-            pagedOpenAccounts.rows.map((row, idx) => {
+            filteredOpenAccounts.map((row, idx) => {
               const hasAccount = Boolean(row.account_db_id)
               const canTopup = hasAccount
               return (
@@ -972,11 +956,6 @@ export default function TopupPage() {
           )}
         </div>
 
-        <div className="accounts-pagination">
-          <button className="btn ghost" type="button" disabled={pagedOpenAccounts.page <= 1} onClick={() => setFilters((s) => ({ ...s, page: Math.max(1, s.page - 1) }))}>Назад</button>
-          <span className="muted small">{pagedOpenAccounts.from}-{pagedOpenAccounts.to} из {pagedOpenAccounts.total}</span>
-          <button className="btn ghost" type="button" disabled={pagedOpenAccounts.page >= pagedOpenAccounts.totalPages} onClick={() => setFilters((s) => ({ ...s, page: s.page + 1 }))}>Далее</button>
-        </div>
         <p className="muted" style={{ marginTop: 10 }}>{status}</p>
       </section>
 
