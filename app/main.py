@@ -9845,7 +9845,7 @@ def account_funding_totals(current_user=Depends(get_current_user)):
               a.currency as account_currency
             FROM topups t
             JOIN ad_accounts a ON a.id = t.account_id
-            WHERE t.user_id=? AND t.status='completed'
+            WHERE t.user_id=? AND t.status IN ('pending', 'completed')
             ORDER BY t.created_at DESC
             """,
             (current_user["id"],),
