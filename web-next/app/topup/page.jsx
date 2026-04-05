@@ -467,7 +467,11 @@ export default function TopupPage() {
     fundingTotals.forEach((row) => {
       const key = String(row?.account_id || '')
       if (!key) return
-      map.set(key, Number(row?.amount || 0))
+      map.set(key, {
+        amount: Number(row?.amount || 0),
+        amountUsd: Number(row?.amount_usd || 0),
+        amountKzt: Number(row?.amount_kzt || 0),
+      })
     })
     return map
   }, [fundingTotals])
@@ -549,17 +553,25 @@ export default function TopupPage() {
 
   function formatTopupFactCell(row) {
     if (!row?.account_db_id) return '—'
-    const total = topupFactByAccountId.get(String(row.account_db_id))
-    if (total == null) return 'Нет пополнений'
-    return `${money(total)} ${row.currency || ''}`
+    const totals = topupFactByAccountId.get(String(row.account_db_id))
+    if (!totals) return 'Нет пополнений'
+    if (row.platform === 'yandex') {
+      const totalKzt = Number.isFinite(totals.amountKzt) && totals.amountKzt > 0 ? totals.amountKzt : totals.amount
+      return `${money(totalKzt)} KZT`
+    }
+    return `${money(totals.amountUsd)} USD`
   }
 
   function formatBalanceCell(row) {
     if (!row?.account_db_id) return '—'
-    const total = topupFactByAccountId.get(String(row.account_db_id))
+    const totals = topupFactByAccountId.get(String(row.account_db_id))
     const spend = extractLiveSpend(row.live_billing)
-    if (total == null || spend == null) return 'Нет данных'
-    return `${money(total - spend)} ${row.currency || ''}`
+    if (!totals || spend == null) return 'Нет данных'
+    const total = row.platform === 'yandex'
+      ? (Number.isFinite(totals.amountKzt) && totals.amountKzt > 0 ? totals.amountKzt : totals.amount)
+      : totals.amountUsd
+    const currency = row.platform === 'yandex' ? 'KZT' : 'USD'
+    return `${money(total - spend)} ${currency}`
   }
 
   function formatPeriodSpendCell(row) {
