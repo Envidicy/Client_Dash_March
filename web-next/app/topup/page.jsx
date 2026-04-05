@@ -194,16 +194,15 @@ function statusHint(status) {
   return String(status || 'Статус аккаунта')
 }
 
-function extractLiveSpend(liveBilling) {
+function extractLiveLimit(liveBilling) {
   if (!liveBilling || typeof liveBilling !== 'object') return null
   const candidates = [
-    liveBilling.spend,
-    liveBilling.spent,
-    liveBilling.amount_spent,
-    liveBilling.total_spent,
-    liveBilling.total_spend,
-    liveBilling.metrics?.spend,
-    liveBilling.data?.spend,
+    liveBilling.limit,
+    liveBilling.spend_cap,
+    liveBilling.budget,
+    liveBilling.total_budget,
+    liveBilling.metrics?.limit,
+    liveBilling.data?.limit,
   ]
   for (const item of candidates) {
     const num = Number(item)
@@ -212,13 +211,31 @@ function extractLiveSpend(liveBilling) {
   return null
 }
 
+function summarizeApiError(error) {
+  const text = String(error || '').trim()
+  if (!text) return 'Ошибка API'
+  const lower = text.toLowerCase()
+
+  if (lower.includes('customer_not_enabled')) return 'Аккаунт не активирован'
+  if (lower.includes('invalid_grant')) return 'Google токен истек'
+  if (lower.includes('login-customer-id')) return 'Нужен manager context'
+  if (lower.includes('permission denied') || lower.includes('does not have permission') || lower.includes('authorizationerror')) return 'Нет доступа'
+  if (lower.includes('code":190') || lower.includes("code':190") || lower.includes('oauthexception')) return 'Meta токен истек'
+  if (lower.includes('advertiser') && lower.includes('not found')) return 'Аккаунт не найден'
+  if (lower.includes('tiktok') && lower.includes('permission')) return 'Нет доступа TikTok'
+  if (lower.includes('timeout')) return 'Таймаут API'
+
+  const firstLine = text.split('\n')[0].trim()
+  return firstLine.length > 72 ? `${firstLine.slice(0, 72)}...` : firstLine
+}
+
 function formatLiveBillingCell(liveBilling, fallbackCurrency) {
   if (!liveBilling) return '—'
-  if (liveBilling.error) return 'Ошибка API'
+  if (liveBilling.error) return summarizeApiError(liveBilling.error)
   const currency = liveBilling.currency || fallbackCurrency || ''
-  const spend = extractLiveSpend(liveBilling)
-  if (spend == null) return 'Нет данных'
-  return `${money(spend)} ${currency}`
+  const limit = extractLiveLimit(liveBilling)
+  if (limit == null) return 'Нет данных'
+  return `${money(limit)} ${currency}`
 }
 
 function getPeriodFromPreset(preset) {
@@ -542,7 +559,7 @@ export default function TopupPage() {
     const item = periodSpendByAccount[String(row.account_db_id)]
     if (!item) return '—'
     if (item.loading) return 'Загрузка...'
-    if (item.error) return 'Ошибка API'
+    if (item.error) return summarizeApiError(item.error)
     const spend = Number(item.spend)
     if (!Number.isFinite(spend)) return 'Нет данных'
     return `${money(spend)} ${item.currency || row.currency || ''}`
@@ -880,7 +897,7 @@ export default function TopupPage() {
                       <div className="account-metric-value">{formatTopupFactCell(row)}</div>
                     </div>
                     <div className="account-metric">
-                      <div className="account-metric-label">Потрачено</div>
+                      <div className="account-metric-label">Лимит</div>
                       <div className="account-metric-value">{formatLiveBillingCell(row.live_billing, row.currency)}</div>
                     </div>
                     <div className="account-metric">
