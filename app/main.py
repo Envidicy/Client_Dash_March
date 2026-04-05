@@ -4670,7 +4670,7 @@ def _attach_live_billing_many(rows: List[Dict[str, object]], force_refresh: bool
     return [_attach_live_billing(row, force_refresh=force_refresh) for row in rows]
 
 
-def _resolve_topup_account_amount(row: Dict[str, object]) -> Optional[float]:
+def _resolve_topup_account_amount(row: Dict[str, object], rates_data: Optional[Dict[str, object]] = None) -> Optional[float]:
     amount_input = row.get("amount_input")
     amount_net = row.get("amount_net")
     fx_rate = row.get("fx_rate")
@@ -4693,6 +4693,10 @@ def _resolve_topup_account_amount(row: Dict[str, object]) -> Optional[float]:
     except (TypeError, ValueError):
         fx_rate_value = None
 
+    fallback_rate_value = None
+    if (not fx_rate_value or fx_rate_value <= 0) and input_currency == "KZT" and account_currency in {"USD", "EUR"}:
+        fallback_rate_value = _get_marked_bcc_sell_rate(account_currency, rates_data)
+
     if account_currency and input_currency and account_currency == input_currency:
         return amount_net_value if amount_net_value is not None else amount_input_value
 
@@ -4703,6 +4707,9 @@ def _resolve_topup_account_amount(row: Dict[str, object]) -> Optional[float]:
         if amount_net_value > amount_input_value * 0.95:
             return calculated
         return amount_net_value
+
+    if fallback_rate_value and fallback_rate_value > 0 and amount_input_value is not None:
+        return amount_input_value / fallback_rate_value
 
     return amount_net_value if amount_net_value is not None else amount_input_value
 
@@ -4715,7 +4722,7 @@ def _attach_topup_account_amount(rows: List[Dict[str, object]]) -> List[Dict[str
     prepared = []
     for row in rows:
         payload = dict(row)
-        payload["amount_account"] = _resolve_topup_account_amount(payload)
+        payload["amount_account"] = _resolve_topup_account_amount(payload, rates_data)
         platform = str(payload.get("account_platform") or payload.get("platform") or "").lower()
         account_currency = payload.get("account_currency") or payload.get("currency") or "USD"
         if platform == "yandex":

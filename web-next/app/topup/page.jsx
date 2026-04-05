@@ -387,7 +387,7 @@ export default function TopupPage() {
     setStatus('Загрузка данных...')
     try {
       const [accountsRes, fundingTotalsRes, feesRes, walletRes, ratesRes, requestsRes] = await Promise.all([
-        safeFetch('/accounts'),
+        safeFetch('/accounts?include_live_billing=1'),
         safeFetch('/accounts/funding-totals'),
         safeFetch('/fees'),
         safeFetch('/wallet'),
@@ -765,10 +765,18 @@ export default function TopupPage() {
 
     setTopupSubmitStatus('Создаем заявку...')
     try {
+      const selectedAccount = accountsFull.find((item) => String(item.id) === String(topupAccountId))
+      const accountCurrency = String(selectedAccount?.currency || '').toUpperCase()
+      if (accountCurrency && accountCurrency !== 'KZT' && !selectedRate) {
+        throw new Error('Не удалось определить курс для пополнения аккаунта.')
+      }
+      const fxRate = accountCurrency && accountCurrency !== 'KZT' ? selectedRate : null
       const payload = {
         platform: topupPlatform,
         account_id: Number(topupAccountId),
         amount_input: calc.kzt,
+        currency: 'KZT',
+        fx_rate: fxRate,
         fee_percent: Number.isFinite(topupFeePercent) ? topupFeePercent : 0,
         vat_percent: 0,
       }
