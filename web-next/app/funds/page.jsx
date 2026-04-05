@@ -109,9 +109,11 @@ export default function FundsPage() {
       })
 
     const mapped = (Array.isArray(data) ? data : []).map((row) => {
+      const txType = String(row.type || '').toLowerCase()
+      const isDebitTopup = (txType === 'topup' || txType === 'topup_hold') && Number(row.amount || 0) < 0
       let acqPercent = null
       let acqAmount = null
-      if (row.type === 'topup' && Number(row.amount || 0) < 0) {
+      if (isDebitTopup) {
         const key = `${row.account_id}:${Math.abs(Number(row.amount || 0)).toFixed(2)}`
         const bucket = feeMap.get(key) || []
         if (bucket.length) {
@@ -126,7 +128,7 @@ export default function FundsPage() {
         date: fmtDate(row.created_at),
         platform: row.account_platform || '',
         account: row.account_name || '—',
-        type: row.type === 'topup' ? 'Списание' : 'Пополнение',
+        type: isDebitTopup ? 'Списание' : 'Пополнение',
         amount: Number(row.amount || 0),
         currency: row.currency || 'KZT',
         fx: row.fx_rate ?? '-',
