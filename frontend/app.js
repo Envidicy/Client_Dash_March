@@ -41,6 +41,8 @@ const state = {
   agencyMode: false,
   activePlatform: null,
   planMode: 'smart',
+  aiDraft: null,
+  aiDraftApply: false,
   placements: {
     meta: new Set(['fb_feed', 'fb_video_feeds', 'fb_instream', 'fb_reels', 'fb_stories', 'ig_feed', 'ig_reels', 'ig_stories']),
     google: new Set(['google_search', 'google_display_cpm', 'google_display_cpc', 'google_shopping', 'youtube_15s', 'youtube_30s']),
@@ -56,6 +58,11 @@ const usd = (v, d = 0) => `$${(v ?? 0).toLocaleString('ru-RU', { minimumFraction
 const num = (v, d = 0) => (v ?? 0).toLocaleString('ru-RU', { minimumFractionDigits: d, maximumFractionDigits: d })
 const pct = (v) => `${(v * 100).toFixed(1)}%`
 
+function authHeaders() {
+  const token = typeof getAuthToken === 'function' ? getAuthToken() : localStorage.getItem('auth_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 async function fetchPlan() {
   const payload = readPayload()
   const res = await fetch(`${apiBase}/plans/estimate`, {
@@ -67,6 +74,215 @@ async function fetchPlan() {
   const data = await res.json()
   state.plan = data
   renderPlan()
+  renderAiAssistant()
+}
+
+function chooseAiProfile(payload) {
+  const goal = String(payload.goal || '').toLowerCase()
+  const budget = Number(payload.budget || 0)
+  if (goal === 'reach') return 'conservative'
+  if (goal === 'traffic') return budget >= 5000 ? 'base' : 'aggressive'
+  if (goal === 'conversions' || goal === 'sales') return budget >= 4000 ? 'base' : 'aggressive'
+  return 'base'
+}
+
+function applyAiDefaults(payload, profileKey) {
+  const setVal = (id, val) => {
+    const el = document.getElementById(id)
+    if (!el || val == null) return
+    el.value = val
+  }
+  const setIfEmpty = (id, val) => {
+    const el = document.getElementById(id)
+    if (!el || el.value) return
+    el.value = val
+  }
+
+  setVal('assumption-profile', profileKey)
+  applyAssumptionProfile(profileKey)
+
+  const goal = String(payload.goal || '').toLowerCase()
+  if (goal === 'reach') {
+    setVal('split-awareness', 55)
+    setVal('split-consideration', 30)
+    setVal('split-performance', 15)
+  } else if (goal === 'traffic') {
+    setVal('split-awareness', 35)
+    setVal('split-consideration', 40)
+    setVal('split-performance', 25)
+  } else if (goal === 'conversions' || goal === 'sales') {
+    setVal('split-awareness', 20)
+    setVal('split-consideration', 30)
+    setVal('split-performance', 50)
+  } else {
+    setVal('split-awareness', 25)
+    setVal('split-consideration', 35)
+    setVal('split-performance', 40)
+  }
+
+  setIfEmpty('assumption-benchmarks', 'Historical Envidicy benchmarks')
+  setIfEmpty('assumption-history', 'Client campaign history')
+  setIfEmpty('assumption-method', 'Weighted mix by objective and benchmark efficiency')
+  setIfEmpty('assumption-recalc', 'Recalculate after 7 days using first factual spend and CTR/CPC')
+}
+
+async function runAiDraft() {
+  const payload = readPayload()
+  state.aiDraftApply = true
+  try {
+    const res = await fetch(`${apiBase}/plans/assistant`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) throw new Error('assistant request failed')
+    const draft = await res.json()
+    applyAiAssistantDraft(draft, payload)
+  } catch (e) {
+    const profileKey = chooseAiProfile(payload)
+    applyAiDefaults(payload, profileKey)
+    state.aiDraft = {
+      source: 'fallback',
+      profile: profileKey,
+      createdAt: new Date().toISOString(),
+      objective: payload.goal || 'leads',
+      periodDays: payload.period_days || 30,
+      budget: payload.budget || 0,
+      recommendations: ['LLM недоступен: применен локальный fallback-профиль.'],
+      confidence: 0.6,
+    }
+  }
+  await fetchPlan()
+}
+
+function applyAiAssistantDraft(draft, payload) {
+  const setVal = (id, val) => {
+    const el = document.getElementById(id)
+    if (!el || val == null) return
+    el.value = val
+  }
+  const applyChannelInputs = (inputs) => {
+    if (!inputs || typeof inputs !== 'object') return
+    const meta = inputs.meta || {}
+    setVal('meta-cpm', meta.cpm)
+    setVal('meta-ctr', meta.ctr)
+    setVal('meta-cvr', meta.cvr)
+    const g = inputs.google_search || {}
+    setVal('gsearch-cpc', g.cpc)
+    setVal('gsearch-cvr', g.cvr)
+    const tg = inputs.telegrad_channels || inputs.telegram || {}
+    setVal('tg-cpm', tg.cpm)
+    setVal('tg-ctr', tg.ctr)
+  }
+  const profile = draft?.assumption_profile || chooseAiProfile(payload)
+  setVal('assumption-profile', profile)
+  applyAssumptionProfile(profile)
+  const split = draft?.funnel_split || {}
+  setVal('split-awareness', split.awareness)
+  setVal('split-consideration', split.consideration)
+  setVal('split-performance', split.performance)
+
+  const assumptions = draft?.assumptions || {}
+  setVal('assumption-benchmarks', assumptions.benchmarks)
+  setVal('assumption-history', assumptions.history)
+  setVal('assumption-method', assumptions.methodology)
+  setVal('assumption-recalc', assumptions.recalc)
+  applyChannelInputs(draft?.channel_inputs)
+
+  state.aiDraft = {
+    source: draft?.source || 'fallback',
+    profile,
+    createdAt: new Date().toISOString(),
+    objective: payload.goal || 'leads',
+    periodDays: payload.period_days || 30,
+    budget: payload.budget || 0,
+    recommendations: Array.isArray(draft?.recommendations) ? draft.recommendations : [],
+    rationale: typeof draft?.rationale === 'string' ? draft.rationale : '',
+    confidence: typeof draft?.confidence === 'number' ? draft.confidence : 0.6,
+    budgetSplit: draft?.budget_split || {},
+    channelInputs: draft?.channel_inputs || {},
+    factsUsed: Boolean(draft?.facts_used),
+    factsPeriod: draft?.facts_period || null,
+    factsTotals: draft?.facts_totals || {},
+    globalFactsUsed: Boolean(draft?.global_facts_used),
+    globalFactsPeriod: draft?.global_facts_period || null,
+    globalFactsTotals: draft?.global_facts_totals || {},
+    globalFactsDebug: draft?.global_facts_debug || {},
+  }
+}
+
+function renderAiAssistant() {
+  const box = document.getElementById('ai-assistant-output')
+  if (!box) return
+  if (!state.plan) {
+    box.classList.add('muted')
+    box.innerHTML = 'Нажмите «AI-черновик», чтобы получить рекомендации.'
+    return
+  }
+  const draft = state.aiDraft || {}
+  const topLines = [...(state.plan.lines || [])]
+    .sort((a, b) => Number(b.budget || 0) - Number(a.budget || 0))
+    .slice(0, 3)
+  const chips = topLines
+    .map((line) => {
+      const share = Number(line.share || 0) * 100
+      return `<span class="chip chip-ghost">${line.name}: ${share.toFixed(1)}%</span>`
+    })
+    .join('')
+
+  const totals = state.plan.totals || {}
+  const cpl = totals.leads ? totals.budget / totals.leads : null
+  const cpa = totals.conversions ? totals.budget / totals.conversions : null
+  const recommendations = Array.isArray(draft.recommendations) ? draft.recommendations : []
+  const rationale = typeof draft.rationale === 'string' ? draft.rationale : ''
+  const recRows = recommendations.length
+    ? recommendations.map((r) => `<li>${r}</li>`).join('')
+    : '<li>Добавьте фактические данные и запустите AI-черновик снова.</li>'
+  const factsUsed = Boolean(draft.factsUsed)
+  const factsTotals = draft.factsTotals && typeof draft.factsTotals === 'object' ? draft.factsTotals : {}
+  const globalFactsUsed = Boolean(draft.globalFactsUsed)
+  const globalFactsTotals =
+    draft.globalFactsTotals && typeof draft.globalFactsTotals === 'object' ? draft.globalFactsTotals : {}
+  const globalFactsDebug =
+    draft.globalFactsDebug && typeof draft.globalFactsDebug === 'object' ? draft.globalFactsDebug : {}
+  const factsRows = Object.entries(factsTotals)
+    .map(([platform, row]) => {
+      const spend = row && typeof row === 'object' ? Number(row.spend || 0) : 0
+      return `<span class="chip chip-ghost">${platform}: ${usd(spend, 2)}</span>`
+    })
+    .join('')
+  const globalFactsRows = Object.entries(globalFactsTotals)
+    .map(([platform, row]) => {
+      const spend = row && typeof row === 'object' ? Number(row.spend || 0) : 0
+      return `<span class="chip chip-ghost">${platform}: ${usd(spend, 2)}</span>`
+    })
+    .join('')
+  box.classList.remove('muted')
+  box.innerHTML = `
+    <div class="chips small">
+      <span class="chip chip-ghost">Источник: ${draft.source || 'manual'}</span>
+      <span class="chip chip-ghost">Профиль: ${draft.profile || 'manual'}</span>
+      <span class="chip chip-ghost">Цель: ${draft.objective || 'n/a'}</span>
+      <span class="chip chip-ghost">Период: ${draft.periodDays || state.plan.period_days || 30} дн.</span>
+      <span class="chip chip-ghost">Бюджет: ${usd(draft.budget || state.plan.budget_usd || 0, 2)}</span>
+      <span class="chip chip-ghost">Confidence: ${Math.round((draft.confidence || 0) * 100)}%</span>
+      <span class="chip ${factsUsed ? 'chip-good' : 'chip-ghost'}">Факт из аккаунтов: ${factsUsed ? 'учтен' : 'не учтен'}</span>
+      ${draft.factsPeriod ? `<span class="chip chip-ghost">Период факта: ${draft.factsPeriod}</span>` : ''}
+      <span class="chip ${globalFactsUsed ? 'chip-good' : 'chip-ghost'}">Global pool: ${globalFactsUsed ? 'учтен' : 'не учтен'}</span>
+      ${draft.globalFactsPeriod ? `<span class="chip chip-ghost">Период global: ${draft.globalFactsPeriod}</span>` : ''}
+    </div>
+    <div class="chips small" style="margin-top:8px;">${chips || '<span class="chip chip-ghost">Нет рекомендаций по сплиту</span>'}</div>
+    ${rationale ? `<div style="margin-top:8px;"><strong>Rationale:</strong> ${rationale}</div>` : ''}
+    <div style="margin-top:8px;">
+      <ul style="margin:0;padding-left:18px;">${recRows}</ul>
+    </div>
+    ${factsRows ? `<div class="chips small" style="margin-top:8px;"><span class="chip chip-ghost">Факт:</span> ${factsRows}</div>` : ''}
+    ${globalFactsRows ? `<div class="chips small" style="margin-top:8px;"><span class="chip chip-ghost">Global:</span> ${globalFactsRows}</div>` : ''}
+    <div class="chips small" style="margin-top:8px;">
+      <span class="chip chip-ghost">CPL: ${cpl ? usd(cpl, 2) : '—'}</span>
+      <span class="chip chip-ghost">CPA: ${cpa ? usd(cpa, 2) : '—'}</span>
+    </div>
+  `
 }
 
 function readPayload() {
@@ -109,6 +325,10 @@ function readPayload() {
   }
   const assumptions = Object.fromEntries(Object.entries(rawAssumptions).filter(([, v]) => v))
   const hasAssumptions = Object.keys(assumptions).length > 0
+  const aiBudgetSplit =
+    state.aiDraftApply && state.aiDraft?.budgetSplit && Object.keys(state.aiDraft.budgetSplit).length
+      ? state.aiDraft.budgetSplit
+      : null
   if (mode === 'smart') {
     const smartGoal = document.getElementById('smart-goal')?.value || 'leads'
     const mappedGoal = smartGoal === 'sales' ? 'conversions' : smartGoal
@@ -129,6 +349,8 @@ function readPayload() {
       date_end: endDate.toISOString().slice(0, 10),
       avg_frequency: 1.6,
       pricing_mode: 'auto',
+      channel_inputs: hasChannelInputs ? channelInputs : null,
+      budget_split: aiBudgetSplit,
     }
   }
 
@@ -183,6 +405,7 @@ function readPayload() {
     channel_inputs: hasChannelInputs ? channelInputs : null,
     assumption_profile: document.getElementById('assumption-profile')?.value || null,
     assumptions: hasAssumptions ? assumptions : null,
+    budget_split: aiBudgetSplit,
   }
 }
 
@@ -368,7 +591,13 @@ async function uploadFact() {
 }
 
 function bind() {
-  document.querySelectorAll('#btn-estimate').forEach((btn) => btn.addEventListener('click', fetchPlan))
+  document.querySelectorAll('#btn-estimate').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      state.aiDraftApply = false
+      fetchPlan()
+    })
+  )
+  document.querySelectorAll('#btn-ai-draft').forEach((btn) => btn.addEventListener('click', runAiDraft))
   document.querySelectorAll('#btn-excel').forEach((btn) => btn.addEventListener('click', downloadExcel))
   const modeSelect = document.getElementById('plan-mode')
   if (modeSelect) {
@@ -435,6 +664,7 @@ function init() {
   const toggleAgency = document.getElementById('toggle-agency')
   if (toggleAgency) toggleAgency.checked = state.agencyMode
   renderChips(readPayload())
+  renderAiAssistant()
 }
 
 function getPlanMode() {

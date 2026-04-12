@@ -26,13 +26,22 @@ const state = {
   accountRequests: [],
   topups: [],
   accountsFull: [],
+  periodSpendByAccount: {},
   fees: null,
   walletBalanceKzt: null,
+  openAccountsFilters: {
+    dateFrom: '',
+    dateTo: '',
+    periodPreset: 'this_month',
+    status: 'all',
+    search: '',
+    page: 1,
+    pageSize: 5,
+  },
 }
 
 let accounts = { meta: [], google: [], tiktok: [], yandex: [], telegram: [], monochrome: [] }
 let bccRatesCache = { ts: 0, data: null }
-const BCC_DEFAULT_MARKUP = 10
 const SIDEBAR_RATES_PANEL_ID = 'sidebar-rates-panel'
 
 const platforms = [
@@ -198,19 +207,80 @@ function formatMoneyAmount(value) {
   return n.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function withDefaultMarkup(rate) {
-  if (rate == null || Number.isNaN(Number(rate))) return null
-  return Number(rate) + BCC_DEFAULT_MARKUP
+function getCurrentMonthPeriod() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return { dateFrom: `${y}-${m}-01`, dateTo: `${y}-${m}-${d}` }
+}
+
+function toIsoDate(value) {
+  const y = value.getFullYear()
+  const m = String(value.getMonth() + 1).padStart(2, '0')
+  const d = String(value.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function getPeriodFromPreset(preset) {
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  if (preset === 'today') {
+    const iso = toIsoDate(today)
+    return { dateFrom: iso, dateTo: iso }
+  }
+  if (preset === '7d') {
+    const from = new Date(today)
+    from.setDate(from.getDate() - 6)
+    return { dateFrom: toIsoDate(from), dateTo: toIsoDate(today) }
+  }
+  if (preset === '30d') {
+    const from = new Date(today)
+    from.setDate(from.getDate() - 29)
+    return { dateFrom: toIsoDate(from), dateTo: toIsoDate(today) }
+  }
+  if (preset === 'prev_month') {
+    const firstCurrent = new Date(today.getFullYear(), today.getMonth(), 1)
+    const lastPrev = new Date(firstCurrent)
+    lastPrev.setDate(0)
+    const firstPrev = new Date(lastPrev.getFullYear(), lastPrev.getMonth(), 1)
+    return { dateFrom: toIsoDate(firstPrev), dateTo: toIsoDate(lastPrev) }
+  }
+  return getCurrentMonthPeriod()
+}
+
+function getMarkedRateFromEntry(entry) {
+  const marked = Number(entry?.sell_marked)
+  if (Number.isFinite(marked)) return marked
+  const sell = Number(entry?.sell)
+  if (Number.isFinite(sell)) return sell
+  return null
 }
 
 function getMarkedRateByCode(code) {
   const rates = bccRatesCache.data?.rates
   if (!rates) return null
-  return withDefaultMarkup(rates[String(code || '').toUpperCase()]?.sell)
+  return getMarkedRateFromEntry(rates[String(code || '').toUpperCase()])
 }
 
 function getAccountById(accountId) {
   return (state.accountsFull || []).find((acc) => String(acc.id) === String(accountId)) || null
+}
+
+function getTopupAccountAmount(row) {
+  if (row?.amount_account != null) return Number(row.amount_account)
+  if (row?.amount_net != null) return Number(row.amount_net)
+  return Number(row?.amount_input || 0)
+}
+
+function getTopupFactByAccountId(accountId) {
+  const id = String(accountId || '')
+  if (!id) return null
+  const rows = Array.isArray(state.topups) ? state.topups : []
+  const matched = rows.filter((row) => String(row.account_id) === id)
+  if (!matched.length) return null
+  const total = matched.reduce((sum, row) => sum + Number(getTopupAccountAmount(row) || 0), 0)
+  return Number.isFinite(total) ? total : null
 }
 
 function getAccountRate(account) {
@@ -222,7 +292,7 @@ function getAccountRate(account) {
 
 function getEffectiveRate(account) {
   const row = getAccountRate(account)
-  return withDefaultMarkup(row?.sell)
+  return getMarkedRateFromEntry(row)
 }
 
 function setTopupError(message) {
@@ -297,8 +367,8 @@ function updateSidebarRatesPanel() {
   }
   const usd = data.rates.USD
   const eur = data.rates.EUR
-  const usdMarked = usd ? withDefaultMarkup(usd.sell) : null
-  const eurMarked = eur ? withDefaultMarkup(eur.sell) : null
+  const usdMarked = usd ? getMarkedRateFromEntry(usd) : null
+  const eurMarked = eur ? getMarkedRateFromEntry(eur) : null
   usdRow.textContent = usdMarked == null ? 'USD: —' : `USD: ${formatRateValue(usdMarked)} ₸`
   eurRow.textContent = eurMarked == null ? 'EUR: —' : `EUR: ${formatRateValue(eurMarked)} ₸`
 }
@@ -349,44 +419,102 @@ async function loadBccRates() {
 }
 
 function renderOpenAccounts() {
-  const tbody = document.getElementById('accounts-body')
-  if (!tbody) return
-  tbody.innerHTML = ''
-  state.openAccounts.forEach((row) => {
+  const cardsRoot = document.getElementById('accounts-cards')
+  const pageLabel = document.getElementById('accounts-page-label')
+  const prevBtn = document.getElementById('accounts-prev')
+  const nextBtn = document.getElementById('accounts-next')
+  if (!cardsRoot) return
+  cardsRoot.innerHTML = ''
+
+  const filteredRows = getFilteredOpenAccounts()
+  const pageSize = Number(state.openAccountsFilters.pageSize || 5)
+  const total = filteredRows.length
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  if (state.openAccountsFilters.page > totalPages) state.openAccountsFilters.page = totalPages
+  if (state.openAccountsFilters.page < 1) state.openAccountsFilters.page = 1
+  const page = state.openAccountsFilters.page
+  const start = (page - 1) * pageSize
+  const end = start + pageSize
+  const rows = filteredRows.slice(start, end)
+
+  if (!rows.length) {
+    cardsRoot.innerHTML = '<div class="accounts-empty">По выбранным фильтрам ничего не найдено.</div>'
+  }
+
+  rows.forEach((row) => {
     const hasAccount = Boolean(row.account_db_id)
     const canTopup = hasAccount && row.can_topup !== false
-    const tr = document.createElement('tr')
-    const budgetUsd = convertAmountToUsd(row.budget, row.currency)
-    const budgetLabel =
-      row.budget == null || budgetUsd == null
-        ? '—'
-        : `${formatMoneyAmount(budgetUsd)} USD`
+    const card = document.createElement('article')
+    card.className = 'account-status-card'
     const liveBillingLabel = formatLiveBillingCell(row.live_billing, row.currency)
-    tr.innerHTML = `
-      <td>${platformLabel(row.platform)}</td>
-      <td>${row.account_id}</td>
-      <td>${row.account_ref || '—'}</td>
-      <td>${row.company}</td>
-      <td>${row.email}</td>
-      <td>${budgetLabel}</td>
-      <td>${liveBillingLabel}</td>
-      <td><span class="status ${statusClass(row.status)}">${row.status}</span></td>
-      <td style="text-align:right; display:flex; gap:6px; justify-content:flex-end;">
+    const platformLogo = platformLogoHtml(row.platform)
+    card.innerHTML = `
+      <div class="account-status-left">
+        <div class="account-status-title-row">
+          <div class="account-status-title-main">
+            <span class="platform-logo platform-${row.platform}" title="${platformLabel(row.platform)}">${platformLogo}</span>
+            <div class="account-status-name-wrap">
+              <div class="account-status-name">${row.account_id}</div>
+            </div>
+          </div>
+          <span class="account-status-dot ${statusClass(row.status)}" data-tooltip="${statusHint(row.status)}" aria-label="${row.status}"></span>
+        </div>
+        <div class="account-status-sub">
+          <span>${platformLabel(row.platform)}</span>
+          <span>${row.email || '—'}</span>
+        </div>
+      </div>
+      <div class="account-status-metrics">
+        <div class="account-metric">
+          <div class="account-metric-label">ID аккаунта</div>
+          <div class="account-metric-value account-metric-value-id">${row.account_ref || '—'}</div>
+        </div>
+        <div class="account-metric">
+          <div class="account-metric-label">Пополнено (факт)</div>
+          <div class="account-metric-value">${formatTopupFactCell(row)}</div>
+        </div>
+        <div class="account-metric">
+          <div class="account-metric-label">Потрачено</div>
+          <div class="account-metric-value">${liveBillingLabel}</div>
+        </div>
+        <div class="account-metric">
+          <div class="account-metric-label">Потрачено за период</div>
+          <div class="account-metric-value">${formatPeriodSpendCell(row)}</div>
+        </div>
+      </div>
+      <div class="account-status-actions">
         ${
           hasAccount
             ? `
-        ${canTopup ? `<button class="icon-btn" title="Пополнить" data-topup="${row.account_db_id}" data-platform="${row.platform}">$</button>` : ''}
-        <button class="icon-btn stat" title="Статистика" data-stat="${row.account_db_id}" data-platform="${row.platform}">📊</button>
-        <button class="icon-btn refresh" title="Обновить" data-refresh="${row.account_db_id}" data-platform="${row.platform}">⟳</button>
+        ${
+          canTopup
+            ? `<button class="account-action-icon" data-tooltip="Пополнить" aria-label="Пополнить" data-topup="${row.account_db_id}" data-platform="${row.platform}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </button>`
+            : ''
+        }
+        <button class="account-action-icon" data-tooltip="Статистика" aria-label="Статистика" data-stat="${row.account_db_id}" data-platform="${row.platform}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18h16M7 16v-5M12 16V8M17 16v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <button class="account-action-icon" data-tooltip="Обновить бюджет" aria-label="Обновить бюджет" data-refresh="${row.account_db_id}" data-platform="${row.platform}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5.3M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
         `
             : `<span class="muted small">Ожидает открытия</span>`
         }
-      </td>
+      </div>
     `
-    tbody.appendChild(tr)
+    cardsRoot.appendChild(card)
   })
-  if (!tbody.dataset.bound) {
-    tbody.addEventListener('click', (e) => {
+
+  const fromLabel = total === 0 ? 0 : start + 1
+  const toLabel = Math.min(end, total)
+  if (pageLabel) pageLabel.textContent = `${fromLabel}-${toLabel} из ${total}`
+  if (prevBtn) prevBtn.disabled = page <= 1
+  if (nextBtn) nextBtn.disabled = page >= totalPages
+
+  if (!cardsRoot.dataset.bound) {
+    cardsRoot.addEventListener('click', async (e) => {
       const btn = e.target.closest('button[data-topup]')
       if (btn) {
         const accId = btn.dataset.topup
@@ -395,24 +523,298 @@ function renderOpenAccounts() {
       }
       const stat = e.target.closest('button[data-stat]')
       if (stat) {
-        alert('Статистика будет подтягиваться позже.')
+        const accountId = stat.dataset.stat
+        const platform = stat.dataset.platform
+        const params = new URLSearchParams()
+        if (platform) params.set('platform', platform)
+        if (accountId) params.set('account_id', accountId)
+        window.location.href = `/dashboard${params.toString() ? `?${params.toString()}` : ''}`
+        return
       }
       const refresh = e.target.closest('button[data-refresh]')
       if (refresh) {
-        alert('Обновление бюджета будет добавлено позже.')
+        refresh.disabled = true
+        refresh.classList.add('is-loading')
+        try {
+          await refreshAccountLiveBilling(refresh.dataset.refresh)
+        } catch (err) {
+          const message = err?.message || 'Не удалось обновить данные по аккаунту.'
+          alert(message)
+        } finally {
+          refresh.disabled = false
+          refresh.classList.remove('is-loading')
+        }
       }
     })
-    tbody.dataset.bound = '1'
+    cardsRoot.dataset.bound = '1'
+  }
+}
+
+async function refreshAccountLiveBilling(accountId) {
+  if (!accountId) return
+  const res = await fetch(`${apiBase}/accounts/${accountId}/refresh-live-billing`, {
+    method: 'POST',
+    headers: { ...authHeadersSafe() },
+  })
+  if (handleAuthFailure(res)) return
+  if (!res.ok) {
+    let message = 'Не удалось обновить данные по аккаунту.'
+    try {
+      const data = await res.json()
+      if (data?.detail) message = String(data.detail)
+    } catch (e) {
+      // ignore parse error
+    }
+    throw new Error(message)
+  }
+  const data = await res.json()
+  const id = String(accountId)
+  state.accountsFull = (state.accountsFull || []).map((acc) =>
+    String(acc.id) === id ? { ...acc, live_billing: data.live_billing || null } : acc
+  )
+  syncOpenAccounts()
+}
+
+async function fetchPeriodSpend() {
+  const { dateFrom, dateTo } = state.openAccountsFilters
+  if (!dateFrom || !dateTo) {
+    renderOpenAccounts()
+    return
+  }
+  if (dateFrom > dateTo) {
+    state.periodSpendByAccount = {}
+    renderOpenAccounts()
+    return
+  }
+  if (!Array.isArray(state.accountsFull) || state.accountsFull.length === 0) {
+    state.periodSpendByAccount = {}
+    renderOpenAccounts()
+    return
+  }
+  const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
+  try {
+    state.periodSpendByAccount = Object.fromEntries(
+      (state.accountsFull || []).map((acc) => [String(acc.id), { loading: true }])
+    )
+    renderOpenAccounts()
+    const res = await fetch(`${apiBase}/accounts/spend?${params.toString()}`, {
+      headers: { ...authHeadersSafe() },
+    })
+    if (handleAuthFailure(res)) return
+    if (!res.ok) throw new Error('Failed to load period spend')
+    const data = await res.json()
+    const mapped = {}
+    for (const item of data.items || []) {
+      mapped[String(item.account_id)] = {
+        spend: item.spend,
+        currency: item.currency,
+        error: item.error || null,
+      }
+    }
+    state.periodSpendByAccount = mapped
+  } catch (e) {
+    state.periodSpendByAccount = {}
+    console.error(e)
+  } finally {
+    renderOpenAccounts()
+  }
+}
+
+function mapStatusFilter(status) {
+  const value = String(status || '').toLowerCase()
+  if (value === 'активен' || value === 'открыт') return 'open'
+  if (value === 'на модерации' || value === 'в работе' || value === 'новая') return 'processing'
+  if (value === 'закрыт' || value === 'отклонен' || value === 'заблокирован') return 'closed'
+  return 'all'
+}
+
+function platformLogoHtml(platform) {
+  if (platform === 'google') {
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M12.545,10.239v3.821h5.445c-0.712,2.315-2.647,3.972-5.445,3.972c-3.332,0-6.033-2.701-6.033-6.032s2.701-6.032,6.033-6.032c1.498,0,2.866,0.549,3.921,1.453l2.814-2.814C17.503,2.988,15.139,2,12.545,2C7.021,2,2.543,6.477,2.543,12s4.478,10,10.002,10c8.396,0,10.249-7.85,9.426-11.748L12.545,10.239z"/></svg>'
+  }
+  if (platform === 'meta') {
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="#1877F2" d="M24,12.073c0,5.989-4.394,10.954-10.13,11.855v-8.363h2.789l0.531-3.46H13.87V8.716c0-0.947,0.464-1.869,1.958-1.869h1.513V3.949c0,0-1.37-0.234-2.679-0.234c-2.734,0-4.52,1.657-4.52,4.656v2.637H7.091v3.46h3.039v8.363C4.395,23.025,0,18.061,0,12.073c0-6.627,5.373-12,12-12S24,5.446,24,12.073z"/></svg>'
+  }
+  if (platform === 'tiktok') {
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="#000000" d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/></svg>'
+  }
+  if (platform === 'telegram') {
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="#0088CC" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.4-1.08.39-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .39z"/></svg>'
+  }
+  if (platform === 'yandex') return 'Y'
+  if (platform === 'monochrome') return 'MC'
+  return 'AD'
+}
+
+function getFilteredOpenAccounts() {
+  const filters = state.openAccountsFilters
+  const q = String(filters.search || '').trim().toLowerCase()
+  return state.openAccounts.filter((row) => {
+    if (mapStatusFilter(row.status) === 'closed') return false
+    if (filters.status !== 'all' && mapStatusFilter(row.status) !== filters.status) return false
+    if (q) {
+      const haystack = [
+        row.account_id,
+        row.account_ref,
+        row.email,
+        row.company,
+        platformLabel(row.platform),
+        row.status,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      if (!haystack.includes(q)) return false
+    }
+    return true
+  })
+}
+
+function attachDatePickerBehavior(input) {
+  if (!input) return
+  input.setAttribute('inputmode', 'none')
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') return
+    e.preventDefault()
+  })
+  input.addEventListener('paste', (e) => e.preventDefault())
+  const openPicker = () => {
+    if (typeof input.showPicker === 'function') {
+      try {
+        input.showPicker()
+      } catch (e) {
+        // no-op: some browsers restrict showPicker by gesture context
+      }
+    }
+  }
+  input.addEventListener('focus', openPicker)
+  input.addEventListener('click', openPicker)
+}
+
+function bindOpenAccountsControls() {
+  const periodPreset = document.getElementById('accounts-period-preset')
+  const dateFrom = document.getElementById('accounts-date-from')
+  const dateTo = document.getElementById('accounts-date-to')
+  const status = document.getElementById('accounts-status-filter')
+  const search = document.getElementById('accounts-search')
+  const prevBtn = document.getElementById('accounts-prev')
+  const nextBtn = document.getElementById('accounts-next')
+
+  if (!state.openAccountsFilters.dateFrom || !state.openAccountsFilters.dateTo) {
+    const period = getPeriodFromPreset(state.openAccountsFilters.periodPreset || 'this_month')
+    state.openAccountsFilters.dateFrom = period.dateFrom
+    state.openAccountsFilters.dateTo = period.dateTo
+  }
+
+  if (periodPreset) {
+    periodPreset.value = state.openAccountsFilters.periodPreset || 'this_month'
+    periodPreset.addEventListener('change', () => {
+      const preset = periodPreset.value || 'this_month'
+      state.openAccountsFilters.periodPreset = preset
+      if (preset !== 'custom') {
+        const period = getPeriodFromPreset(preset)
+        state.openAccountsFilters.dateFrom = period.dateFrom
+        state.openAccountsFilters.dateTo = period.dateTo
+        if (dateFrom) dateFrom.value = period.dateFrom
+        if (dateTo) dateTo.value = period.dateTo
+      }
+      fetchPeriodSpend()
+    })
+  }
+
+  if (dateFrom) {
+    attachDatePickerBehavior(dateFrom)
+    dateFrom.value = state.openAccountsFilters.dateFrom
+    dateFrom.addEventListener('change', () => {
+      state.openAccountsFilters.dateFrom = dateFrom.value
+      state.openAccountsFilters.periodPreset = 'custom'
+      if (periodPreset) periodPreset.value = 'custom'
+      fetchPeriodSpend()
+    })
+  }
+  if (dateTo) {
+    attachDatePickerBehavior(dateTo)
+    dateTo.value = state.openAccountsFilters.dateTo
+    dateTo.addEventListener('change', () => {
+      state.openAccountsFilters.dateTo = dateTo.value
+      state.openAccountsFilters.periodPreset = 'custom'
+      if (periodPreset) periodPreset.value = 'custom'
+      fetchPeriodSpend()
+    })
+  }
+  if (status) {
+    status.addEventListener('change', () => {
+      state.openAccountsFilters.status = status.value
+      state.openAccountsFilters.page = 1
+      renderOpenAccounts()
+    })
+  }
+  if (search) {
+    search.addEventListener('input', () => {
+      state.openAccountsFilters.search = search.value
+      state.openAccountsFilters.page = 1
+      renderOpenAccounts()
+    })
+  }
+  if (prevBtn) {
+    prevBtn.addEventListener('click', () => {
+      if (state.openAccountsFilters.page <= 1) return
+      state.openAccountsFilters.page -= 1
+      renderOpenAccounts()
+    })
+  }
+  if (nextBtn) {
+    nextBtn.addEventListener('click', () => {
+      state.openAccountsFilters.page += 1
+      renderOpenAccounts()
+    })
   }
 }
 
 function formatLiveBillingCell(liveBilling, fallbackCurrency) {
   if (!liveBilling) return '—'
-  if (liveBilling.error) return '<span class="muted small">Ошибка API</span>'
+  if (liveBilling.error) return `<span class="muted small" title="${String(liveBilling.error)}">Ошибка API</span>`
   const currency = liveBilling.currency || fallbackCurrency || ''
-  const spend = liveBilling.spend
+  const spend = extractLiveSpend(liveBilling)
   if (spend == null) return '<span class="muted small">Нет данных</span>'
   return `${formatMoneyAmount(spend)} ${currency}`
+}
+
+function extractLiveSpend(liveBilling) {
+  if (!liveBilling || typeof liveBilling !== 'object') return null
+  const candidates = [
+    liveBilling.spend,
+    liveBilling.spent,
+    liveBilling.amount_spent,
+    liveBilling.total_spent,
+    liveBilling.total_spend,
+    liveBilling.metrics?.spend,
+    liveBilling.data?.spend,
+  ]
+  for (const item of candidates) {
+    const num = Number(item)
+    if (Number.isFinite(num)) return num
+  }
+  return null
+}
+
+function formatPeriodSpendCell(row) {
+  if (!row?.account_db_id) return '<span class="muted small">—</span>'
+  const key = String(row.account_db_id)
+  const item = state.periodSpendByAccount[key]
+  if (!item) return '<span class="muted small">—</span>'
+  if (item.loading) return '<span class="muted small">Загрузка...</span>'
+  if (item.error) return '<span class="muted small">Ошибка API</span>'
+  const spend = Number(item.spend)
+  if (!Number.isFinite(spend)) return '<span class="muted small">Нет данных</span>'
+  return `${formatMoneyAmount(spend)} ${item.currency || row.currency || ''}`
+}
+
+function formatTopupFactCell(row) {
+  if (!row?.account_db_id) return '<span class="muted small">—</span>'
+  const total = getTopupFactByAccountId(row.account_db_id)
+  if (total == null) return '<span class="muted small">Нет пополнений</span>'
+  return `${formatMoneyAmount(total)} ${row.currency || ''}`
 }
 
 function normalizeAccountStatus(status) {
@@ -437,6 +839,17 @@ function statusClass(status) {
   return ''
 }
 
+function statusHint(status) {
+  if (status === 'Новая') return 'Новая заявка, аккаунт еще не обработан.'
+  if (status === 'В работе') return 'Заявка в обработке, ожидаются действия менеджера.'
+  if (status === 'Открыт' || status === 'Активен') return 'Аккаунт активен и доступен для пополнения.'
+  if (status === 'На модерации') return 'Аккаунт проходит проверку площадки.'
+  if (status === 'Приостановлен') return 'Аккаунт временно приостановлен.'
+  if (status === 'Заблокирован') return 'Аккаунт ограничен площадкой.'
+  if (status === 'Отклонен' || status === 'Закрыт') return 'Аккаунт недоступен для работы.'
+  return String(status || 'Статус аккаунта')
+}
+
 function syncOpenAccounts() {
   const accountIndex = new Map()
   const accountRows = (state.accountsFull || []).map((acc) => {
@@ -448,6 +861,7 @@ function syncOpenAccounts() {
       account_id: acc.name || acc.external_id || `Аккаунт #${acc.id}`,
       account_ref: acc.external_id || acc.account_code || acc.id,
       account_db_id: acc.id,
+      created_at: acc.created_at || null,
       live_billing: acc.live_billing || null,
       company: '',
       email: '—',
@@ -937,6 +1351,7 @@ function updateFee() {
 function init() {
   ensureSidebarRatesPanel()
   renderCards()
+  bindOpenAccountsControls()
   renderOpenAccounts()
   bindModal()
   loadBccRates()
@@ -973,6 +1388,7 @@ async function fetchAccounts() {
       if (acc.platform === 'telegram') accounts.telegram.push(row)
       if (acc.platform === 'monochrome') accounts.monochrome.push(row)
     })
+    await fetchPeriodSpend()
     await fetchAccountRequests()
     syncOpenAccounts()
   } catch (e) {
@@ -987,6 +1403,7 @@ async function fetchTopups() {
     if (!res.ok) throw new Error('Failed to load topups')
     const data = await res.json()
     state.topups = data
+    syncOpenAccounts()
   } catch (e) {
     console.error(e)
   }

@@ -31,7 +31,7 @@ const tabPanels = Array.from(document.querySelectorAll('.tab-panel'))
 let cachedClients = []
 
 function authHeadersSafe() {
-  const token = localStorage.getItem('auth_token')
+  const token = typeof getAuthToken === 'function' ? getAuthToken() : localStorage.getItem('auth_token')
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
@@ -61,14 +61,17 @@ function renderClients(rows) {
   clientsBody.innerHTML = rows
     .map((row) => {
       const pending = Number(row.pending_requests || 0)
-      const completedTotal = Number(row.completed_total_usd ?? row.completed_total ?? 0)
+      const completedTotal = Number(row.completed_total_kzt ?? row.completed_total ?? 0)
       return `
         <tr>
           <td>${row.email || '—'}</td>
           <td>${pending ? `<span class="dot">${pending}</span>` : '—'}</td>
-          <td>${completedTotal ? `${formatMoney(completedTotal)} USD` : '—'}</td>
+          <td>${completedTotal ? `${formatMoney(completedTotal)} KZT` : '—'}</td>
           <td style="text-align:right;">
-            <button class="btn ghost small" data-client="${row.id}" data-email="${row.email}">Открыть</button>
+            <div class="inline-actions">
+              <button class="btn primary small" data-impersonate="${row.id}" data-email="${row.email || ""}">\u0412\u043e\u0439\u0442\u0438 \u043a\u0430\u043a \u043a\u043b\u0438\u0435\u043d\u0442</button>
+              <button class="btn ghost small" data-client="${row.id}" data-email="${row.email}" data-completed-kzt="${completedTotal}">\u041e\u0442\u043a\u0440\u044b\u0442\u044c</button>
+            </div>
           </td>
         </tr>
       `
@@ -76,13 +79,40 @@ function renderClients(rows) {
     .join('')
 }
 
+async function impersonateClient(userId, email) {
+  try {
+    const res = await fetch(`${apiBase}/admin/users/${userId}/impersonate`, {
+      method: 'POST',
+      headers: authHeadersSafe(),
+    })
+    if (handleAuthFailure(res)) return
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data?.detail || 'impersonation failed')
+    const params = new URLSearchParams({
+      impersonate_token: data.token,
+      impersonate_email: data.email || email || '',
+      impersonate_user_id: String(data.id || userId),
+      impersonation_return: '/admin/clients',
+    })
+    window.open(`/dashboard?${params.toString()}`, '_blank', 'noopener')
+  } catch (e) {
+    if (clientsStatus) clientsStatus.textContent = '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u043e\u0439\u0442\u0438 \u0432 \u043a\u0430\u0431\u0438\u043d\u0435\u0442 \u043a\u043b\u0438\u0435\u043d\u0442\u0430.'
+  }
+}
+
 if (clientsBody) {
   clientsBody.addEventListener('click', async (event) => {
+    const impersonateBtn = event.target.closest('button[data-impersonate]')
+    if (impersonateBtn) {
+      await impersonateClient(impersonateBtn.dataset.impersonate, impersonateBtn.dataset.email)
+      return
+    }
     const btn = event.target.closest('button[data-client]')
     if (!btn) return
     const userId = btn.dataset.client
     const email = btn.dataset.email
-    await openClientModal(userId, email)
+    const completedKzt = btn.dataset.completedKzt ? Number(btn.dataset.completedKzt) : null
+    await openClientModal(userId, email, completedKzt)
   })
 }
 
@@ -98,7 +128,7 @@ if (clientModal) {
   })
 }
 
-async function openClientModal(userId, email) {
+async function openClientModal(userId, email, completedTotalKzt = null) {
   if (!clientModal || !clientTitle) return
   clientTitle.textContent = email || 'Клиент'
   const [requests, topups, walletOps, accounts, profile, fees] = await Promise.all([
@@ -109,7 +139,7 @@ async function openClientModal(userId, email) {
     fetchClientProfile(userId),
     fetchClientFees(userId),
   ])
-  renderClientSummary(userId, email, requests, topups, accounts, profile)
+  renderClientSummary(userId, email, requests, topups, walletOps, accounts, profile, completedTotalKzt)
   renderClientRequests(requests)
   renderClientTopups(topups)
   renderClientWalletOps(walletOps)
@@ -169,22 +199,31 @@ function getTopupAccountAmount(row) {
   return row?.amount_net != null ? Number(row.amount_net) : Number(row?.amount_input || 0)
 }
 
-function getTopupAccountAmountUsd(row) {
-  if (row?.amount_account_usd != null) return Number(row.amount_account_usd)
-  const accountCurrency = String(row?.account_currency || row?.currency || 'USD').toUpperCase()
-  const amount = getTopupAccountAmount(row)
-  if (!Number.isFinite(amount)) return 0
-  if (accountCurrency === 'USD') return amount
-  return 0
+function getTopupAccountDisplayCurrency(row) {
+  const inputCurrency = String(row?.currency || 'KZT').toUpperCase()
+  const accountCurrency = String(row?.account_currency || inputCurrency || 'USD').toUpperCase()
+  const fx = Number(row?.fx_rate || 0)
+  if (inputCurrency !== accountCurrency && !(Number.isFinite(fx) && fx > 0)) return inputCurrency
+  return accountCurrency
 }
 
-function renderClientSummary(userId, email, requests, topups, accounts, profile) {
+function renderClientSummary(userId, email, requests, topups, walletOps, accounts, profile, completedTotalKzt = null) {
   if (!clientSummary) return
   const pendingCount = Array.isArray(requests) ? requests.length : 0
-  const completedTotal = Array.isArray(topups)
+  const topupCompletedTotal = Array.isArray(topups)
     ? topups.reduce((sum, row) => {
-        const value = getTopupAccountAmountUsd(row)
-        return sum + Number(value || 0)
+        const value = Number(row?.amount_input || 0)
+        if (!Number.isFinite(value) || value <= 0) return sum
+        return sum + value
+      }, 0)
+    : 0
+  const completedTotal = Number.isFinite(Number(completedTotalKzt)) && Number(completedTotalKzt) > 0
+    ? Number(completedTotalKzt)
+    : topupCompletedTotal
+  const profitTotal = Array.isArray(topups)
+    ? topups.reduce((sum, row) => {
+        const value = Number(row?.profit_total_kzt || 0)
+        return sum + (Number.isFinite(value) ? value : 0)
       }, 0)
     : 0
   const accountsCount = Array.isArray(accounts) ? accounts.length : 0
@@ -202,13 +241,18 @@ function renderClientSummary(userId, email, requests, topups, accounts, profile)
     </div>
     <div class="stat">
       <p class="muted">Пополнено</p>
-      <h3>${completedTotal ? `${formatMoney(completedTotal)} USD` : '—'}</h3>
-      <p class="muted small">По подтверждённым операциям, в USD</p>
+      <h3>${completedTotal ? `${formatMoney(completedTotal)} KZT` : '—'}</h3>
+      <p class="muted small">По подтверждённым пополнениям (completed), в KZT</p>
     </div>
     <div class="stat">
       <p class="muted">Аккаунты</p>
       <h3>${accountsCount}</h3>
       <p class="muted small">Доступные кабинеты</p>
+    </div>
+    <div class="stat">
+      <p class="muted">Заработок</p>
+      <h3>${profitTotal ? `${formatMoney(profitTotal)} KZT` : '—'}</h3>
+      <p class="muted small">Курс + комиссия</p>
     </div>
   `
   clientSummary.dataset.userId = String(userId)
@@ -222,7 +266,7 @@ function renderClientRequests(rows) {
   }
   clientRequests.innerHTML = rows
     .map((row) => {
-      const accountCurrency = row.account_currency || 'USD'
+      const accountCurrency = getTopupAccountDisplayCurrency(row)
       const amountNet = row.amount_net != null ? Number(row.amount_net) : ''
       const fxRate = row.fx_rate != null ? Number(row.fx_rate) : ''
       return `
@@ -252,13 +296,17 @@ function renderClientRequests(rows) {
 function renderClientTopups(rows) {
   if (!clientTopups) return
   if (!rows || rows.length === 0) {
-    clientTopups.innerHTML = `<tr><td colspan="7" class="muted">Нет подтверждённых пополнений.</td></tr>`
+    clientTopups.innerHTML = `<tr><td colspan="11" class="muted">Нет подтверждённых пополнений.</td></tr>`
     return
   }
   clientTopups.innerHTML = rows
     .map((row) => {
-      const accountCurrency = row.account_currency || 'USD'
+      const accountCurrency = getTopupAccountDisplayCurrency(row)
       const accountAmount = getTopupAccountAmount(row)
+      const ourRate = row.our_rate != null ? formatMoney(Number(row.our_rate || 0)) : '—'
+      const fxProfit = formatMoney(Number(row.fx_profit_kzt || 0))
+      const feeAmount = formatMoney(Number(row.fee_amount_kzt || 0))
+      const totalProfit = formatMoney(Number(row.profit_total_kzt || 0))
       return `
         <tr>
           <td>${formatDate(row.created_at)}</td>
@@ -266,7 +314,11 @@ function renderClientTopups(rows) {
           <td>${row.account_name || '—'}</td>
           <td>${formatMoney(row.amount_input)} ${row.currency || ''}</td>
           <td>${row.fx_rate ?? '—'}</td>
+          <td>${ourRate}</td>
           <td>${accountAmount == null ? '—' : `${formatMoney(accountAmount)} ${accountCurrency}`}</td>
+          <td>${fxProfit} KZT</td>
+          <td>${feeAmount} KZT</td>
+          <td>${totalProfit} KZT</td>
           <td>${row.status || '—'}</td>
         </tr>
       `
@@ -311,11 +363,16 @@ function renderClientWalletOps(rows) {
 
 function formatLiveBillingCell(liveBilling, fallbackCurrency) {
   if (!liveBilling) return '—'
-  if (liveBilling.error) return '<span class="muted small">Ошибка API</span>'
+  if (liveBilling.error) return `<span class="muted small" title="${String(liveBilling.error)}">Ошибка API</span>`
   const currency = liveBilling.currency || fallbackCurrency || ''
   const spend = liveBilling.spend
-  if (spend == null) return '<span class="muted small">Нет данных</span>'
-  return `${formatMoney(spend)} ${currency}`
+  const limit = liveBilling.limit
+  if (spend == null && limit == null) return '<span class="muted small">Нет данных</span>'
+  if (spend != null && limit != null) {
+    return `${formatMoney(spend)} / ${formatMoney(limit)} ${currency}`
+  }
+  if (spend != null) return `${formatMoney(spend)} ${currency}`
+  return `${formatMoney(limit)} ${currency}`
 }
 
 function renderClientAccounts(rows) {
@@ -427,7 +484,11 @@ if (clientRequests) {
       }
       const userId = clientSummary?.dataset.userId
       const email = clientTitle?.textContent || ''
-      if (userId) await openClientModal(userId, email)
+      if (userId) {
+        const row = cachedClients.find((item) => String(item.id) === String(userId))
+        const completedKzt = row ? Number(row.completed_total_kzt ?? row.completed_total ?? 0) : null
+        await openClientModal(userId, email, completedKzt)
+      }
     } catch (e) {
       if (clientsStatus) clientsStatus.textContent = 'Ошибка обновления заявки.'
     }

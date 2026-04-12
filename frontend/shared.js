@@ -1,10 +1,89 @@
-﻿function renderHeader({ eyebrow, title, subtitle, buttons = [] }) {
+const AUTH_KEYS = ['auth_token', 'auth_email', 'auth_user_id']
+
+function getScopedStorage(scope) {
+  return scope === 'session' ? window.sessionStorage : window.localStorage
+}
+
+function getAuthValue(key) {
+  return window.sessionStorage.getItem(key) || window.localStorage.getItem(key) || ''
+}
+
+function setAuthState(values, scope = 'local') {
+  const storage = getScopedStorage(scope)
+  AUTH_KEYS.forEach((key) => {
+    const value = values?.[key]
+    if (value == null || value === '') storage.removeItem(key)
+    else storage.setItem(key, String(value))
+  })
+}
+
+function clearAuthState(scope = 'all') {
+  const targets = scope === 'all' ? [window.sessionStorage, window.localStorage] : [getScopedStorage(scope)]
+  targets.forEach((storage) => AUTH_KEYS.forEach((key) => storage.removeItem(key)))
+}
+
+function isImpersonating() {
+  return window.sessionStorage.getItem('impersonation_active') === '1'
+}
+
+function getImpersonationReturnUrl() {
+  return window.sessionStorage.getItem('impersonation_return') || '/admin/clients'
+}
+
+function clearImpersonationState() {
+  clearAuthState('session')
+  window.sessionStorage.removeItem('impersonation_active')
+  window.sessionStorage.removeItem('impersonation_return')
+  window.sessionStorage.removeItem('impersonation_label')
+}
+
+function logoutCurrentSession() {
+  if (isImpersonating()) {
+    const returnUrl = getImpersonationReturnUrl()
+    clearImpersonationState()
+    window.location.href = returnUrl
+    return
+  }
+  clearAuthState('all')
+  window.location.href = '/login'
+}
+
+function consumeImpersonationFromUrl() {
+  const params = new URLSearchParams(window.location.search)
+  const token = params.get('impersonate_token')
+  if (!token) return
+  setAuthState(
+    {
+      auth_token: token,
+      auth_email: params.get('impersonate_email') || '',
+      auth_user_id: params.get('impersonate_user_id') || '',
+    },
+    'session'
+  )
+  window.sessionStorage.setItem('impersonation_active', '1')
+  window.sessionStorage.setItem('impersonation_return', params.get('impersonation_return') || '/admin/clients')
+  window.sessionStorage.setItem('impersonation_label', params.get('impersonate_email') || '')
+  params.delete('impersonate_token')
+  params.delete('impersonate_email')
+  params.delete('impersonate_user_id')
+  params.delete('impersonation_return')
+  const query = params.toString()
+  const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`
+  window.history.replaceState({}, '', nextUrl)
+}
+
+consumeImpersonationFromUrl()
+
+﻿const TOPUP_MARKUP = 10
+const SIDEBAR_RATES_PLACEHOLDER = 'Курс недоступен'
+
+function renderHeader({ eyebrow, title, subtitle, buttons = [] }) {
   const root = document.getElementById('header-root')
   if (!root) return
   document.body.classList.add('with-sidebar')
   void buttons
-  const email = localStorage.getItem('auth_email') || ''
-  const isAdmin = email === 'romant997@gmail.com' || email === 'kolyadov.denis@gmail.com'
+  const email = getAuthValue('auth_email') || ''
+  const isAdmin = !isImpersonating() && (email === 'romant997@gmail.com' || email === 'kolyadov.denis@gmail.com')
   const navItems = isAdmin
     ? [
         { label: 'Админ · Заявки', href: '/admin/requests' },
@@ -30,7 +109,7 @@
       return `<a class="nav-link ${active}" href="${item.href}">${item.label}</a>`
     })
     .join('')
-  const hasAuth = Boolean(getAuthToken?.() || localStorage.getItem('auth_token'))
+  const hasAuth = Boolean(getAuthToken())
   const authHtml = hasAuth
     ? '<button class="nav-link nav-exit nav-logout" type="button">Выход</button>'
     : '<a class="nav-link" href="/login">Вход</a>'
@@ -41,6 +120,11 @@
         <span>Envidicy</span>
       </div>
       <div class="nav">${navHtml}</div>
+      <div id="sidebar-rates-panel" class="sidebar-rates-panel">
+        <div class="sidebar-rates-title">Курс пополнения</div>
+        <div class="sidebar-rate-row">USD: ${SIDEBAR_RATES_PLACEHOLDER}</div>
+        <div class="sidebar-rate-row">EUR: ${SIDEBAR_RATES_PLACEHOLDER}</div>
+      </div>
       <div class="nav-footer">${authHtml}</div>
     </nav>
     <div class="nav-drawer" id="nav-drawer">
@@ -50,22 +134,28 @@
           <button class="btn ghost small" id="nav-close" type="button">Закрыть</button>
         </div>
         <div class="nav-drawer-links">${navHtml}</div>
+        <div id="drawer-rates-panel" class="sidebar-rates-panel">
+          <div class="sidebar-rates-title">Курс пополнения</div>
+          <div class="sidebar-rate-row">USD: ${SIDEBAR_RATES_PLACEHOLDER}</div>
+          <div class="sidebar-rate-row">EUR: ${SIDEBAR_RATES_PLACEHOLDER}</div>
+        </div>
         <div class="nav-drawer-footer">${authHtml}</div>
       </div>
     </div>
+    ${isImpersonating() ? `<div class="impersonation-banner"><span>\u0412\u044b \u0432\u043e\u0448\u043b\u0438 \u043a\u0430\u043a \u043a\u043b\u0438\u0435\u043d\u0442: ${window.sessionStorage.getItem('impersonation_label') || email || ''}</span><button class="btn ghost small" id="impersonation-exit" type="button">\u0412\u0435\u0440\u043d\u0443\u0442\u044c\u0441\u044f \u0432 \u0430\u0434\u043c\u0438\u043d\u043a\u0443</button></div>` : ''}
     <div class="topbar">
-      <div class="topbar-left">
-        <p class="eyebrow">${eyebrow ?? ''}</p>
-        <h1>${title ?? ''}</h1>
-        <p class="lede">${subtitle ?? ''}</p>
-      </div>
       <div class="topbar-right">
+        ${eyebrow ? `<span class="topbar-context">${eyebrow}</span>` : ''}
         ${isAdmin ? '' : '<div id="header-balance" class="balance-pill">Баланс: —</div>'}
         ${isAdmin ? '' : '<button class="btn primary" id="header-topup" type="button">Пополнить баланс</button>'}
         <div class="header-actions">
           ${isAdmin ? '' : '<button class="icon-circle" id="help-btn" data-tooltip="Помощь">?</button>'}
           <div class="dropdown">
-            <button class="icon-circle" id="bell-btn" title="Уведомления">🔔</button>
+            <button class="icon-circle" id="bell-btn" title="Уведомления" aria-label="Уведомления">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M15 17H9m9-1V11a6 6 0 1 0-12 0v5l-2 2h16l-2-2zM10 20a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
             <span id="bell-count" class="badge" hidden></span>
             <div class="dropdown-menu" id="bell-menu">
               <div class="dropdown-head">Уведомления</div>
@@ -98,14 +188,15 @@
         ${isAdmin ? '' : '<div class="help-popover" id="help-popover"><div class="help-title">Помощь</div><p>Нужна консультация? Оставьте заявку.</p><button class="btn ghost small" id="help-request">Оставить заявку</button></div>'}
       </div>
     </div>
+    <div class="page-heading">
+      <h1>${title ?? ''}</h1>
+      ${subtitle ? `<p class="page-subtitle">${subtitle}</p>` : ''}
+    </div>
   `
   const logoutButtons = Array.from(document.querySelectorAll('.nav-logout'))
   logoutButtons.forEach((btn) => {
     btn.addEventListener('click', () => {
-      localStorage.removeItem('auth_token')
-      localStorage.removeItem('auth_email')
-      localStorage.removeItem('auth_user_id')
-      window.location.href = '/login'
+      logoutCurrentSession()
     })
   })
   const navToggle = document.getElementById('nav-toggle')
@@ -146,13 +237,16 @@
       window.location.href = '/funds#topup'
     })
   }
+  const impersonationExit = document.getElementById('impersonation-exit')
+  if (impersonationExit) {
+    impersonationExit.addEventListener('click', () => {
+      logoutCurrentSession()
+    })
+  }
   const profileLogout = document.getElementById('profile-logout')
   if (profileLogout) {
     profileLogout.addEventListener('click', () => {
-      localStorage.removeItem('auth_token')
-      localStorage.removeItem('auth_email')
-      localStorage.removeItem('auth_user_id')
-      window.location.href = '/login'
+      logoutCurrentSession()
     })
   }
   const helpBtn = document.getElementById('help-btn')
@@ -177,6 +271,7 @@
   bindDropdown('bell-btn', 'bell-menu')
   bindDropdown('profile-btn', 'profile-menu')
   loadWalletBalance()
+  loadSidebarRates()
   loadHeaderProfile()
   loadNotifications(isAdmin)
   if (!isAdmin) {
@@ -191,7 +286,7 @@
 }
 
 function enforceAuth() {
-  const token = localStorage.getItem('auth_token')
+  const token = getAuthToken()
   if (token) return
   const current = location.pathname.split('/').pop()
   if (current === 'login' || current === 'register') return
@@ -199,7 +294,7 @@ function enforceAuth() {
 }
 
 function getAuthToken() {
-  return localStorage.getItem('auth_token')
+  return getAuthValue('auth_token')
 }
 
 function authHeaders() {
@@ -216,7 +311,6 @@ function loadWalletBalance() {
     return
   }
   const apiBase = window.API_BASE || 'https://envidicy-dash-client.onrender.com'
-  const markup = 10
   Promise.all([
     fetch(`${apiBase}/wallet`, { headers: authHeaders() }).then((res) => (res.ok ? res.json() : null)),
     fetch(`${apiBase}/rates/bcc`).then((res) => (res.ok ? res.json() : null)).catch(() => null),
@@ -228,10 +322,12 @@ function loadWalletBalance() {
         minimumFractionDigits: 0,
         maximumFractionDigits: 0,
       })
+      const usdMarked = Number(ratesData?.rates?.USD?.sell_marked)
+      const eurMarked = Number(ratesData?.rates?.EUR?.sell_marked)
       const usdSell = Number(ratesData?.rates?.USD?.sell)
       const eurSell = Number(ratesData?.rates?.EUR?.sell)
-      const usdRate = Number.isFinite(usdSell) ? usdSell + markup : null
-      const eurRate = Number.isFinite(eurSell) ? eurSell + markup : null
+      const usdRate = Number.isFinite(usdMarked) ? usdMarked : Number.isFinite(usdSell) ? usdSell : null
+      const eurRate = Number.isFinite(eurMarked) ? eurMarked : Number.isFinite(eurSell) ? eurSell : null
       const usdText =
         usdRate && usdRate > 0
           ? (balanceKzt / usdRate).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -249,6 +345,47 @@ function loadWalletBalance() {
     .catch(() => {
       el.textContent = 'Баланс: —'
     })
+}
+
+function loadSidebarRates() {
+  const desktopPanel = document.getElementById('sidebar-rates-panel')
+  const mobilePanel = document.getElementById('drawer-rates-panel')
+  if (!desktopPanel && !mobilePanel) return
+  const apiBase = window.API_BASE || 'https://envidicy-dash-client.onrender.com'
+  fetch(`${apiBase}/rates/bcc`)
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      const usdMarked = Number(data?.rates?.USD?.sell_marked)
+      const eurMarked = Number(data?.rates?.EUR?.sell_marked)
+      const usdSell = Number(data?.rates?.USD?.sell)
+      const eurSell = Number(data?.rates?.EUR?.sell)
+      const usdRate = Number.isFinite(usdMarked) ? usdMarked : Number.isFinite(usdSell) ? usdSell : null
+      const eurRate = Number.isFinite(eurMarked) ? eurMarked : Number.isFinite(eurSell) ? eurSell : null
+      applyRatesPanel(desktopPanel, usdRate, eurRate)
+      applyRatesPanel(mobilePanel, usdRate, eurRate)
+    })
+    .catch(() => {
+      applyRatesPanel(desktopPanel, null, null)
+      applyRatesPanel(mobilePanel, null, null)
+    })
+}
+
+function applyRatesPanel(panel, usdRate, eurRate) {
+  if (!panel) return
+  panel.innerHTML = `
+    <div class="sidebar-rates-title">Курс пополнения</div>
+    <div class="sidebar-rate-row">USD: ${formatTopupRate(usdRate, '$')}</div>
+    <div class="sidebar-rate-row">EUR: ${formatTopupRate(eurRate, '€')}</div>
+  `
+}
+
+function formatTopupRate(rate, symbol) {
+  if (!Number.isFinite(rate) || rate <= 0) return SIDEBAR_RATES_PLACEHOLDER
+  const value = Number(rate).toLocaleString('ru-RU', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+  return `1${symbol} = ${value} ₸`
 }
 
 function bindDropdown(triggerId, menuId) {
@@ -338,8 +475,8 @@ async function loadHeaderProfile() {
       avatarEl.textContent = letter || '?'
     }
   } catch (e) {
-    if (emailEl) emailEl.textContent = localStorage.getItem('auth_email') || ''
-    if (menuEmail) menuEmail.textContent = localStorage.getItem('auth_email') || ''
+    if (emailEl) emailEl.textContent = getAuthValue('auth_email') || ''
+    if (menuEmail) menuEmail.textContent = getAuthValue('auth_email') || ''
   }
 }
 
@@ -389,8 +526,8 @@ function formatDate(value) {
 }
 
 function enforceAdminRoutes() {
-  const email = localStorage.getItem('auth_email') || ''
-  const isAdmin = email === 'romant997@gmail.com' || email === 'kolyadov.denis@gmail.com'
+  const email = getAuthValue('auth_email') || ''
+  const isAdmin = !isImpersonating() && (email === 'romant997@gmail.com' || email === 'kolyadov.denis@gmail.com')
   const path = location.pathname
   const blocked = ['/admin/accounts', '/admin/topups']
   if (!blocked.includes(path)) return

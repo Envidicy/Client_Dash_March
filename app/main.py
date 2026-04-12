@@ -1,7 +1,8 @@
-﻿from datetime import date, datetime
+﻿from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Dict, List, Literal, Optional, Tuple
 from enum import Enum
+import calendar
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Form, Request
 import logging
@@ -19,6 +20,7 @@ import hashlib
 import hmac
 import secrets
 import json
+import html
 import os
 import shutil
 import httpx
@@ -36,9 +38,18 @@ _R2_CLIENT = None
 _BCC_RATES_CACHE = {"ts": 0.0, "data": None}
 _BCC_RATES_TTL_SEC = 900
 _BCC_TOKEN_CACHE = {"token": None, "expires_at": 0.0}
-_BCC_DEFAULT_MARKUP = float(os.getenv("BCC_DEFAULT_MARKUP", "10") or 10)
+_BCC_DEFAULT_MARKUP_PERCENT = float(os.getenv("BCC_DEFAULT_MARKUP_PERCENT", "5") or 5)
 _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
+_ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
+_ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC = int(os.getenv("ASSISTANT_GLOBAL_CACHE_TTL_SEC", "3600") or 3600)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _default_fee_config() -> Dict[str, Optional[float]]:
@@ -129,6 +140,32 @@ def _r2_upload_bytes(key: str, data: bytes, content_type: str = "application/pdf
     return f"r2://{bucket_name}/{key}"
 
 
+def _r2_delete_object(key: str, bucket: Optional[str] = None) -> None:
+    client = _r2_client()
+    if not client:
+        return
+    bucket_name = bucket or _r2_bucket()
+    client.delete_object(Bucket=bucket_name, Key=key)
+
+
+def _delete_stored_file(file_path: Optional[str]) -> None:
+    if not file_path:
+        return
+    r2_ref = _r2_parse_path(file_path)
+    if r2_ref:
+        bucket, key = r2_ref
+        try:
+            _r2_delete_object(key, bucket=bucket)
+        except Exception:
+            logging.exception("Failed to delete R2 file: %s", file_path)
+        return
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception:
+        logging.exception("Failed to delete local file: %s", file_path)
+
+
 def _fetch_bcc_rates() -> Dict[str, object]:
     now = time.time()
     cached = _BCC_RATES_CACHE.get("data")
@@ -177,10 +214,29 @@ def _fetch_bcc_rates() -> Dict[str, object]:
         raise HTTPException(status_code=502, detail="Failed to fetch BCC rates from API")
 
     payload = resp.json()
-    rates_list = payload.get("Rates") if isinstance(payload, dict) else None
-    if rates_list is None and isinstance(payload, list):
-        rates_list = payload
+
+    def _extract_rates_list(raw: object) -> Optional[List[Dict[str, object]]]:
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        if not isinstance(raw, dict):
+            return None
+        candidates = [
+            raw.get("Rates"),
+            raw.get("rates"),
+            (raw.get("data") or {}).get("Rates") if isinstance(raw.get("data"), dict) else None,
+            (raw.get("data") or {}).get("rates") if isinstance(raw.get("data"), dict) else None,
+            (raw.get("result") or {}).get("Rates") if isinstance(raw.get("result"), dict) else None,
+            (raw.get("result") or {}).get("rates") if isinstance(raw.get("result"), dict) else None,
+        ]
+        for candidate in candidates:
+            if isinstance(candidate, list):
+                return [item for item in candidate if isinstance(item, dict)]
+        return None
+
+    rates_list = _extract_rates_list(payload)
     if not isinstance(rates_list, list):
+        if isinstance(payload, dict):
+            logging.error("Unexpected BCC payload keys: %s", list(payload.keys()))
         raise HTTPException(status_code=502, detail="Unexpected BCC rates payload")
 
     rates: Dict[str, Optional[Dict[str, float]]] = {"USD": None, "EUR": None}
@@ -188,18 +244,23 @@ def _fetch_bcc_rates() -> Dict[str, object]:
     for item in rates_list:
         if not isinstance(item, dict):
             continue
-        code = str(item.get("currency") or "").upper()
+        code = str(item.get("currency") or item.get("currencyCode") or item.get("code") or "").upper()
         if code not in rates:
             continue
         purchase = item.get("purchase")
+        if purchase is None:
+            purchase = item.get("buy")
         sell = item.get("sell")
+        if sell is None:
+            sell = item.get("sale")
         try:
             buy_value = float(purchase) if purchase is not None else None
             sell_value = float(sell) if sell is not None else None
         except (TypeError, ValueError):
             continue
-        rates[code] = {"sell": sell_value, "buy": buy_value}
-        dt = item.get("dateTime")
+        marked_sell_value = sell_value * (1 + (_BCC_DEFAULT_MARKUP_PERCENT / 100.0)) if sell_value is not None else None
+        rates[code] = {"sell": sell_value, "sell_marked": marked_sell_value, "buy": buy_value}
+        dt = item.get("dateTime") or item.get("datetime") or item.get("date")
         if isinstance(dt, str) and dt:
             if updated_at is None or dt > updated_at:
                 updated_at = dt
@@ -208,6 +269,7 @@ def _fetch_bcc_rates() -> Dict[str, object]:
         "source": "bcc_api",
         "section": "public",
         "url": rates_url,
+        "markup_percent": _BCC_DEFAULT_MARKUP_PERCENT,
         "rates": rates,
         "fetched_at": datetime.utcnow().isoformat() + "Z",
         "dateTime": updated_at,
@@ -221,7 +283,10 @@ def _get_marked_bcc_sell_rate(code: str, rates_data: Optional[Dict[str, object]]
     code_upper = str(code or "").upper()
     if not code_upper:
         return None
-    rates_payload = rates_data or _fetch_bcc_rates()
+    try:
+        rates_payload = rates_data or _fetch_bcc_rates()
+    except Exception:
+        return None
     rates = rates_payload.get("rates") if isinstance(rates_payload, dict) else None
     if not isinstance(rates, dict):
         return None
@@ -235,7 +300,14 @@ def _get_marked_bcc_sell_rate(code: str, rates_data: Optional[Dict[str, object]]
         return None
     if sell_value is None:
         return None
-    return sell_value + _BCC_DEFAULT_MARKUP
+    marked_sell = entry.get("sell_marked")
+    try:
+        marked_sell_value = float(marked_sell) if marked_sell is not None else None
+    except (TypeError, ValueError):
+        marked_sell_value = None
+    if marked_sell_value is not None:
+        return marked_sell_value
+    return sell_value * (1 + (_BCC_DEFAULT_MARKUP_PERCENT / 100.0))
 
 
 def _convert_amount_to_usd(amount: object, currency: object, rates_data: Optional[Dict[str, object]] = None) -> Optional[float]:
@@ -262,6 +334,33 @@ def _convert_amount_to_usd(amount: object, currency: object, rates_data: Optiona
         if not eur_rate or eur_rate <= 0:
             return None
         return (value * eur_rate) / usd_rate
+
+    return None
+
+
+def _convert_amount_to_kzt(amount: object, currency: object, rates_data: Optional[Dict[str, object]] = None) -> Optional[float]:
+    try:
+        value = float(amount) if amount is not None else None
+    except (TypeError, ValueError):
+        return None
+    if value is None:
+        return None
+
+    code = str(currency or "KZT").upper()
+    if code == "KZT":
+        return value
+
+    if code == "USD":
+        usd_rate = _get_marked_bcc_sell_rate("USD", rates_data)
+        if not usd_rate or usd_rate <= 0:
+            return None
+        return value * usd_rate
+
+    if code == "EUR":
+        eur_rate = _get_marked_bcc_sell_rate("EUR", rates_data)
+        if not eur_rate or eur_rate <= 0:
+            return None
+        return value * eur_rate
 
     return None
 
@@ -470,6 +569,25 @@ class PlanRequest(BaseModel):
     monthly_platforms: Optional[List[List[PlatformKey]]] = Field(
         None, description="Per-month allowed platforms; index 0 = month1. Missing -> all platforms on."
     )
+
+
+class PlanAssistantResponse(BaseModel):
+    source: Literal["llm", "fallback"]
+    assumption_profile: Literal["base", "conservative", "aggressive"]
+    funnel_split: Dict[str, float]
+    channel_inputs: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    assumptions: Dict[str, str]
+    rationale: str = ""
+    recommendations: List[str]
+    confidence: float = Field(0.6, ge=0, le=1)
+    budget_split: Dict[str, float] = Field(default_factory=dict)
+    facts_used: bool = False
+    facts_period: Optional[str] = None
+    facts_totals: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    global_facts_used: bool = False
+    global_facts_period: Optional[str] = None
+    global_facts_totals: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    global_facts_debug: Dict[str, object] = Field(default_factory=dict)
 
 
 rate_cards: Dict[PlatformKey, RateCard] = {
@@ -1057,7 +1175,13 @@ def build_plan(req: PlanRequest) -> PlanResponse:
     smart_rationale: Dict[PlatformKey, str] = {}
     if plan_mode == "smart":
         platforms, split, rationale = smart_media_mix(req.goal, req.business_type)
-        active_keys = platforms
+        active_keys = list(platforms)
+        # If assistant/user provides explicit split, include those channels in smart mode too.
+        if req.budget_split:
+            explicit_keys = [str(k) for k, v in req.budget_split.items() if float(v or 0) > 0]
+            for key in explicit_keys:
+                if key in rate_cards and key not in active_keys:
+                    active_keys.append(key)
         smart_split = split
         smart_rationale = rationale
     else:
@@ -1105,7 +1229,8 @@ def build_plan(req: PlanRequest) -> PlanResponse:
         manual_total = sum(req.budget_split.values())
         if manual_total > 0:
             manual_split = {k: v / manual_total for k, v in req.budget_split.items()}
-    if smart_split:
+    # Smart preset is used only when there is no explicit split from assistant/user.
+    if smart_split and manual_split is None:
         manual_split = smart_split
 
     lines: List[PlanLine] = []
@@ -1173,6 +1298,781 @@ def build_plan(req: PlanRequest) -> PlanResponse:
         period_days=effective_period,
         planned_kpi=planned_kpi,
         fact_weekly=None,
+    )
+
+
+def _assistant_choose_profile(req: PlanRequest) -> Literal["base", "conservative", "aggressive"]:
+    goal = str(req.goal or "").lower()
+    budget = float(req.budget or 0)
+    if goal == "reach":
+        return "conservative"
+    if goal == "traffic":
+        return "aggressive" if budget < 5000 else "base"
+    if goal in {"conversions", "sales"}:
+        return "aggressive" if budget < 4000 else "base"
+    return "base"
+
+
+def _assistant_default_funnel(req: PlanRequest) -> Dict[str, float]:
+    goal = str(req.goal or "").lower()
+    if goal == "reach":
+        return {"awareness": 55.0, "consideration": 30.0, "performance": 15.0}
+    if goal == "traffic":
+        return {"awareness": 35.0, "consideration": 40.0, "performance": 25.0}
+    if goal in {"conversions", "sales"}:
+        return {"awareness": 20.0, "consideration": 30.0, "performance": 50.0}
+    return {"awareness": 25.0, "consideration": 35.0, "performance": 40.0}
+
+
+def _assistant_default_assumptions() -> Dict[str, str]:
+    return {
+        "benchmarks": "Historical Envidicy benchmarks",
+        "history": "Client campaign history",
+        "methodology": "Weighted mix by objective and benchmark efficiency",
+        "recalc": "Recalculate after 7 days using first factual spend and CTR/CPC",
+    }
+
+
+def _normalize_funnel(raw: Optional[Dict[str, object]], fallback: Dict[str, float]) -> Dict[str, float]:
+    if not isinstance(raw, dict):
+        return fallback
+    vals: Dict[str, float] = {}
+    for key in ("awareness", "consideration", "performance"):
+        value = raw.get(key)
+        try:
+            vals[key] = max(0.0, float(value))
+        except Exception:
+            vals[key] = 0.0
+    total = sum(vals.values())
+    if total <= 0:
+        return fallback
+    return {k: round((v / total) * 100.0, 2) for k, v in vals.items()}
+
+
+def _normalize_split_map(split: Dict[str, float]) -> Dict[str, float]:
+    cleaned: Dict[str, float] = {}
+    for k, v in split.items():
+        try:
+            num = max(0.0, float(v))
+        except Exception:
+            num = 0.0
+        cleaned[str(k)] = num
+    total = sum(cleaned.values())
+    if total <= 0:
+        return cleaned
+    return {k: round((v / total) * 100.0, 2) for k, v in cleaned.items()}
+
+
+def _extract_platform_facts(context: Optional[Dict[str, object]]) -> Tuple[Dict[str, Dict[str, float]], Optional[str], bool]:
+    facts_totals: Dict[str, Dict[str, float]] = {}
+    facts_period: Optional[str] = None
+    facts_used = False
+    if isinstance(context, dict):
+        totals_raw = context.get("totals")
+        if isinstance(totals_raw, dict):
+            for platform in ("meta", "google", "tiktok"):
+                row = totals_raw.get(platform) if isinstance(totals_raw, dict) else None
+                if isinstance(row, dict):
+                    facts_totals[platform] = {
+                        "spend": float(row.get("spend") or 0.0),
+                        "impressions": float(row.get("impressions") or 0.0),
+                        "clicks": float(row.get("clicks") or 0.0),
+                    }
+            facts_used = any((v.get("spend", 0.0) > 0 for v in facts_totals.values()))
+        date_from = context.get("date_from")
+        date_to = context.get("date_to")
+        if date_from and date_to:
+            facts_period = f"{date_from} — {date_to}"
+    return facts_totals, facts_period, facts_used
+
+
+def _blend_platform_scores(
+    client_facts: Dict[str, Dict[str, float]],
+    global_facts: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    client_clicks = sum(float(v.get("clicks") or 0.0) for v in client_facts.values())
+    global_clicks = sum(float(v.get("clicks") or 0.0) for v in global_facts.values())
+    if client_clicks <= 0 and global_clicks <= 0:
+        return {}
+    if client_clicks <= 0:
+        w_client = 0.0
+    else:
+        w_client = max(0.2, min(0.75, client_clicks / max(client_clicks + global_clicks, 1e-9)))
+    w_global = 1.0 - w_client
+
+    scores: Dict[str, float] = {}
+    for platform in ("meta", "google", "tiktok"):
+        c = client_facts.get(platform, {})
+        g = global_facts.get(platform, {})
+        c_spend = float(c.get("spend") or 0.0)
+        c_clicks = float(c.get("clicks") or 0.0)
+        g_spend = float(g.get("spend") or 0.0)
+        g_clicks = float(g.get("clicks") or 0.0)
+        c_score = (c_clicks / max(c_spend, 1e-9)) if (c_spend > 0 and c_clicks > 0) else 0.0
+        g_score = (g_clicks / max(g_spend, 1e-9)) if (g_spend > 0 and g_clicks > 0) else 0.0
+        score = (w_client * c_score) + (w_global * g_score)
+        if score > 0:
+            scores[platform] = score
+    return scores
+
+
+def _fallback_platform_share_from_spend(
+    client_facts: Dict[str, Dict[str, float]],
+    global_facts: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    spend_by_platform: Dict[str, float] = {}
+    for platform in ("meta", "google", "tiktok"):
+        c_spend = float((client_facts.get(platform) or {}).get("spend") or 0.0)
+        g_spend = float((global_facts.get(platform) or {}).get("spend") or 0.0)
+        # Prefer client facts; global is supportive prior only.
+        spend = c_spend + (0.4 * g_spend)
+        if spend > 0:
+            spend_by_platform[platform] = spend
+    total = sum(spend_by_platform.values())
+    if total <= 0:
+        return {}
+    return {k: (v / total) for k, v in spend_by_platform.items()}
+
+
+def _parse_iso_date(value: str) -> date:
+    return datetime.strptime(value, "%Y-%m-%d").date()
+
+
+def _shift_months(base: date, delta_months: int) -> date:
+    month_index = (base.month - 1) + delta_months
+    year = base.year + (month_index // 12)
+    month = (month_index % 12) + 1
+    day = min(base.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _meta_safe_date_from(date_from: str) -> str:
+    # Meta rejects ranges where start date is older than ~37 months.
+    start = _parse_iso_date(date_from)
+    min_allowed = _shift_months(date.today(), -37)
+    if start < min_allowed:
+        return min_allowed.isoformat()
+    return date_from
+
+
+def _date_chunks(date_from: str, date_to: str, max_days: int) -> List[Tuple[str, str]]:
+    start = _parse_iso_date(date_from)
+    end = _parse_iso_date(date_to)
+    if start > end:
+        return []
+    chunks: List[Tuple[str, str]] = []
+    cur = start
+    while cur <= end:
+        chunk_end = min(cur + timedelta(days=max_days - 1), end)
+        chunks.append((cur.isoformat(), chunk_end.isoformat()))
+        cur = chunk_end + timedelta(days=1)
+    return chunks
+
+
+_ASSISTANT_CHANNEL_GROUPS: Dict[str, List[str]] = {
+    "meta": ["meta"],
+    "google": [
+        "google_display_cpm",
+        "google_display_cpc",
+        "google_search",
+        "google_shopping",
+        "youtube",
+        "youtube_6s",
+        "youtube_15s",
+        "youtube_30s",
+    ],
+    "tiktok": ["tiktok"],
+    "telegram": ["telegrad_channels", "telegrad_users", "telegrad_bots", "telegrad_search"],
+    "yandex": ["yandex_search", "yandex_display"],
+}
+
+
+def _assistant_default_channel_inputs(profile: str) -> Dict[str, Dict[str, float]]:
+    base = {
+        "meta": {"cpm": 2.1, "ctr": 0.013, "cvr": 0.016},
+        "google_search": {"cpc": 0.55, "cvr": 0.028},
+        "tiktok": {"cpm": 2.0, "ctr": 0.012, "cvr": 0.014},
+        "telegrad_channels": {"cpm": 3.2, "ctr": 0.01},
+        "yandex_search": {"cpc": 0.48, "cvr": 0.024},
+    }
+    if profile == "conservative":
+        return {
+            "meta": {"cpm": 2.5, "ctr": 0.010, "cvr": 0.012},
+            "google_search": {"cpc": 0.7, "cvr": 0.02},
+            "tiktok": {"cpm": 2.5, "ctr": 0.009, "cvr": 0.011},
+            "telegrad_channels": {"cpm": 3.8, "ctr": 0.008},
+            "yandex_search": {"cpc": 0.6, "cvr": 0.019},
+        }
+    if profile == "aggressive":
+        return {
+            "meta": {"cpm": 1.8, "ctr": 0.016, "cvr": 0.02},
+            "google_search": {"cpc": 0.45, "cvr": 0.035},
+            "tiktok": {"cpm": 1.7, "ctr": 0.015, "cvr": 0.017},
+            "telegrad_channels": {"cpm": 2.8, "ctr": 0.012},
+            "yandex_search": {"cpc": 0.42, "cvr": 0.03},
+        }
+    return base
+
+
+def _assistant_derive_channel_shares(
+    req: PlanRequest,
+    overview_context: Optional[Dict[str, object]],
+    global_overview_context: Optional[Dict[str, object]],
+) -> Dict[str, float]:
+    active_keys = set(req.platforms or list(rate_cards.keys()))
+    channels: List[str] = []
+    for channel, keys in _ASSISTANT_CHANNEL_GROUPS.items():
+        if any(k in active_keys for k in keys):
+            channels.append(channel)
+    if not channels:
+        channels = ["meta", "google", "tiktok"]
+
+    facts_totals, _, _ = _extract_platform_facts(overview_context)
+    global_totals, _, _ = _extract_platform_facts(global_overview_context)
+    spend: Dict[str, float] = {c: 0.0 for c in channels}
+    for channel in channels:
+        if channel in {"meta", "google", "tiktok"}:
+            spend[channel] += float((facts_totals.get(channel) or {}).get("spend", 0.0))
+            spend[channel] += float((global_totals.get(channel) or {}).get("spend", 0.0)) * 0.7
+    total_spend = sum(spend.values())
+    if total_spend > 0:
+        return {k: (v / total_spend) * 100.0 for k, v in spend.items()}
+
+    equal = 100.0 / max(len(channels), 1)
+    return {k: equal for k in channels}
+
+
+def _assistant_build_constraints(
+    req: PlanRequest,
+    overview_context: Optional[Dict[str, object]],
+    global_overview_context: Optional[Dict[str, object]],
+) -> Dict[str, object]:
+    channel_shares = _assistant_derive_channel_shares(req, overview_context, global_overview_context)
+    min_split: Dict[str, float] = {}
+    max_split: Dict[str, float] = {}
+    for channel, share in channel_shares.items():
+        min_split[channel] = round(max(0.0, share - 20.0), 2)
+        max_split[channel] = round(min(100.0, share + 20.0), 2)
+
+    active_channels = list(channel_shares.keys())
+    confidence_min = float(os.getenv("ASSISTANT_MIN_CONFIDENCE", "0.55"))
+    return {
+        "allowed_channels": active_channels,
+        "budget_split": {
+            "sum": 100.0,
+            "min": min_split,
+            "max": max_split,
+        },
+        "channel_inputs_bounds": {
+            "cpm": {"min": 0.3, "max": 30.0},
+            "cpc": {"min": 0.03, "max": 10.0},
+            "cvr": {"min": 0.001, "max": 0.5},
+            "ctr": {"min": 0.001, "max": 0.3},
+            "cpv": {"min": 0.001, "max": 3.0},
+            "post_click": {"min": 0.01, "max": 0.8},
+        },
+        "confidence_min": confidence_min,
+    }
+
+
+def _assistant_normalize_and_clamp_split(
+    raw_split: Optional[Dict[str, object]],
+    constraints: Dict[str, object],
+    baseline: PlanResponse,
+) -> Dict[str, float]:
+    # Convert channel-level split into plan line-level split that build_plan understands.
+    min_cfg = ((constraints.get("budget_split") or {}).get("min") or {}) if isinstance(constraints, dict) else {}
+    max_cfg = ((constraints.get("budget_split") or {}).get("max") or {}) if isinstance(constraints, dict) else {}
+    channels = constraints.get("allowed_channels") if isinstance(constraints, dict) else []
+    allowed_channels = [str(x) for x in channels] if isinstance(channels, list) else ["meta", "google", "tiktok"]
+
+    parsed_channel: Dict[str, float] = {}
+    if isinstance(raw_split, dict):
+        for k, v in raw_split.items():
+            key = str(k).strip().lower()
+            try:
+                value = float(v)
+            except Exception:
+                continue
+            if key in allowed_channels:
+                parsed_channel[key] = max(0.0, value)
+
+    if not parsed_channel:
+        baseline_split = {str(line.key): float(line.share) * 100.0 for line in baseline.lines}
+        return _normalize_split_map(baseline_split)
+
+    clamped_channel: Dict[str, float] = {}
+    for channel, value in parsed_channel.items():
+        min_v = float(min_cfg.get(channel, 0.0)) if isinstance(min_cfg, dict) else 0.0
+        max_v = float(max_cfg.get(channel, 100.0)) if isinstance(max_cfg, dict) else 100.0
+        clamped_channel[channel] = min(max(value, min_v), max_v)
+    ch_total = sum(clamped_channel.values())
+    if ch_total <= 0:
+        baseline_split = {str(line.key): float(line.share) * 100.0 for line in baseline.lines}
+        return _normalize_split_map(baseline_split)
+    clamped_channel = {k: (v / ch_total) * 100.0 for k, v in clamped_channel.items()}
+
+    baseline_line = {str(line.key): float(line.share) for line in baseline.lines}
+    result: Dict[str, float] = {}
+    for channel, channel_pct in clamped_channel.items():
+        keys = _ASSISTANT_CHANNEL_GROUPS.get(channel, [])
+        line_keys = [k for k in keys if k in baseline_line]
+        if not line_keys:
+            continue
+        base_total = sum(baseline_line[k] for k in line_keys)
+        if base_total <= 0:
+            even = channel_pct / max(len(line_keys), 1)
+            for lk in line_keys:
+                result[lk] = even
+            continue
+        for lk in line_keys:
+            result[lk] = channel_pct * (baseline_line[lk] / base_total)
+
+    if not result:
+        baseline_split = {str(line.key): float(line.share) * 100.0 for line in baseline.lines}
+        return _normalize_split_map(baseline_split)
+    return _normalize_split_map(result)
+
+
+def _assistant_validate_channel_inputs(
+    raw_inputs: Optional[Dict[str, object]],
+    constraints: Dict[str, object],
+    fallback: Dict[str, Dict[str, float]],
+) -> Dict[str, Dict[str, float]]:
+    bounds = constraints.get("channel_inputs_bounds") if isinstance(constraints, dict) else {}
+    if not isinstance(raw_inputs, dict):
+        return fallback
+    out: Dict[str, Dict[str, float]] = {}
+    for channel, metrics in raw_inputs.items():
+        c_key = str(channel).strip()
+        if not isinstance(metrics, dict):
+            continue
+        metric_values: Dict[str, float] = {}
+        for metric_key, metric_val in metrics.items():
+            m_key = str(metric_key).strip().lower()
+            if not isinstance(bounds, dict) or m_key not in bounds or not isinstance(bounds.get(m_key), dict):
+                continue
+            try:
+                val = float(metric_val)
+            except Exception:
+                continue
+            b = bounds[m_key]
+            min_v = float((b or {}).get("min", val))
+            max_v = float((b or {}).get("max", val))
+            metric_values[m_key] = round(min(max(val, min_v), max_v), 6)
+        if metric_values:
+            out[c_key] = metric_values
+    return out or fallback
+
+
+def _assistant_take_llm_channel_inputs(raw_inputs: Optional[Dict[str, object]]) -> Dict[str, Dict[str, float]]:
+    if not isinstance(raw_inputs, dict):
+        return {}
+    out: Dict[str, Dict[str, float]] = {}
+    allowed_metrics = {"cpm", "cpc", "cvr", "ctr", "cpv", "post_click"}
+    for channel, metrics in raw_inputs.items():
+        if not isinstance(metrics, dict):
+            continue
+        c_key = str(channel).strip()
+        parsed: Dict[str, float] = {}
+        for mk, mv in metrics.items():
+            m_key = str(mk).strip().lower()
+            if m_key not in allowed_metrics:
+                continue
+            try:
+                val = float(mv)
+            except Exception:
+                continue
+            if val > 0:
+                parsed[m_key] = round(val, 6)
+        if parsed:
+            out[c_key] = parsed
+    return out
+
+
+def _assistant_compact_overview_for_llm(
+    context: Optional[Dict[str, object]],
+) -> Dict[str, object]:
+    if not isinstance(context, dict):
+        return {}
+    totals = context.get("totals") if isinstance(context.get("totals"), dict) else {}
+    compact_totals: Dict[str, Dict[str, float]] = {}
+    for platform in ("meta", "google", "tiktok"):
+        row = totals.get(platform) if isinstance(totals, dict) else None
+        if not isinstance(row, dict):
+            continue
+        spend = float(row.get("spend") or 0.0)
+        impressions = float(row.get("impressions") or 0.0)
+        clicks = float(row.get("clicks") or 0.0)
+        cpm = (spend / impressions * 1000.0) if impressions > 0 else 0.0
+        cpc = (spend / clicks) if clicks > 0 else 0.0
+        ctr = (clicks / impressions) if impressions > 0 else 0.0
+        compact_totals[platform] = {
+            "spend": round(spend, 2),
+            "impressions": round(impressions, 2),
+            "clicks": round(clicks, 2),
+            "cpm": round(cpm, 4),
+            "cpc": round(cpc, 4),
+            "ctr": round(ctr, 6),
+        }
+    return {
+        "date_from": context.get("date_from"),
+        "date_to": context.get("date_to"),
+        "totals": compact_totals,
+    }
+
+
+def _assistant_min_request_for_llm(req: PlanRequest) -> Dict[str, object]:
+    return {
+        "goal": req.goal,
+        "budget": req.budget,
+        "currency": req.currency,
+        "period_days": req.period_days,
+        "date_start": req.date_start.isoformat() if req.date_start else None,
+        "date_end": req.date_end.isoformat() if req.date_end else None,
+        "country": req.country,
+        "industry": req.industry,
+        "business_type": req.business_type,
+        "plan_mode": req.plan_mode,
+        "platforms": req.platforms or [],
+    }
+
+
+def _assistant_parse_llm_json(content: str) -> Optional[Dict[str, object]]:
+    text = (content or "").strip()
+    if not text:
+        return None
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+    # Fallback: try first JSON object boundaries.
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(text[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _assistant_call_llm(
+    req: PlanRequest,
+    constraints: Dict[str, object],
+    overview_context: Optional[Dict[str, object]] = None,
+    global_overview_context: Optional[Dict[str, object]] = None,
+) -> Optional[Dict[str, object]]:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    max_tokens = int(os.getenv("ASSISTANT_LLM_MAX_TOKENS", "280") or 280)
+    max_tokens_cap = int(os.getenv("ASSISTANT_LLM_MAX_TOKENS_CAP", "600") or 600)
+    max_retries = max(1, int(os.getenv("ASSISTANT_LLM_MAX_RETRIES", "2") or 2))
+    retry_backoff = float(os.getenv("ASSISTANT_LLM_RETRY_BACKOFF_SEC", "1.5") or 1.5)
+    system_prompt = (
+        "You are a principal digital media strategist with 20+ years of hands-on performance planning experience "
+        "across Meta, Google, TikTok, Telegram, and Yandex in CIS markets. "
+        "Your task is to produce an actionable media-plan draft, not generic advice.\n\n"
+        "Decision policy (strict):\n"
+        "1) Data priority:\n"
+        "   - First: connected_accounts_overview.totals (client facts).\n"
+        "   - Second: global_anonymized_overview.totals (market prior).\n"
+        "   - Third: conservative assumptions from constraints and request context.\n"
+        "2) Objective alignment:\n"
+        "   - leads/conversions/sales -> prioritize high-intent/performance mix but keep test allocation.\n"
+        "   - traffic -> balance click efficiency and scalable reach.\n"
+        "   - reach -> prioritize CPM efficiency and scale, keep minimum performance coverage.\n"
+        "3) Diversification & risk control:\n"
+        "   - Avoid single-channel concentration unless constraints force it.\n"
+        "   - If data is sparse or uncertain, allocate controlled test shares to secondary channels.\n"
+        "   - Do not zero-out channels solely due to weak history if they are allowed; keep small testing share when feasible.\n"
+        "4) Constraints are mandatory:\n"
+        "   - Respect allowed channels.\n"
+        "   - Respect min/max bounds from constraints.\n"
+        "   - Keep total split = 100.\n"
+        "5) Practical channel_inputs:\n"
+        "   - Return realistic planning inputs (CPM/CPC/CVR/CTR etc.) per channel.\n"
+        "   - Use conservative but actionable values if data quality is low.\n"
+        "6) Confidence scoring:\n"
+        "   - Higher confidence when client facts are rich and consistent.\n"
+        "   - Lower confidence when major platforms are missing/erroring.\n\n"
+        "Output contract (strict JSON only, no markdown):\n"
+        "{\n"
+        "  \"budget_split\": {\"meta\": number, \"google\": number, \"tiktok\": number, \"telegram\": number, \"yandex\": number},\n"
+        "  \"channel_inputs\": {\"channel_key\": {\"cpm\": number, \"cpc\": number, \"ctr\": number, \"cvr\": number, \"cpv\": number, \"post_click\": number}},\n"
+        "  \"confidence\": number,\n"
+        "  \"rationale\": \"short but specific Russian explanation with data-based reasoning\"\n"
+        "}\n"
+        "Only include channels that are allowed and relevant. "
+        "Do not include any extra keys. "
+        "Do not include prose outside JSON."
+    )
+    compact_user_overview = _assistant_compact_overview_for_llm(overview_context)
+    compact_global_overview = _assistant_compact_overview_for_llm(global_overview_context)
+    user_payload = {
+        "request": _assistant_min_request_for_llm(req),
+        "connected_accounts_overview": compact_user_overview,
+        "global_anonymized_overview": compact_global_overview,
+        "constraints": constraints,
+    }
+    attempt_payload = user_payload
+    for attempt in range(1, max_retries + 1):
+        body = {
+            "model": model,
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(attempt_payload, ensure_ascii=False)},
+            ],
+        }
+        try:
+            with httpx.Client(timeout=20.0) as client:
+                resp = client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=body,
+                )
+            if resp.status_code < 300:
+                data = resp.json()
+                choice = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                finish_reason = (choice or {}).get("finish_reason")
+                content = (
+                    choice
+                    .get("message", {})
+                    .get("content", "")
+                )
+                if not content:
+                    return None
+                parsed = _assistant_parse_llm_json(content)
+                if isinstance(parsed, dict):
+                    return parsed
+                if finish_reason == "length" and max_tokens < max_tokens_cap and attempt < max_retries:
+                    max_tokens = min(max_tokens_cap, max_tokens * 2)
+                    time.sleep(0.25)
+                    continue
+                logging.warning("LLM assistant JSON parse failed (finish_reason=%s)", finish_reason)
+                return None
+
+            text_preview = resp.text[:600]
+            logging.warning("LLM assistant request failed: %s %s", resp.status_code, text_preview[:300])
+            is_429 = resp.status_code == 429
+            too_large = "Request too large" in text_preview or "tokens per min" in text_preview
+            if not is_429 or attempt >= max_retries:
+                return None
+            # Retry with degraded context when hitting rate/size limits.
+            if too_large:
+                attempt_payload = {
+                    "request": _assistant_min_request_for_llm(req),
+                    "connected_accounts_overview": _assistant_compact_overview_for_llm(overview_context),
+                    "global_anonymized_overview": {"totals": (compact_global_overview.get("totals") if isinstance(compact_global_overview, dict) else {})},
+                    "constraints": constraints,
+                }
+            time.sleep(retry_backoff * attempt)
+            continue
+        except Exception as exc:
+            logging.warning("LLM assistant error: %s", exc)
+            if attempt >= max_retries:
+                return None
+            time.sleep(retry_backoff * attempt)
+            continue
+    return None
+
+
+def _build_assistant_response(
+    req: PlanRequest,
+    baseline: PlanResponse,
+    constraints: Dict[str, object],
+    llm_data: Optional[Dict[str, object]] = None,
+    overview_context: Optional[Dict[str, object]] = None,
+    global_overview_context: Optional[Dict[str, object]] = None,
+) -> PlanAssistantResponse:
+    llm_full_control = _env_flag("ASSISTANT_LLM_FULL_CONTROL", False)
+    llm_blend_with_facts = _env_flag("ASSISTANT_LLM_BLEND_WITH_FACTS", False)
+    fallback_profile = _assistant_choose_profile(req)
+    fallback_funnel = _assistant_default_funnel(req)
+    fallback_assumptions = _assistant_default_assumptions()
+    fallback_channel_inputs = _assistant_default_channel_inputs(fallback_profile)
+    source: Literal["llm", "fallback"] = "fallback"
+
+    profile: Literal["base", "conservative", "aggressive"] = fallback_profile
+    funnel = fallback_funnel
+    channel_inputs = fallback_channel_inputs
+    assumptions = fallback_assumptions
+    recommendations: List[str] = []
+    rationale = ""
+    confidence = 0.6
+    confidence_min = float(constraints.get("confidence_min", 0.55)) if isinstance(constraints, dict) else 0.55
+    budget_split = {line.key: round(float(line.share) * 100.0, 2) for line in baseline.lines}
+
+    if isinstance(llm_data, dict):
+        try:
+            confidence = max(0.0, min(1.0, float(llm_data.get("confidence", confidence))))
+        except Exception:
+            pass
+        if confidence >= confidence_min:
+            raw_rationale = str(llm_data.get("rationale", "")).strip()
+            if raw_rationale:
+                rationale = raw_rationale
+            split_constraints = constraints
+            if llm_full_control and isinstance(constraints, dict):
+                allowed = constraints.get("allowed_channels")
+                allowed_list = [str(x) for x in allowed] if isinstance(allowed, list) else ["meta", "google", "tiktok"]
+                split_constraints = {
+                    **constraints,
+                    "budget_split": {
+                        "sum": 100.0,
+                        "min": {c: 0.0 for c in allowed_list},
+                        "max": {c: 100.0 for c in allowed_list},
+                    },
+                }
+            budget_split = _assistant_normalize_and_clamp_split(
+                llm_data.get("budget_split"),
+                split_constraints,
+                baseline,
+            )
+            if llm_full_control:
+                llm_inputs = _assistant_take_llm_channel_inputs(llm_data.get("channel_inputs"))
+                channel_inputs = llm_inputs or {}
+            else:
+                channel_inputs = _assistant_validate_channel_inputs(
+                    llm_data.get("channel_inputs"),
+                    constraints,
+                    fallback_channel_inputs,
+                )
+            source = "llm"
+        else:
+            recommendations.append(
+                f"Ответ LLM отклонен: confidence {round(confidence, 2)} ниже порога {round(confidence_min, 2)}."
+            )
+
+    req_for_preview = req.model_copy(deep=True)
+    req_for_preview.assumption_profile = profile
+    req_for_preview.funnel_split = funnel
+    req_for_preview.channel_inputs = channel_inputs
+    req_for_preview.budget_split = budget_split
+    preview = build_plan(req_for_preview)
+    budget_split = {line.key: round(float(line.share) * 100.0, 2) for line in preview.lines}
+    facts_totals, facts_period, facts_used = _extract_platform_facts(overview_context)
+    global_facts_totals, global_facts_period, global_facts_used = _extract_platform_facts(global_overview_context)
+
+    # Rebalance platform shares by blended efficiency score:
+    # client history + anonymized global history (all active accounts).
+    if source == "fallback":
+        fact_platform_share = _fallback_platform_share_from_spend(facts_totals, global_facts_totals)
+    else:
+        platform_scores = _blend_platform_scores(facts_totals, global_facts_totals)
+        score_sum = sum(platform_scores.values())
+        fact_platform_share = {k: v / score_sum for k, v in platform_scores.items()} if score_sum > 0 else {}
+    should_apply_blend = source == "fallback" or (source == "llm" and llm_blend_with_facts and not llm_full_control)
+    if fact_platform_share and should_apply_blend:
+
+        line_platform = {}
+        for line in preview.lines:
+            key = str(line.key)
+            if key.startswith("meta"):
+                line_platform[key] = "meta"
+            elif key.startswith("google") or key.startswith("youtube"):
+                line_platform[key] = "google"
+            elif key.startswith("tiktok"):
+                line_platform[key] = "tiktok"
+            else:
+                line_platform[key] = "other"
+
+        base_line_share = {str(line.key): float(line.share) for line in preview.lines}
+        base_platform_total: Dict[str, float] = {}
+        for key, share in base_line_share.items():
+            plat = line_platform.get(key, "other")
+            base_platform_total[plat] = base_platform_total.get(plat, 0.0) + share
+
+        adjusted_line_share: Dict[str, float] = {}
+        for key, base_share in base_line_share.items():
+            plat = line_platform.get(key, "other")
+            if plat not in fact_platform_share:
+                adjusted_line_share[key] = base_share
+                continue
+            within_platform = base_share / max(base_platform_total.get(plat, 1e-9), 1e-9)
+            fact_line_share = fact_platform_share[plat] * within_platform
+            # In fallback mode, prioritize factual account data instead of baseline heuristics.
+            if source == "fallback":
+                adjusted_line_share[key] = fact_line_share
+            else:
+                adjusted_line_share[key] = 0.6 * base_share + 0.4 * fact_line_share
+
+        norm = sum(adjusted_line_share.values())
+        if norm > 0:
+            budget_split = {
+                key: round((val / norm) * 100.0, 2)
+                for key, val in adjusted_line_share.items()
+            }
+            if source == "llm":
+                recommendations.insert(
+                    0,
+                    "Сплит LLM нормализован и дополнительно скорректирован по blended-истории (client + global).",
+                )
+            else:
+                recommendations.insert(
+                    0,
+                    "Бюджетный сплит скорректирован по blended-истории: клиент + обезличенный global pool.",
+                )
+
+    if not recommendations:
+        top = sorted(preview.lines, key=lambda x: x.share, reverse=True)[:3]
+        if top:
+            joined = ", ".join(f"{line.name} ({round(line.share * 100, 1)}%)" for line in top)
+            recommendations.append(f"Фокус по бюджету: {joined}.")
+        if facts_used:
+            recommendations.append("Рекомендации скорректированы с учетом фактических данных подключенных аккаунтов.")
+        if global_facts_used:
+            recommendations.append("Для новых/пустых аккаунтов использован обезличенный global pool по всем активным кабинетам.")
+        recommendations.append("Через 7 дней загрузите фактические данные и пересчитайте план.")
+    if source == "llm" and rationale:
+        if not any(str(r).strip() == rationale for r in recommendations):
+            recommendations.insert(0, rationale)
+
+    # Deduplicate recommendations preserving order.
+    deduped_recommendations: List[str] = []
+    seen_recommendations: set = set()
+    for rec in recommendations:
+        key = str(rec).strip()
+        if not key or key in seen_recommendations:
+            continue
+        seen_recommendations.add(key)
+        deduped_recommendations.append(key)
+    recommendations = deduped_recommendations
+
+    global_debug = {}
+    if isinstance(global_overview_context, dict):
+        raw_debug = global_overview_context.get("debug")
+        if isinstance(raw_debug, dict):
+            global_debug = raw_debug
+
+    return PlanAssistantResponse(
+        source=source,
+        assumption_profile=profile,
+        funnel_split=funnel,
+        channel_inputs=channel_inputs,
+        assumptions=assumptions,
+        rationale=rationale,
+        recommendations=recommendations,
+        confidence=round(confidence, 2),
+        budget_split=budget_split,
+        facts_used=facts_used,
+        facts_period=facts_period,
+        facts_totals=facts_totals,
+        global_facts_used=global_facts_used,
+        global_facts_period=global_facts_period,
+        global_facts_totals=global_facts_totals,
+        global_facts_debug=global_debug,
     )
 
 
@@ -1462,7 +2362,7 @@ def plan_to_workbook(
         kpi_label = req.kpi_type.upper()
         outputs.cell(row=current_row, column=2, value="Тип")
         outputs.cell(row=current_row, column=3, value=kpi_label)
-        outputs.cell(row=current_row + 1, column=2, value="РџР»Р°РЅ")
+        outputs.cell(row=current_row + 1, column=2, value="План")
         outputs.cell(row=current_row + 1, column=3, value=plan.planned_kpi)
         outputs.cell(row=current_row + 2, column=2, value="Цель")
         outputs.cell(row=current_row + 2, column=3, value=req.kpi_target)
@@ -1650,19 +2550,36 @@ def _format_workbook(wb: Workbook) -> None:
 
 
 app = FastAPI(title="Envidicy Media Plan API", version="0.2.0")
+
+
+def _normalize_origin(origin: str) -> str:
+    return (origin or "").strip().rstrip("/")
+
+
 _default_origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:8000",
-    "http://localhost:8000",
-    "https://envidicydashclientv20.vercel.app",
-    "https://app.envidicy.kz",
-    "https://www.envidicy.kz",
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "http://127.0.0.1:3000",
+      "http://127.0.0.1:3001",
+      "http://127.0.0.1:8000",
+      "http://localhost:8000",
+      "https://envidicydashclientv20.vercel.app",
+      "https://envidicydashclientv20develop.vercel.app",
+      "https://envidicy-dash-client.onrender.com",
+      "https://client-dash-staging.onrender.com",
+      "https://app.envidicy.kz",
+      "https://www.envidicy.kz",
 ]
-_extra_origins = [o.strip() for o in (os.getenv("FRONTEND_ORIGINS") or "").split(",") if o.strip()]
+_default_origins = [_normalize_origin(o) for o in _default_origins if _normalize_origin(o)]
+_extra_origins = [
+    _normalize_origin(o)
+    for o in (os.getenv("FRONTEND_ORIGINS") or "").split(",")
+    if _normalize_origin(o)
+]
+_allow_origins = list(dict.fromkeys([*_default_origins, *_extra_origins]))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[*_default_origins, *_extra_origins],
+    allow_origins=_allow_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1701,7 +2618,7 @@ def _format_date_ru(dt: datetime) -> str:
         dt.strftime("%d %B %Y")
         .replace("January", "января")
         .replace("February", "февраля")
-        .replace("March", "РјР°СЂС‚Р°")
+        .replace("March", "марта")
         .replace("April", "апреля")
         .replace("May", "мая")
         .replace("June", "июня")
@@ -1712,6 +2629,57 @@ def _format_date_ru(dt: datetime) -> str:
         .replace("November", "ноября")
         .replace("December", "декабря")
     )
+
+
+def _repair_mojibake_text(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    text = value
+    if not text:
+        return text
+    # Typical case: UTF-8 text was decoded as cp1251 and later saved as unicode.
+    try:
+        repaired = text.encode("cp1251").decode("utf-8")
+        if repaired and repaired != text:
+            return repaired
+    except Exception:
+        pass
+    return text
+
+
+_CYR_TO_LAT_MAP = str.maketrans(
+    {
+        "А": "A",
+        "В": "B",
+        "С": "C",
+        "Е": "E",
+        "Н": "H",
+        "К": "K",
+        "М": "M",
+        "О": "O",
+        "Р": "P",
+        "Т": "T",
+        "Х": "X",
+        "У": "Y",
+        "а": "A",
+        "в": "B",
+        "с": "C",
+        "е": "E",
+        "н": "H",
+        "к": "K",
+        "м": "M",
+        "о": "O",
+        "р": "P",
+        "т": "T",
+        "х": "X",
+        "у": "Y",
+    }
+)
+
+
+def _normalize_ascii_code(value: object) -> str:
+    text = str(_repair_mojibake_text(value) or "").strip().translate(_CYR_TO_LAT_MAP).upper()
+    return "".join(ch for ch in text if ("A" <= ch <= "Z") or ch.isdigit())
 
 
 def _get_company_profile(conn) -> Dict[str, object]:
@@ -1732,7 +2700,66 @@ def _get_company_profile(conn) -> Dict[str, object]:
         for key in base:
             if row[key] is not None:
                 base[key] = row[key]
+    base["name"] = _repair_mojibake_text(base.get("name"))
+    base["bank"] = _repair_mojibake_text(base.get("bank"))
+    base["legal_address"] = _repair_mojibake_text(base.get("legal_address"))
+    base["factual_address"] = _repair_mojibake_text(base.get("factual_address"))
+    iban_normalized = _normalize_ascii_code(base.get("iban"))
+    bic_normalized = _normalize_ascii_code(base.get("bic"))
+    if iban_normalized:
+        base["iban"] = iban_normalized
+    if bic_normalized:
+        base["bic"] = bic_normalized
     return base
+
+
+def _normalize_issuer_type(value: object, default: str = "too") -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"too", "тоо", "llp"}:
+        return "too"
+    if raw in {"ip", "ип", "sp"}:
+        return "ip"
+    return default
+
+
+def _tax_mode_for_issuer(issuer_type: str) -> str:
+    return "with_vat" if _normalize_issuer_type(issuer_type, "too") == "too" else "without_vat"
+
+
+def _get_billing_issuer_profile(conn, issuer_type: object) -> Dict[str, object]:
+    normalized = _normalize_issuer_type(issuer_type, "too")
+    row = conn.execute("SELECT * FROM billing_issuers WHERE issuer_type=?", (normalized,)).fetchone()
+    if row:
+        out = dict(row)
+        # normalize to invoice payload keys
+        out["name"] = _repair_mojibake_text(out.get("name"))
+        out["bank"] = _repair_mojibake_text(out.get("bank"))
+        out["legal_address"] = _repair_mojibake_text(out.get("legal_address"))
+        out["factual_address"] = _repair_mojibake_text(out.get("factual_address"))
+        iban_normalized = _normalize_ascii_code(out.get("iban"))
+        bic_normalized = _normalize_ascii_code(out.get("bic"))
+        if iban_normalized:
+            out["iban"] = iban_normalized
+        if bic_normalized:
+            out["bic"] = bic_normalized
+        return out
+    # backward-compatible fallback
+    return _get_company_profile(conn)
+
+
+def _request_issuer_snapshot(req: Dict[str, object], fallback: Dict[str, object]) -> Dict[str, object]:
+    return {
+        "name": req.get("issuer_name") or fallback.get("name"),
+        "bin": req.get("issuer_bin") or fallback.get("bin"),
+        "iin": req.get("issuer_iin") or fallback.get("iin"),
+        "legal_address": req.get("issuer_legal_address") or fallback.get("legal_address"),
+        "factual_address": req.get("issuer_factual_address") or fallback.get("factual_address"),
+        "bank": req.get("issuer_bank") or fallback.get("bank"),
+        "iban": req.get("issuer_iban") or fallback.get("iban"),
+        "bic": req.get("issuer_bic") or fallback.get("bic"),
+        "kbe": req.get("issuer_kbe") or fallback.get("kbe"),
+        "currency": req.get("issuer_currency") or fallback.get("currency"),
+    }
 
 
 def _next_invoice_number(conn) -> str:
@@ -1754,6 +2781,51 @@ def _format_legal_entity_name(entity: Dict[str, object]) -> Optional[str]:
     if full and short and full != short:
         return f"{full} ({short})"
     return full or short or None
+
+
+def _normalize_tax_mode(value: object, default: str = "without_vat") -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"with_vat", "vat", "with-nds", "nds", "с_ндс", "сндс"}:
+        return "with_vat"
+    if raw in {"without_vat", "no_vat", "without-nds", "no_nds", "без_ндс", "безндс"}:
+        return "without_vat"
+    return default
+
+
+def _normalize_vat_rate_for_mode(tax_mode: str, vat_rate: object) -> float:
+    if tax_mode != "with_vat":
+        return 0.0
+    try:
+        value = float(vat_rate)
+    except Exception:
+        value = 12.0
+    if value < 0:
+        value = 0.0
+    return round(value, 4)
+
+
+def _invoice_tax_breakdown(amount: float, tax_mode: str, vat_rate: float) -> Dict[str, object]:
+    total = round(float(amount or 0), 2)
+    if tax_mode != "with_vat" or vat_rate <= 0:
+        return {
+            "tax_mode": "without_vat",
+            "vat_rate": 0.0,
+            "net_amount": total,
+            "vat_amount": 0.0,
+            "total_amount": total,
+            "vat_note": "Услуги Исполнителя НДС не облагаются (п.п. 46 ст.394 Налогового кодекса Казахстана).",
+        }
+    denom = 1.0 + (vat_rate / 100.0)
+    net = round(total / denom, 2) if denom > 0 else total
+    vat_amount = round(total - net, 2)
+    return {
+        "tax_mode": "with_vat",
+        "vat_rate": vat_rate,
+        "net_amount": net,
+        "vat_amount": vat_amount,
+        "total_amount": total,
+        "vat_note": f"В том числе НДС {vat_rate:g}%: {_format_amount(vat_amount)}.",
+    }
 
 
 def _invoice_number(prefix: str, created_at, inv_id: int) -> str:
@@ -1852,6 +2924,11 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
     description = payload.get("description", "")
     contract_note = payload.get("contract_note", "")
     amount_words = payload.get("amount_words", "")
+    tax_mode = _normalize_tax_mode(payload.get("tax_mode"), "without_vat")
+    vat_rate = _normalize_vat_rate_for_mode(tax_mode, payload.get("vat_rate"))
+    amount_net = payload.get("amount_net", amount)
+    vat_amount = payload.get("vat_amount", "0.00")
+    vat_note = payload.get("vat_note", "")
     request_id = payload.get("request_id", "")
     token = payload.get("token", "")
     token_query = f"?token={token}" if token else ""
@@ -2036,6 +3113,16 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
       </table>
 
       <table class="no-border">
+        {f'''
+        <tr>
+          <td class="right">Стоимость без НДС:</td>
+          <td class="right nowrap" style="width:160px;">{amount_net}</td>
+        </tr>
+        <tr>
+          <td class="right">НДС {vat_rate:g}%:</td>
+          <td class="right nowrap" style="width:160px;">{vat_amount}</td>
+        </tr>
+        ''' if tax_mode == "with_vat" else ""}
         <tr>
           <td class="right"><strong>Итого:</strong></td>
           <td class="right nowrap" style="width:160px;"><strong>{amount}</strong></td>
@@ -2043,7 +3130,7 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
       </table>
 
       <p class="small">Всего наименований 1, на сумму {amount} {currency}</p>
-      <p class="small"><strong>Всего к оплате:</strong> {amount_words}. Услуги Исполнителя НДС не облагаются (п.п. 46 ст.394 Налогового кодекса Казахстана).</p>
+      <p class="small"><strong>Всего к оплате:</strong> {amount_words}. {vat_note}</p>
     </div>
   </body>
 </html>
@@ -2213,7 +3300,24 @@ def health() -> Dict[str, str]:
 
 @app.get("/rates/bcc")
 def bcc_rates() -> Dict[str, object]:
-    return _fetch_bcc_rates()
+    try:
+        return _fetch_bcc_rates()
+    except Exception as exc:
+        cached = _BCC_RATES_CACHE.get("data")
+        if isinstance(cached, dict):
+            return {
+                **cached,
+                "source": "bcc_cache_fallback",
+                "warning": str(exc),
+                "fetched_at": datetime.utcnow().isoformat() + "Z",
+            }
+        return {
+            "source": "bcc_unavailable",
+            "markup_percent": _BCC_DEFAULT_MARKUP_PERCENT,
+            "rates": {"USD": None, "EUR": None},
+            "fetched_at": datetime.utcnow().isoformat() + "Z",
+            "warning": str(exc),
+        }
 
 
 @app.get("/rate-cards", response_model=List[RateCard])
@@ -2228,6 +3332,52 @@ def estimate_plan(payload: PlanRequest) -> PlanResponse:
     if payload.avg_frequency <= 0:
         raise HTTPException(status_code=400, detail="avg_frequency must be positive")
     return build_plan(payload)
+
+
+@app.post("/plans/assistant", response_model=PlanAssistantResponse)
+def plan_assistant(payload: PlanRequest, authorization: Optional[str] = Header(None)) -> PlanAssistantResponse:
+    if payload.budget <= 0:
+        raise HTTPException(status_code=400, detail="Budget must be positive")
+    if payload.avg_frequency <= 0:
+        raise HTTPException(status_code=400, detail="avg_frequency must be positive")
+    overview_context: Optional[Dict[str, object]] = None
+    global_overview_context: Optional[Dict[str, object]] = None
+    d_from, d_to = _assistant_history_range(payload)
+    token = _get_bearer_token(authorization)
+    current_user = _get_user_by_token(token)
+    if current_user:
+        try:
+            overview_context = _build_insights_overview_for_user(
+                current_user=current_user,
+                date_from=d_from,
+                date_to=d_to,
+            )
+        except Exception as exc:
+            logging.warning("Assistant insights context error: %s", exc)
+    try:
+        global_overview_context = _build_insights_overview_global(d_from, d_to)
+    except Exception as exc:
+        logging.warning("Assistant global insights context error: %s", exc)
+    baseline = build_plan(payload)
+    constraints = _assistant_build_constraints(
+        payload,
+        overview_context=overview_context,
+        global_overview_context=global_overview_context,
+    )
+    llm_data = _assistant_call_llm(
+        payload,
+        constraints,
+        overview_context=overview_context,
+        global_overview_context=global_overview_context,
+    )
+    return _build_assistant_response(
+        payload,
+        baseline=baseline,
+        constraints=constraints,
+        llm_data=llm_data,
+        overview_context=overview_context,
+        global_overview_context=global_overview_context,
+    )
 
 
 @app.post("/plans/estimate/excel")
@@ -2415,11 +3565,13 @@ class ChangePasswordPayload(BaseModel):
 class MetaInsightsResponse(BaseModel):
     summary: Dict[str, object]
     campaigns: List[Dict[str, object]]
+    status: Optional[str] = None
 
 
 class GoogleInsightsResponse(BaseModel):
     summary: Dict[str, object]
     campaigns: List[Dict[str, object]]
+    status: Optional[str] = None
 
 
 class TikTokInsightsResponse(BaseModel):
@@ -2449,12 +3601,264 @@ class InvoicePendingPayload(BaseModel):
     order_ref: Optional[str] = None
 
 
+def _normalize_email(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
 def _hash_password(password: str, salt: str) -> str:
     return hashlib.sha256(f"{salt}{password}".encode("utf-8")).hexdigest()
 
 
 def _verify_password(password: str, salt: str, stored_hash: str) -> bool:
     return hmac.compare_digest(_hash_password(password, salt), stored_hash)
+
+
+def _ensure_owner_access(conn, user_id: int):
+    user = conn.execute("SELECT id, email, password_hash, salt FROM users WHERE id=?", (user_id,)).fetchone()
+    if not user or not user["email"]:
+        return None
+    owner_email = _normalize_email(user["email"])
+    row = conn.execute("SELECT * FROM user_accesses WHERE user_id=? AND role='owner' ORDER BY id LIMIT 1", (user_id,)).fetchone()
+    if row:
+        conn.execute(
+            "UPDATE user_accesses SET email=?, password_hash=?, salt=?, status='active' WHERE id=?",
+            (owner_email, user["password_hash"], user["salt"], row["id"]),
+        )
+        refreshed = conn.execute("SELECT * FROM user_accesses WHERE id=?", (row["id"],)).fetchone()
+        return dict(refreshed) if refreshed else dict(row)
+    conn.execute(
+        """
+        INSERT INTO user_accesses (user_id, email, password_hash, salt, role, status)
+        VALUES (?, ?, ?, ?, 'owner', 'active')
+        """,
+        (user_id, owner_email, user["password_hash"], user["salt"]),
+    )
+    row = conn.execute("SELECT * FROM user_accesses WHERE user_id=? AND role='owner' ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _get_access_by_email(conn, email: str):
+    normalized = _normalize_email(email)
+    row = conn.execute("SELECT * FROM user_accesses WHERE email=? AND status='active'", (normalized,)).fetchone()
+    if row:
+        return dict(row)
+    legacy_user = conn.execute("SELECT id FROM users WHERE email=?", (normalized,)).fetchone()
+    if legacy_user:
+        return _ensure_owner_access(conn, legacy_user["id"])
+    return None
+
+
+def _issue_user_token(conn, user_id: int, login_email: Optional[str] = None) -> str:
+    token = secrets.token_hex(24)
+    conn.execute("INSERT INTO user_tokens (user_id, token, login_email) VALUES (?, ?, ?)", (user_id, token, _normalize_email(login_email) or None))
+    return token
+
+
+def _can_manage_accesses(conn, user_id: int, login_email: str) -> bool:
+    access = _get_access_by_email(conn, login_email)
+    if access and access.get("user_id") == user_id:
+        return (access.get("role") or "member") == "owner"
+    user = conn.execute("SELECT email FROM users WHERE id=?", (user_id,)).fetchone()
+    return bool(user and _normalize_email(user["email"]) == _normalize_email(login_email))
+
+
+def _hydrate_token_user(conn, row):
+    user = dict(row)
+    login_email = _normalize_email(user.get("login_email") or user.get("email"))
+    user["primary_email"] = user.get("email")
+    user["email"] = login_email or user.get("email")
+    user["can_manage_accesses"] = _can_manage_accesses(conn, user["id"], user["email"])
+    return user
+
+
+def _agency_slugify(value: Optional[str], fallback: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    return text or fallback
+
+
+def _ensure_agency_member(conn, agency_id: int, user_id: int, role: str = "client_viewer", status: str = "active") -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO agency_members (agency_id, user_id, role, status)
+        VALUES (?, ?, ?, ?)
+        """,
+        (agency_id, user_id, role, status),
+    )
+
+
+def _ensure_agency_account_mapping(conn, agency_id: int, ad_account_id: int, label: Optional[str] = None, status: str = "active") -> Optional[int]:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO agency_ad_accounts (agency_id, ad_account_id, label, status)
+        VALUES (?, ?, ?, ?)
+        """,
+        (agency_id, ad_account_id, label, status),
+    )
+    row = conn.execute(
+        "SELECT id FROM agency_ad_accounts WHERE agency_id=? AND ad_account_id=?",
+        (agency_id, ad_account_id),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def _get_or_create_default_agency(conn, user_id: int) -> Optional[Dict[str, object]]:
+    row = conn.execute(
+        """
+        SELECT a.*
+        FROM agencies a
+        JOIN agency_members m ON m.agency_id = a.id
+        WHERE m.user_id=? AND m.role='owner'
+        ORDER BY a.id
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+    if row:
+        agency = dict(row)
+    else:
+        user = conn.execute(
+            """
+            SELECT u.id, u.email, up.company
+            FROM users u
+            LEFT JOIN user_profiles up ON up.user_id = u.id
+            WHERE u.id=?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not user:
+            return None
+        base_name = user.get("company") or f"Agency {user_id}"
+        slug_base = _agency_slugify(base_name, f"agency-{user_id}")
+        slug = slug_base
+        suffix = 2
+        while conn.execute("SELECT id FROM agencies WHERE slug=?", (slug,)).fetchone():
+            slug = f"{slug_base}-{suffix}"
+            suffix += 1
+        cur = conn.execute(
+            """
+            INSERT INTO agencies (name, slug, owner_user_id, status)
+            VALUES (?, ?, ?, ?)
+            """,
+            (base_name, slug, user_id, "active"),
+        )
+        agency_id = cur.lastrowid
+        if agency_id is None:
+            row = conn.execute("SELECT id FROM agencies WHERE slug=?", (slug,)).fetchone()
+            agency_id = row["id"] if row else None
+        if agency_id is None:
+            return None
+        _ensure_agency_member(conn, int(agency_id), user_id, role="owner", status="active")
+        agency = dict(
+            conn.execute("SELECT * FROM agencies WHERE id=?", (agency_id,)).fetchone()
+        )
+
+    _ensure_agency_member(conn, int(agency["id"]), user_id, role="owner", status="active")
+    account_rows = conn.execute(
+        "SELECT id, name, status FROM ad_accounts WHERE user_id=? ORDER BY id",
+        (user_id,),
+    ).fetchall()
+    for account in account_rows:
+        _ensure_agency_account_mapping(
+            conn,
+            int(agency["id"]),
+            int(account["id"]),
+            label=account.get("name"),
+            status=account.get("status") or "active",
+        )
+    return agency
+
+
+def _list_user_agency_memberships(conn, user_id: int) -> List[Dict[str, object]]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+              m.*,
+              a.name as agency_name,
+              a.slug as agency_slug,
+              a.owner_user_id,
+              a.status as agency_status
+            FROM agency_members m
+            JOIN agencies a ON a.id = m.agency_id
+            WHERE m.user_id=? AND COALESCE(m.status, 'active')='active'
+            ORDER BY m.id
+            """,
+            (user_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    except Exception:
+        logging.exception("Failed to list agency memberships for user_id=%s", user_id)
+        return []
+
+
+def _list_accessible_accounts(conn, current_user) -> List[Dict[str, object]]:
+    def _is_client_visible(row: Dict[str, object]) -> bool:
+        flag = row.get("visible_to_client", 1)
+        if flag is None:
+            return True
+        try:
+            return int(flag) != 0
+        except Exception:
+            return bool(flag)
+
+    user_id = current_user["id"]
+    fallback_rows = conn.execute("SELECT * FROM ad_accounts WHERE user_id=? ORDER BY created_at DESC", (user_id,)).fetchall()
+    fallback_accounts = [dict(row) for row in fallback_rows]
+    fallback_visible = [row for row in fallback_accounts if _is_client_visible(row)]
+
+    if current_user["email"] in ADMIN_EMAILS or current_user.get("primary_email") in ADMIN_EMAILS:
+        rows = conn.execute("SELECT * FROM ad_accounts ORDER BY created_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
+    memberships = _list_user_agency_memberships(conn, user_id)
+    if not memberships:
+        try:
+            _get_or_create_default_agency(conn, user_id)
+            memberships = _list_user_agency_memberships(conn, user_id)
+        except Exception:
+            logging.exception("Agency bootstrap failed for user_id=%s; fallback to direct accounts", user_id)
+            memberships = []
+
+    if not memberships:
+        return fallback_visible
+
+    admin_agency_ids = [int(row["agency_id"]) for row in memberships if row.get("role") in {"owner", "agency_admin"}]
+    if admin_agency_ids:
+        try:
+            placeholders = ",".join(["?"] * len(admin_agency_ids))
+            rows = conn.execute(
+                f"""
+                SELECT DISTINCT a.*
+                FROM ad_accounts a
+                JOIN agency_ad_accounts aa ON aa.ad_account_id = a.id
+                WHERE aa.agency_id IN ({placeholders})
+                ORDER BY a.created_at DESC
+                """,
+                admin_agency_ids,
+            ).fetchall()
+            out = [dict(row) for row in rows]
+            return [row for row in out if _is_client_visible(row)]
+        except Exception:
+            logging.exception("Failed to list agency admin accounts for user_id=%s; fallback to direct accounts", user_id)
+            return fallback_visible
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT a.*
+            FROM ad_accounts a
+            JOIN agency_ad_accounts aa ON aa.ad_account_id = a.id
+            JOIN agency_user_account_access aua ON aua.agency_ad_account_id = aa.id
+            WHERE aua.user_id=?
+            ORDER BY a.created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        out = [dict(row) for row in rows]
+        return [row for row in out if _is_client_visible(row)]
+    except Exception:
+        logging.exception("Failed to list delegated agency accounts for user_id=%s; fallback to direct accounts", user_id)
+        return fallback_visible
 
 
 def _get_bearer_token(authorization: Optional[str]) -> Optional[str]:
@@ -2474,13 +3878,14 @@ def _get_user_by_token(token: Optional[str]):
     with get_conn() as conn:
         row = conn.execute(
             """
-            SELECT u.* FROM user_tokens ut
+            SELECT u.*, ut.login_email
+            FROM user_tokens ut
             JOIN users u ON u.id = ut.user_id
             WHERE ut.token=?
             """,
             (token,),
         ).fetchone()
-        return dict(row) if row else None
+        return _hydrate_token_user(conn, row) if row else None
 
 
 def get_current_user(authorization: Optional[str] = Header(None)):
@@ -2492,7 +3897,8 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     with get_conn() as conn:
         row = conn.execute(
             """
-            SELECT u.* FROM user_tokens ut
+            SELECT u.*, ut.login_email
+            FROM user_tokens ut
             JOIN users u ON u.id = ut.user_id
             WHERE ut.token=?
             """,
@@ -2500,7 +3906,7 @@ def get_current_user(authorization: Optional[str] = Header(None)):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return dict(row)
+        return _hydrate_token_user(conn, row)
 
 
 def get_optional_user(authorization: Optional[str] = Header(None)):
@@ -2509,9 +3915,22 @@ def get_optional_user(authorization: Optional[str] = Header(None)):
 
 
 def get_admin_user(current_user=Depends(get_current_user)):
-    if current_user["email"] not in ADMIN_EMAILS:
+    if current_user["email"] not in ADMIN_EMAILS and current_user.get("primary_email") not in ADMIN_EMAILS:
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+
+@app.post("/admin/users/{user_id}/impersonate")
+def admin_impersonate_user(user_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        user = conn.execute("SELECT id, email FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        token = _issue_user_token(conn, user_id)
+        conn.commit()
+        return {"id": user_id, "email": user["email"], "token": token}
 
 
 @app.get("/admin/check-key")
@@ -2532,6 +3951,7 @@ class AccountRequestCreate(BaseModel):
 
 class AccountRequestUpdate(BaseModel):
     status: Literal["new", "processing", "approved", "rejected"]
+    contract_code: Optional[str] = None
     account_code: Optional[str] = None
     manager_email: Optional[str] = None
     comment: Optional[str] = None
@@ -2551,6 +3971,7 @@ class AdminAccountCreate(BaseModel):
     name: str
     external_id: Optional[str] = None
     account_code: Optional[str] = None
+    visible_to_client: Optional[bool] = True
     currency: str = "USD"
     status: Optional[str] = None
 
@@ -2561,6 +3982,7 @@ class AdminAccountUpdate(BaseModel):
     name: Optional[str] = None
     external_id: Optional[str] = None
     account_code: Optional[str] = None
+    visible_to_client: Optional[bool] = None
     currency: Optional[str] = None
     status: Optional[str] = None
 
@@ -2570,10 +3992,52 @@ class PasswordReset(BaseModel):
     new_password: str
 
 
+class SetPasswordPayload(BaseModel):
+    email: str
+    new_password: str
+
+
+class AccessCreatePayload(BaseModel):
+    email: str
+
+
 class WalletAdjust(BaseModel):
     user_email: str
     amount: float
     note: Optional[str] = None
+
+
+class AdminAccountFundingCreate(BaseModel):
+    amount: float = Field(..., gt=0)
+    currency: str
+    note: Optional[str] = None
+    occurred_at: Optional[str] = None
+
+
+class AdminAccountFundingReverse(BaseModel):
+    note: Optional[str] = None
+
+
+class AgencyCreatePayload(BaseModel):
+    name: str
+    slug: Optional[str] = None
+    owner_user_id: Optional[int] = None
+
+
+class AgencyMemberCreatePayload(BaseModel):
+    user_id: int
+    role: Literal["owner", "agency_admin", "manager", "client_viewer"] = "client_viewer"
+    status: Optional[str] = "active"
+
+
+class AgencyAccountAttachPayload(BaseModel):
+    label: Optional[str] = None
+    status: Optional[str] = "active"
+
+
+class AgencyAccountAccessPayload(BaseModel):
+    user_id: int
+    access_level: Literal["viewer", "manager", "admin"] = "viewer"
 
 
 class FeeConfigPayload(BaseModel):
@@ -2589,6 +4053,9 @@ class WalletTopupRequestPayload(BaseModel):
     amount: float = Field(..., gt=0)
     currency: str = "KZT"
     note: Optional[str] = None
+    amount_kind: Optional[str] = None
+    tax_mode: Optional[str] = None
+    vat_rate: Optional[float] = None
     legal_entity_id: Optional[int] = None
     client_name: Optional[str] = None
     client_bin: Optional[str] = None
@@ -2601,6 +4068,10 @@ class LegalEntityPayload(BaseModel):
     name: str
     short_name: Optional[str] = None
     full_name: Optional[str] = None
+    issuer_type: Optional[str] = None
+    tax_mode: Optional[str] = None
+    contract_number: Optional[str] = None
+    contract_date: Optional[str] = None
     bin: Optional[str] = None
     address: Optional[str] = None
     legal_address: Optional[str] = None
@@ -2617,6 +4088,10 @@ class AdminLegalEntityPayload(BaseModel):
     short_name: str
     full_name: str
     legal_address: str
+    issuer_type: Optional[str] = None
+    tax_mode: Optional[str] = None
+    contract_number: Optional[str] = None
+    contract_date: Optional[str] = None
 
 
 class CompanyProfilePayload(BaseModel):
@@ -2625,6 +4100,19 @@ class CompanyProfilePayload(BaseModel):
     iin: Optional[str] = None
     legal_address: Optional[str] = None
     factual_address: Optional[str] = None
+
+
+class BillingIssuerPayload(BaseModel):
+    name: Optional[str] = None
+    bin: Optional[str] = None
+    iin: Optional[str] = None
+    legal_address: Optional[str] = None
+    factual_address: Optional[str] = None
+    bank: Optional[str] = None
+    iban: Optional[str] = None
+    bic: Optional[str] = None
+    kbe: Optional[str] = None
+    currency: Optional[str] = None
 
 
 @app.post("/topup/request")
@@ -2637,13 +4125,13 @@ def topup_request(payload: TopUpRequest):
 def register(payload: AuthPayload):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    email = payload.email.strip().lower()
+    email = _normalize_email(payload.email)
     password = payload.password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
     with get_conn() as conn:
         existing = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-        if existing:
+        if existing or _get_access_by_email(conn, email):
             raise HTTPException(status_code=400, detail="User already exists")
         salt = secrets.token_hex(8)
         password_hash = _hash_password(password, salt)
@@ -2651,62 +4139,121 @@ def register(payload: AuthPayload):
             "INSERT INTO users (email, password_hash, salt) VALUES (?, ?, ?)",
             (email, password_hash, salt),
         )
-        token = secrets.token_hex(24)
-        conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (cur.lastrowid, token))
-        conn.commit()
         user_id = cur.lastrowid
+        _ensure_owner_access(conn, user_id)
+        token = _issue_user_token(conn, user_id, email)
+        conn.commit()
         _send_telegram_alert(
             "\n".join(
                 [
-                    "👤 <b>Новая регистрация</b>",
+                    "?? <b>????? ???????????</b>",
                     f"ID: <code>{user_id}</code>",
                     f"Email: <code>{email}</code>",
                 ]
             ),
             channel="reg",
         )
-        return {"id": user_id, "email": email, "token": token}
+        return {"id": user_id, "email": email, "token": token, "can_manage_accesses": True}
 
 
 @app.post("/auth/login")
 def login(payload: AuthPayload):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    email = payload.email.strip().lower()
+    email = _normalize_email(payload.email)
     password = payload.password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
     with get_conn() as conn:
-        user = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-        if not user or not user["password_hash"] or not user["salt"]:
+        access = _get_access_by_email(conn, email)
+        if not access or not access.get("password_hash") or not access.get("salt"):
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        if not _verify_password(password, user["salt"], user["password_hash"]):
+        if not _verify_password(password, access["salt"], access["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        token = secrets.token_hex(24)
-        conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (user["id"], token))
+        user = conn.execute("SELECT * FROM users WHERE id=?", (access["user_id"],)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        token = _issue_user_token(conn, user["id"], access["email"])
         conn.commit()
-        return {"id": user["id"], "email": user["email"], "token": token}
+        return {
+            "id": user["id"],
+            "email": access["email"],
+            "token": token,
+            "can_manage_accesses": (access.get("role") or "member") == "owner",
+        }
+
+
+@app.get("/auth/access-status")
+def auth_access_status(email: str):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    normalized = _normalize_email(email)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Email is required")
+    with get_conn() as conn:
+        access = _get_access_by_email(conn, normalized)
+        if not access:
+            return {"exists": False, "needs_password": False}
+        needs_password = not access.get("password_hash") or not access.get("salt")
+        return {
+            "exists": True,
+            "needs_password": needs_password,
+            "email": access.get("email") or normalized,
+        }
+
+
+@app.post("/auth/set-password")
+def set_password(payload: SetPasswordPayload):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    email = _normalize_email(payload.email)
+    password = payload.new_password.strip()
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="email and new_password are required")
+    with get_conn() as conn:
+        access = _get_access_by_email(conn, email)
+        if not access:
+            raise HTTPException(status_code=404, detail="Email is not linked to any account")
+        salt = secrets.token_hex(8)
+        password_hash = _hash_password(password, salt)
+        conn.execute(
+            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
+            (password_hash, salt, access["id"]),
+        )
+        if (access.get("role") or "member") == "owner":
+            conn.execute(
+                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
+                (password_hash, salt, access["user_id"]),
+            )
+        conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
+        conn.commit()
+        return {"status": "ok"}
 
 
 @app.post("/admin/reset-password")
 def admin_reset_password(payload: PasswordReset, admin_user=Depends(get_admin_user)):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    email = payload.email.strip().lower()
+    email = _normalize_email(payload.email)
     password = payload.new_password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and new_password are required")
     salt = secrets.token_hex(8)
     password_hash = _hash_password(password, salt)
     with get_conn() as conn:
-        user = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
-        if not user:
+        access = _get_access_by_email(conn, email)
+        if not access:
             raise HTTPException(status_code=404, detail="User not found")
         conn.execute(
-            "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-            (password_hash, salt, user["id"]),
+            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
+            (password_hash, salt, access["id"]),
         )
-        conn.execute("DELETE FROM user_tokens WHERE user_id=?", (user["id"],))
+        if (access.get("role") or "member") == "owner":
+            conn.execute(
+                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
+                (password_hash, salt, access["user_id"]),
+            )
+        conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
         conn.commit()
         return {"status": "ok"}
 
@@ -2764,6 +4311,25 @@ def _save_document(file: UploadFile) -> str:
     safe_ext = os.path.splitext(file.filename or "")[1] or ".pdf"
     filename = f"doc_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(6)}{safe_ext}"
     path = os.path.join(_document_storage_dir(), filename)
+    with open(path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return path
+
+
+def _finance_document_storage_dir() -> str:
+    base_dir = os.path.join(os.path.dirname(__file__), "..", "storage", "finance_documents")
+    os.makedirs(base_dir, exist_ok=True)
+    return base_dir
+
+
+def _save_finance_document(file: UploadFile) -> str:
+    safe_ext = os.path.splitext(file.filename or "")[1] or ".pdf"
+    filename = f"finance_doc_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(6)}{safe_ext}"
+    content_type = file.content_type or "application/octet-stream"
+    if _r2_enabled():
+        key = f"finance_documents/{filename}"
+        return _r2_upload_fileobj(key, file.file, content_type)
+    path = os.path.join(_finance_document_storage_dir(), filename)
     with open(path, "wb") as f:
         shutil.copyfileobj(file.file, f)
     return path
@@ -2860,10 +4426,10 @@ def _live_billing_cache_set(key: str, data: Dict[str, object]) -> Dict[str, obje
     return dict(payload)
 
 
-def _meta_fetch_account_billing(account_external_id: str) -> Dict[str, object]:
+def _meta_fetch_account_billing(account_external_id: str, force_refresh: bool = False) -> Dict[str, object]:
     cache_key = f"meta:{account_external_id}"
     cached = _live_billing_cache_get(cache_key)
-    if cached:
+    if cached and not force_refresh:
         return cached
 
     token = os.getenv("META_ACCESS_TOKEN")
@@ -2905,8 +4471,8 @@ def _meta_fetch_account_billing(account_external_id: str) -> Dict[str, object]:
         "provider": "meta",
         "currency": currency,
         "spend": spend,
-        "limit": None,
-        "balance": None,
+        "limit": spend_cap,
+        "balance": (spend_cap - spend) if (spend_cap is not None) else None,
         "source": "meta_api",
         "updated_at": datetime.utcnow().isoformat() + "Z",
     }
@@ -2980,12 +4546,37 @@ def _google_normalize_customer_id(customer_id: str) -> str:
     return "".join(ch for ch in str(customer_id or "") if ch.isdigit())
 
 
-def _google_fetch_account_billing(customer_id: str) -> Dict[str, object]:
-    normalized_customer_id = _google_normalize_customer_id(customer_id)
+def _google_valid_customer_id_or_none(customer_id: object) -> Optional[str]:
+    normalized = _google_normalize_customer_id(str(customer_id or ""))
+    if len(normalized) != 10:
+        return None
+    return normalized
+
+
+def _tiktok_normalize_advertiser_id(advertiser_id: object) -> str:
+    raw = str(advertiser_id or "").strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    return digits or raw
+
+
+def _google_fetch_account_billing(customer_id: str, force_refresh: bool = False) -> Dict[str, object]:
+    normalized_customer_id = _google_valid_customer_id_or_none(customer_id) or ""
     cache_key = f"google:{normalized_customer_id}"
     cached = _live_billing_cache_get(cache_key)
-    if cached:
+    if cached and not force_refresh:
         return cached
+    if not normalized_customer_id:
+        payload = {
+            "provider": "google",
+            "currency": "USD",
+            "spend": None,
+            "limit": None,
+            "balance": None,
+            "error": "Google customer ID не задан или указан неверно",
+            "source": "google_ads_api",
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        return _live_billing_cache_set(cache_key, payload)
 
     client = _google_ads_client()
     ga_service = client.get_service("GoogleAdsService")
@@ -3006,12 +4597,34 @@ def _google_fetch_account_billing(customer_id: str) -> Dict[str, object]:
         ORDER BY account_budget.id DESC
         LIMIT 1
     """
-    rows = list(ga_service.search(customer_id=normalized_customer_id, query=query))
+    rows = []
+    try:
+        rows = list(ga_service.search(customer_id=normalized_customer_id, query=query))
+    except Exception:
+        rows = []
+
+    spend = None
+
     if not rows:
+        fallback_query = """
+            SELECT
+              customer.id,
+              customer.currency_code,
+              metrics.cost_micros
+            FROM customer
+            WHERE segments.date DURING THIS_MONTH
+        """
+        try:
+            fallback_rows = list(ga_service.search(customer_id=normalized_customer_id, query=fallback_query))
+            spend = sum(float(row.metrics.cost_micros or 0) for row in fallback_rows) / 1_000_000
+            if fallback_rows:
+                currency = fallback_rows[0].customer.currency_code or currency
+        except Exception:
+            spend = None
         payload = {
             "provider": "google",
             "currency": currency,
-            "spend": None,
+            "spend": spend,
             "limit": None,
             "balance": None,
             "source": "google_ads_api",
@@ -3020,7 +4633,8 @@ def _google_fetch_account_billing(customer_id: str) -> Dict[str, object]:
         return _live_billing_cache_set(cache_key, payload)
 
     budget = rows[0].account_budget
-    spend = float(budget.amount_served_micros or 0) / 1_000_000
+    spend_budget = float(budget.amount_served_micros or 0) / 1_000_000
+    spend = spend_budget
     adjusted_limit = float(budget.adjusted_spending_limit_micros or 0) / 1_000_000
     approved_limit = float(budget.approved_spending_limit_micros or 0) / 1_000_000
     limit = adjusted_limit or approved_limit or None
@@ -3029,27 +4643,168 @@ def _google_fetch_account_billing(customer_id: str) -> Dict[str, object]:
         "provider": "google",
         "currency": currency,
         "spend": spend,
-        "limit": None,
-        "balance": None,
+        "limit": limit,
+        "balance": (limit - spend) if (limit is not None and spend is not None) else None,
         "source": "google_ads_api",
         "updated_at": datetime.utcnow().isoformat() + "Z",
     }
     return _live_billing_cache_set(cache_key, payload)
 
 
-def _attach_live_billing(account: Dict[str, object]) -> Dict[str, object]:
+def _tiktok_fetch_account_billing(advertiser_id: str, force_refresh: bool = False) -> Dict[str, object]:
+    normalized_advertiser_id = _tiktok_normalize_advertiser_id(advertiser_id)
+    cache_key = f"tiktok:{normalized_advertiser_id}"
+    cached = _live_billing_cache_get(cache_key)
+    if cached and not force_refresh:
+        return cached
+
+    if not normalized_advertiser_id:
+        payload = {
+            "provider": "tiktok",
+            "currency": "USD",
+            "spend": None,
+            "limit": None,
+            "balance": None,
+            "error": "TikTok advertiser_id не задан или указан неверно",
+            "source": "tiktok_api",
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        return _live_billing_cache_set(cache_key, payload)
+
+    end_date = datetime.utcnow().date()
+    start_date_raw = str(os.getenv("TIKTOK_SPEND_START_DATE") or "2020-01-01").strip()
+    try:
+        start_date = datetime.strptime(start_date_raw, "%Y-%m-%d").date()
+    except Exception:
+        start_date = date(2020, 1, 1)
+    if start_date > end_date:
+        start_date = end_date
+
+    spend = None
+    spend_error = None
+    try:
+        spend_rows = _tiktok_fetch_report(
+            normalized_advertiser_id,
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d"),
+            "AUCTION_CAMPAIGN",
+            ["campaign_id"],
+            ["spend"],
+        )
+        spend = sum(float(row.get("spend") or 0) for row in spend_rows)
+    except Exception:
+        try:
+            total_spend = 0.0
+            cursor = start_date
+            while cursor <= end_date:
+                chunk_end = min(cursor + timedelta(days=89), end_date)
+                chunk_rows = _tiktok_fetch_report(
+                    normalized_advertiser_id,
+                    cursor.strftime("%Y-%m-%d"),
+                    chunk_end.strftime("%Y-%m-%d"),
+                    "AUCTION_CAMPAIGN",
+                    ["campaign_id"],
+                    ["spend"],
+                )
+                total_spend += sum(float(row.get("spend") or 0) for row in chunk_rows)
+                cursor = chunk_end + timedelta(days=1)
+            spend = total_spend
+        except Exception as exc:
+            spend_error = str(exc)
+            spend = None
+
+    currency = "USD"
+    limit = None
+    balance = None
+    try:
+        url = "https://business-api.tiktok.com/open_api/v1.3/advertiser/balance/get/"
+        params = {"advertiser_id": normalized_advertiser_id}
+        headers = {"Access-Token": _tiktok_access_token()}
+        resp = httpx.get(url, params=params, headers=headers, timeout=20)
+        if resp.status_code == 200:
+            payload = resp.json()
+            if payload.get("code") in (0, None):
+                data = payload.get("data") or {}
+                entries: List[Dict[str, object]] = []
+                if isinstance(data, dict):
+                    entries.append(data)
+                    if isinstance(data.get("list"), list):
+                        entries.extend(item for item in data.get("list") if isinstance(item, dict))
+
+                for entry in entries:
+                    entry_currency = entry.get("currency") or entry.get("account_currency")
+                    if entry_currency:
+                        currency = str(entry_currency).upper()
+                        break
+
+                def _pick_numeric(keys: List[str]) -> Optional[float]:
+                    for entry in entries:
+                        for key in keys:
+                            raw = entry.get(key)
+                            try:
+                                if raw is None or raw == "":
+                                    continue
+                                return float(raw)
+                            except (TypeError, ValueError):
+                                continue
+                    return None
+
+                balance = _pick_numeric(
+                    [
+                        "balance",
+                        "available_balance",
+                        "cash_balance",
+                        "valid_cash_balance",
+                        "remain_cash",
+                    ]
+                )
+                limit = _pick_numeric(
+                    [
+                        "spend_cap",
+                        "budget",
+                        "total_budget",
+                        "total_balance",
+                    ]
+                )
+    except Exception:
+        pass
+
+    if limit is None and balance is not None and spend is not None:
+        limit = balance + spend
+    if balance is None and limit is not None and spend is not None:
+        balance = limit - spend
+
+    result_payload = {
+        "provider": "tiktok",
+        "currency": currency,
+        "spend": spend,
+        "limit": limit,
+        "balance": balance,
+        "source": "tiktok_api",
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+    }
+    if spend_error and spend is None and limit is None and balance is None:
+        result_payload["error"] = spend_error
+    return _live_billing_cache_set(cache_key, result_payload)
+
+
+def _attach_live_billing(account: Dict[str, object], force_refresh: bool = False) -> Dict[str, object]:
     payload = dict(account)
     platform = str(payload.get("platform") or "").lower().strip()
-    external_id = payload.get("external_id") or payload.get("account_code")
+    external_id = payload.get("external_id") or payload.get("account_code") or payload.get("name")
     payload["live_billing"] = None
-    if not external_id or platform not in {"meta", "google"}:
+    if not external_id or platform not in {"meta", "google", "tiktok"}:
         return payload
 
     try:
         if platform == "meta":
-            payload["live_billing"] = _meta_fetch_account_billing(str(external_id))
+            payload["live_billing"] = _meta_fetch_account_billing(str(external_id), force_refresh=force_refresh)
         elif platform == "google":
-            payload["live_billing"] = _google_fetch_account_billing(str(external_id))
+            normalized_google_id = _google_valid_customer_id_or_none(external_id)
+            if normalized_google_id:
+                payload["live_billing"] = _google_fetch_account_billing(normalized_google_id, force_refresh=force_refresh)
+        elif platform == "tiktok":
+            payload["live_billing"] = _tiktok_fetch_account_billing(str(external_id), force_refresh=force_refresh)
     except Exception as exc:
         logging.exception("Failed to fetch live billing for %s account %s", platform, external_id)
         payload["live_billing"] = {
@@ -3061,16 +4816,261 @@ def _attach_live_billing(account: Dict[str, object]) -> Dict[str, object]:
     return payload
 
 
-def _attach_live_billing_many(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    return [_attach_live_billing(row) for row in rows]
+def _attach_live_billing_many(rows: List[Dict[str, object]], force_refresh: bool = False) -> List[Dict[str, object]]:
+    return [_attach_live_billing(row, force_refresh=force_refresh) for row in rows]
 
 
-def _resolve_topup_account_amount(row: Dict[str, object]) -> Optional[float]:
+def _finance_to_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _finance_extract_optional_balance(live_billing: Optional[Dict[str, object]]) -> Optional[float]:
+    if not live_billing or not isinstance(live_billing, dict) or live_billing.get("error"):
+        return None
+    for key in ("balance", "available_balance", "cash_balance", "valid_cash_balance", "remain_cash"):
+        value = live_billing.get(key)
+        try:
+            numeric = float(value)
+            if numeric == numeric:
+                return numeric
+        except Exception:
+            continue
+    return None
+
+
+def _finance_resolve_client_id(conn, account: Dict[str, object]) -> int:
+    client_id = int(account.get("user_id") or 0)
+    if client_id > 0:
+        return client_id
+    account_id = int(account.get("id") or 0)
+    if account_id <= 0:
+        return 0
+    row = conn.execute("SELECT user_id FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
+    if not row:
+        return 0
+    payload = dict(row)
+    return int(payload.get("user_id") or 0)
+
+
+def _find_existing_account(conn, *, user_id: int, platform: str, name: str):
+    normalized_platform = str(platform or "").strip().lower()
+    normalized_name = str(name or "").strip().lower()
+    if not normalized_platform or not normalized_name:
+        return None
+    row = conn.execute(
+        """
+        SELECT *
+        FROM ad_accounts
+        WHERE user_id=?
+          AND LOWER(TRIM(platform))=?
+          AND LOWER(TRIM(name))=?
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (int(user_id), normalized_platform, normalized_name),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _finance_collect_daily_rows_for_account(account: Dict[str, object], date_from: str, date_to: str) -> List[Dict[str, object]]:
+    platform = str(account.get("platform") or "").lower().strip()
+    external_id = account.get("external_id") or account.get("account_code")
+    if platform not in {"meta", "google", "tiktok"} or not external_id:
+        return []
+
+    daily_map: Dict[str, Dict[str, object]] = {}
+
+    def _merge_row(date_value: object, row: Dict[str, object]) -> None:
+        date_key = str(date_value or "").strip()
+        if not date_key:
+            return
+        bucket = daily_map.get(date_key)
+        if not bucket:
+            bucket = {
+                "date": date_key,
+                "spend": 0.0,
+                "impressions": 0.0,
+                "clicks": 0.0,
+                "raw_payload_json": [],
+            }
+            daily_map[date_key] = bucket
+        bucket["spend"] += _finance_to_float(row.get("spend"))
+        bucket["impressions"] += _finance_to_float(row.get("impressions"))
+        bucket["clicks"] += _finance_to_float(row.get("clicks"))
+        casted_payload = bucket.get("raw_payload_json")
+        if isinstance(casted_payload, list):
+            casted_payload.append(dict(row))
+
+    if platform == "meta":
+        safe_from = _meta_safe_date_from(date_from)
+        rows = _meta_fetch_daily(str(external_id), safe_from, date_to)
+        for row in rows:
+            _merge_row(row.get("date_start"), row)
+    elif platform == "google":
+        customer_id = _google_valid_customer_id_or_none(external_id)
+        if not customer_id:
+            return []
+        rows = _google_fetch_daily(str(customer_id), date_from, date_to)
+        for row in rows:
+            _merge_row(row.get("date"), row)
+    elif platform == "tiktok":
+        advertiser_id = _tiktok_normalize_advertiser_id(str(external_id))
+        for chunk_from, chunk_to in _date_chunks(date_from, date_to, 30):
+            rows = _tiktok_fetch_daily(str(advertiser_id), chunk_from, chunk_to)
+            for row in rows:
+                _merge_row(row.get("date"), row)
+
+    prepared: List[Dict[str, object]] = []
+    for key in sorted(daily_map.keys()):
+        row = dict(daily_map[key])
+        raw_value = row.get("raw_payload_json")
+        if isinstance(raw_value, list):
+            row["raw_payload_json"] = json.dumps(raw_value, ensure_ascii=False)
+        prepared.append(row)
+    return prepared
+
+
+def _finance_upsert_daily_rows(conn, *, account: Dict[str, object], rows: List[Dict[str, object]]) -> None:
+    account_id = int(account.get("id") or 0)
+    client_id = _finance_resolve_client_id(conn, account)
+    if account_id <= 0 or client_id <= 0:
+        return
+    platform = str(account.get("platform") or "").lower().strip()
+    account_external_id = str(account.get("external_id") or account.get("account_code") or "")
+    currency = str(account.get("currency") or "USD").upper()
+    for row in rows:
+        stat_date = str(row.get("date") or "").strip()
+        if not stat_date:
+            continue
+        conn.execute(
+            """
+            INSERT INTO ad_account_stats
+              (platform, account_id, client_id, account_external_id, stat_date, currency, spend, impressions, clicks, raw_payload_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(account_id, stat_date) DO UPDATE SET
+              platform=excluded.platform,
+              client_id=excluded.client_id,
+              account_external_id=excluded.account_external_id,
+              currency=excluded.currency,
+              spend=excluded.spend,
+              impressions=excluded.impressions,
+              clicks=excluded.clicks,
+              raw_payload_json=excluded.raw_payload_json,
+              updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                platform,
+                account_id,
+                client_id,
+                account_external_id,
+                stat_date,
+                currency,
+                _finance_to_float(row.get("spend")),
+                _finance_to_float(row.get("impressions")),
+                _finance_to_float(row.get("clicks")),
+                row.get("raw_payload_json"),
+            ),
+        )
+
+
+def _finance_refresh_snapshot_for_account(
+    conn,
+    *,
+    account: Dict[str, object],
+    refresh_live_billing: bool = False,
+) -> Dict[str, object]:
+    account_id = int(account.get("id") or 0)
+    client_id = _finance_resolve_client_id(conn, account)
+    if account_id <= 0 or client_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid account client mapping")
+    platform = str(account.get("platform") or "").lower().strip()
+    account_external_id = str(account.get("external_id") or account.get("account_code") or "")
+    currency = str(account.get("currency") or "USD").upper()
+
+    today_key = datetime.utcnow().date().isoformat()
+    total_row = conn.execute(
+        "SELECT COALESCE(SUM(spend), 0) AS total_spend FROM ad_account_stats WHERE account_id=?",
+        (account_id,),
+    ).fetchone()
+    today_row = conn.execute(
+        "SELECT COALESCE(SUM(spend), 0) AS today_spend FROM ad_account_stats WHERE account_id=? AND stat_date=?",
+        (account_id, today_key),
+    ).fetchone()
+    total_payload = dict(total_row) if total_row else {}
+    today_payload = dict(today_row) if today_row else {}
+    spend_total = _finance_to_float(total_payload.get("total_spend"))
+    spend_today = _finance_to_float(today_payload.get("today_spend"))
+
+    wallet = _get_or_create_wallet(conn, client_id)
+    internal_client_balance = _finance_to_float(wallet.get("balance"))
+
+    optional_balance = None
+    if refresh_live_billing:
+        live_payload = _attach_live_billing(account, force_refresh=True).get("live_billing")
+        optional_balance = _finance_extract_optional_balance(live_payload if isinstance(live_payload, dict) else None)
+
+    remaining_balance = internal_client_balance - spend_total
+    synced_at = datetime.utcnow().isoformat() + "Z"
+
+    conn.execute(
+        """
+        INSERT INTO ad_account_finance_snapshots
+          (account_id, platform, client_id, account_external_id, currency, spend_today, spend_total, optional_balance, internal_client_balance, remaining_balance, last_synced_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(account_id) DO UPDATE SET
+          platform=excluded.platform,
+          client_id=excluded.client_id,
+          account_external_id=excluded.account_external_id,
+          currency=excluded.currency,
+          spend_today=excluded.spend_today,
+          spend_total=excluded.spend_total,
+          optional_balance=COALESCE(excluded.optional_balance, ad_account_finance_snapshots.optional_balance),
+          internal_client_balance=excluded.internal_client_balance,
+          remaining_balance=excluded.remaining_balance,
+          last_synced_at=excluded.last_synced_at,
+          updated_at=CURRENT_TIMESTAMP
+        """,
+        (
+            account_id,
+            platform,
+            client_id,
+            account_external_id,
+            currency,
+            spend_today,
+            spend_total,
+            optional_balance,
+            internal_client_balance,
+            remaining_balance,
+            synced_at,
+        ),
+    )
+
+    return {
+        "platform": platform,
+        "account_id": account_id,
+        "client_id": client_id,
+        "currency": currency,
+        "spend_today": round(spend_today, 6),
+        "spend_total": round(spend_total, 6),
+        "optional_balance": optional_balance,
+        "internal_client_balance": round(internal_client_balance, 6),
+        "remaining_balance": round(remaining_balance, 6),
+        "last_synced_at": synced_at,
+    }
+
+
+def _resolve_topup_account_amount(row: Dict[str, object], rates_data: Optional[Dict[str, object]] = None) -> Optional[float]:
     amount_input = row.get("amount_input")
     amount_net = row.get("amount_net")
     fx_rate = row.get("fx_rate")
     input_currency = str(row.get("currency") or "").upper()
+    platform = str(row.get("account_platform") or row.get("platform") or "").lower()
     account_currency = str(row.get("account_currency") or row.get("currency") or "").upper()
+    if platform == "yandex":
+        account_currency = "KZT"
 
     try:
         amount_input_value = float(amount_input) if amount_input is not None else None
@@ -3085,6 +5085,10 @@ def _resolve_topup_account_amount(row: Dict[str, object]) -> Optional[float]:
     except (TypeError, ValueError):
         fx_rate_value = None
 
+    fallback_rate_value = None
+    if (not fx_rate_value or fx_rate_value <= 0) and input_currency == "KZT" and account_currency in {"USD", "EUR"}:
+        fallback_rate_value = _get_marked_bcc_sell_rate(account_currency, rates_data)
+
     if account_currency and input_currency and account_currency == input_currency:
         return amount_net_value if amount_net_value is not None else amount_input_value
 
@@ -3095,6 +5099,9 @@ def _resolve_topup_account_amount(row: Dict[str, object]) -> Optional[float]:
         if amount_net_value > amount_input_value * 0.95:
             return calculated
         return amount_net_value
+
+    if fallback_rate_value and fallback_rate_value > 0 and amount_input_value is not None:
+        return amount_input_value / fallback_rate_value
 
     return amount_net_value if amount_net_value is not None else amount_input_value
 
@@ -3107,44 +5114,324 @@ def _attach_topup_account_amount(rows: List[Dict[str, object]]) -> List[Dict[str
     prepared = []
     for row in rows:
         payload = dict(row)
-        payload["amount_account"] = _resolve_topup_account_amount(payload)
+        payload["amount_account"] = _resolve_topup_account_amount(payload, rates_data)
+        platform = str(payload.get("account_platform") or payload.get("platform") or "").lower()
         account_currency = payload.get("account_currency") or payload.get("currency") or "USD"
+        if platform == "yandex":
+            account_currency = "KZT"
+        payload["account_currency"] = account_currency
         payload["amount_account_usd"] = _convert_amount_to_usd(payload.get("amount_account"), account_currency, rates_data)
+        payload["amount_account_kzt"] = _convert_amount_to_kzt(payload.get("amount_account"), account_currency, rates_data)
+        def _num(value: object, default: Optional[float] = 0.0) -> Optional[float]:
+            if value is None:
+                return default
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                text = str(value).replace("\xa0", "").replace(" ", "").replace(",", ".").strip()
+                if text == "":
+                    return default
+                try:
+                    return float(text)
+                except (TypeError, ValueError):
+                    return default
+
+        amount_input_value = _num(payload.get("amount_input"), 0.0) or 0.0
+        amount_account_value = _num(payload.get("amount_account"), 0.0) or 0.0
+        fx_rate_value = _num(payload.get("fx_rate"), None)
+        fee_percent_value = _num(payload.get("fee_percent"), 0.0) or 0.0
+        amount_account_kzt_value = _num(payload.get("amount_account_kzt"), 0.0) or 0.0
+        input_currency = str(payload.get("currency") or "KZT").upper()
+
+        our_rate = None
+        fx_profit_kzt = 0.0
+        if fx_rate_value and fx_rate_value > 0:
+            if fx_rate_value > 10:
+                our_rate = fx_rate_value - 10.0
+            else:
+                our_rate = fx_rate_value
+            if amount_account_value > 0 and amount_input_value > 0:
+                fx_profit_kzt = amount_input_value - (amount_account_value * our_rate)
+            if fx_profit_kzt < 0:
+                fx_profit_kzt = 0.0
+
+        fee_base_kzt = amount_input_value
+        if amount_account_value > 0:
+            if fx_rate_value and fx_rate_value > 0:
+                fee_base_kzt = amount_account_value * fx_rate_value
+            elif input_currency == "KZT":
+                fee_base_kzt = amount_account_value
+            elif amount_account_kzt_value > 0:
+                fee_base_kzt = amount_account_kzt_value
+
+        fee_amount_kzt = fee_base_kzt * (fee_percent_value / 100.0) if fee_base_kzt > 0 and fee_percent_value > 0 else 0.0
+        payload["our_rate"] = our_rate
+        payload["fee_base_kzt"] = round(fee_base_kzt, 2)
+        payload["fx_profit_kzt"] = round(fx_profit_kzt, 2)
+        payload["fee_amount_kzt"] = round(fee_amount_kzt, 2)
+        payload["profit_total_kzt"] = round(fx_profit_kzt + fee_amount_kzt, 2)
         prepared.append(payload)
     return prepared
+
+
+def _funding_source_key(source_type: str, source_id: Optional[object]) -> Optional[str]:
+    if source_id is None:
+        return None
+    return f"{source_type}:{source_id}"
+
+
+def _record_account_funding_event(
+    conn,
+    *,
+    account_id: int,
+    user_id: int,
+    platform: str,
+    amount: object,
+    currency: str,
+    source_type: str,
+    source_id: Optional[object] = None,
+    note: Optional[str] = None,
+    created_by: Optional[str] = None,
+    occurred_at: Optional[str] = None,
+    reversal_for_event_id: Optional[int] = None,
+    update_existing: bool = False,
+) -> Optional[int]:
+    platform_code = str(platform or "").lower()
+    currency_code = str(currency or "USD").upper()
+    if platform_code == "yandex":
+        currency_code = "KZT"
+    source_key = _funding_source_key(source_type, source_id)
+    amount_usd = _convert_amount_to_usd(amount, currency_code)
+    amount_kzt = _convert_amount_to_kzt(amount, currency_code)
+    if source_key:
+        existing = conn.execute("SELECT id FROM account_funding_events WHERE source_key=?", (source_key,)).fetchone()
+        if existing:
+            if update_existing:
+                conn.execute(
+                    """
+                    UPDATE account_funding_events
+                    SET account_id=?,
+                        user_id=?,
+                        platform=?,
+                        amount=?,
+                        currency=?,
+                        amount_usd=?,
+                        amount_kzt=?,
+                        note=?,
+                        created_by=?,
+                        reversal_for_event_id=?,
+                        created_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        account_id,
+                        user_id,
+                        platform,
+                        float(amount or 0),
+                        currency_code,
+                        amount_usd,
+                        amount_kzt,
+                        note,
+                        created_by,
+                        reversal_for_event_id,
+                        occurred_at or datetime.utcnow().isoformat(),
+                        int(existing["id"]),
+                    ),
+                )
+            return int(existing["id"])
+    created_at = occurred_at or datetime.utcnow().isoformat()
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO account_funding_events
+          (account_id, user_id, platform, amount, currency, amount_usd, amount_kzt, source_type, source_id, source_key, note, created_by, reversal_for_event_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            account_id,
+            user_id,
+            platform,
+            float(amount or 0),
+            currency_code,
+            amount_usd,
+            amount_kzt,
+            source_type,
+            source_id,
+            source_key,
+            note,
+            created_by,
+            reversal_for_event_id,
+            created_at,
+        ),
+    )
+    if cur.lastrowid is not None:
+        return int(cur.lastrowid)
+    if source_key:
+        row = conn.execute("SELECT id FROM account_funding_events WHERE source_key=?", (source_key,)).fetchone()
+        if row:
+            return int(row["id"])
+    row = conn.execute(
+        """
+        SELECT id
+        FROM account_funding_events
+        WHERE account_id=? AND user_id=? AND source_type=? AND created_at=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (account_id, user_id, source_type, created_at),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def _sync_completed_topup_funding_events(conn, user_id: Optional[int] = None, account_id: Optional[int] = None) -> None:
+    query = """
+        SELECT
+          t.*,
+          a.platform as account_platform,
+          a.currency as account_currency
+        FROM topups t
+        JOIN ad_accounts a ON a.id = t.account_id
+        WHERE t.status='completed'
+    """
+    params: List[object] = []
+    if user_id is not None:
+        query += " AND t.user_id=?"
+        params.append(user_id)
+    if account_id is not None:
+        query += " AND t.account_id=?"
+        params.append(account_id)
+    rows = conn.execute(query, params).fetchall()
+    prepared = _attach_topup_account_amount([dict(row) for row in rows])
+    for row in prepared:
+        account_id_value = row.get("account_id")
+        user_id_value = row.get("user_id")
+        if not account_id_value or not user_id_value:
+            continue
+        _record_account_funding_event(
+            conn,
+            account_id=int(account_id_value),
+            user_id=int(user_id_value),
+            platform=str(row.get("account_platform") or row.get("platform") or ""),
+            amount=row.get("amount_account") or 0,
+            currency=str(row.get("account_currency") or row.get("currency") or "USD"),
+            source_type="topup",
+            source_id=row.get("id"),
+            note=f"Topup #{row.get('id')}",
+            occurred_at=row.get("created_at"),
+            update_existing=True,
+        )
+
+
+def _account_funding_totals_map(conn, user_id: int) -> Dict[str, Dict[str, float]]:
+    _sync_completed_topup_funding_events(conn, user_id=user_id)
+    rows = conn.execute(
+        """
+        SELECT
+          account_id,
+          COALESCE(SUM(amount), 0) as total_amount,
+          MAX(currency) as currency,
+          COALESCE(SUM(amount_kzt), 0) as total_kzt,
+          COALESCE(SUM(amount_usd), 0) as total_usd
+        FROM account_funding_events
+        WHERE user_id=?
+        GROUP BY account_id
+        """,
+        (user_id,),
+    ).fetchall()
+    out: Dict[str, Dict[str, float]] = {}
+    for row in rows:
+        out[str(row["account_id"])] = {
+            "amount": float(row.get("total_amount") or 0),
+            "currency": row.get("currency") or "USD",
+            "amount_kzt": float(row.get("total_kzt") or 0),
+            "amount_usd": float(row.get("total_usd") or 0),
+        }
+    return out
 
 
 def _google_fetch_audience_age_gender(customer_id: str, date_from: str, date_to: str) -> Tuple[List[Dict[str, object]], Optional[str]]:
     client = _google_ads_client()
     ga_service = client.get_service("GoogleAdsService")
-    query = f"""
+    age_labels = {
+        503001: "18-24",
+        503002: "25-34",
+        503003: "35-44",
+        503004: "45-54",
+        503005: "55-64",
+        503006: "65+",
+        503999: "Не определен",
+    }
+    gender_labels = {
+        10: "Мужчины",
+        11: "Женщины",
+        20: "Не определен",
+    }
+
+    age_query = f"""
         SELECT
-          segments.adjusted_age_range,
-          segments.adjusted_gender,
+          ad_group_criterion.criterion_id,
           metrics.impressions,
           metrics.clicks,
           metrics.cost_micros
-        FROM customer
+        FROM age_range_view
         WHERE segments.date BETWEEN '{date_from}' AND '{date_to}'
     """
-    rows = ga_service.search(customer_id=customer_id, query=query)
-    data: List[Dict[str, object]] = []
-    for row in rows:
-        data.append(
+
+    gender_query = f"""
+        SELECT
+          ad_group_criterion.criterion_id,
+          metrics.impressions,
+          metrics.clicks,
+          metrics.cost_micros
+        FROM gender_view
+        WHERE segments.date BETWEEN '{date_from}' AND '{date_to}'
+    """
+
+    age_rows = ga_service.search(customer_id=customer_id, query=age_query)
+    gender_rows = ga_service.search(customer_id=customer_id, query=gender_query)
+
+    age_data: List[Dict[str, object]] = []
+    for row in age_rows:
+        criterion_id = int(row.ad_group_criterion.criterion_id or 0)
+        age_data.append(
             {
-                "age_range": str(row.segments.adjusted_age_range),
-                "gender": str(row.segments.adjusted_gender),
+                "age_range": age_labels.get(criterion_id, str(criterion_id or "UNKNOWN")),
                 "impressions": int(row.metrics.impressions or 0),
                 "clicks": int(row.metrics.clicks or 0),
                 "spend": float(row.metrics.cost_micros or 0) / 1_000_000,
             }
         )
-    return data, None
+
+    gender_data: List[Dict[str, object]] = []
+    for row in gender_rows:
+        criterion_id = int(row.ad_group_criterion.criterion_id or 0)
+        gender_data.append(
+            {
+                "gender": gender_labels.get(criterion_id, str(criterion_id or "UNKNOWN")),
+                "impressions": int(row.metrics.impressions or 0),
+                "clicks": int(row.metrics.clicks or 0),
+                "spend": float(row.metrics.cost_micros or 0) / 1_000_000,
+            }
+        )
+
+    combined: List[Dict[str, object]] = []
+    for row in age_data:
+        combined.append({**row, "gender": "ALL"})
+    for row in gender_data:
+        combined.append({**row, "age_range": "ALL"})
+
+    return combined, None
 
 
 def _google_fetch_audience_device(customer_id: str, date_from: str, date_to: str) -> List[Dict[str, object]]:
     client = _google_ads_client()
     ga_service = client.get_service("GoogleAdsService")
+    device_labels = {
+        2: "Мобильные",
+        3: "Планшеты",
+        4: "Компьютеры",
+        5: "Connected TV",
+        6: "Прочие",
+    }
     query = f"""
         SELECT
           segments.device,
@@ -3157,9 +5444,10 @@ def _google_fetch_audience_device(customer_id: str, date_from: str, date_to: str
     rows = ga_service.search(customer_id=customer_id, query=query)
     data: List[Dict[str, object]] = []
     for row in rows:
+        device_value = int(row.segments.device or 0)
         data.append(
             {
-                "device": str(row.segments.device),
+                "device": device_labels.get(device_value, str(device_value or "UNKNOWN")),
                 "impressions": int(row.metrics.impressions or 0),
                 "clicks": int(row.metrics.clicks or 0),
                 "spend": float(row.metrics.cost_micros or 0) / 1_000_000,
@@ -3171,97 +5459,124 @@ def _google_fetch_audience_device(customer_id: str, date_from: str, date_to: str
 def _google_fetch_audience_geo(customer_id: str, date_from: str, date_to: str, level: str) -> List[Dict[str, object]]:
     client = _google_ads_client()
     ga_service = client.get_service("GoogleAdsService")
-    segment = {
-        "country": "segments.geo_target_country",
-        "region": "segments.geo_target_region",
-        "city": "segments.geo_target_city",
-    }.get(level)
-    if not segment:
+    if level != "country":
         return []
+
     query = f"""
         SELECT
-          {segment},
+          geographic_view.country_criterion_id,
+          geographic_view.location_type,
           metrics.impressions,
           metrics.clicks,
           metrics.cost_micros
-        FROM customer
+        FROM geographic_view
         WHERE segments.date BETWEEN '{date_from}' AND '{date_to}'
     """
     rows = ga_service.search(customer_id=customer_id, query=query)
     data: List[Dict[str, object]] = []
-    resource_names: List[str] = []
+    criterion_ids: List[int] = []
     for row in rows:
-        geo_value = getattr(row.segments, segment.split(".")[1])
-        resource_name = str(geo_value)
-        resource_names.append(resource_name)
+        criterion_id = int(row.geographic_view.country_criterion_id or 0)
+        if criterion_id:
+            criterion_ids.append(criterion_id)
         data.append(
             {
-                "geo": resource_name,
+                "geo": str(criterion_id or "UNKNOWN"),
+                "location_type": str(row.geographic_view.location_type),
                 "impressions": int(row.metrics.impressions or 0),
                 "clicks": int(row.metrics.clicks or 0),
                 "spend": float(row.metrics.cost_micros or 0) / 1_000_000,
             }
         )
-    if not resource_names:
+    if not criterion_ids:
         return data
-    name_map = _google_resolve_geo_names(client, resource_names)
-    for row in data:
-        row["geo"] = name_map.get(row["geo"], row["geo"])
+    try:
+        name_map = _google_resolve_geo_names_by_id(client, customer_id, criterion_ids)
+        for row in data:
+            row["geo"] = name_map.get(row["geo"], row["geo"])
+    except Exception:
+        pass
     return data
 
 
-def _google_resolve_geo_names(client: GoogleAdsClient, resource_names: List[str]) -> Dict[str, str]:
+def _google_resolve_geo_names_by_id(client: GoogleAdsClient, customer_id: str, criterion_ids: List[int]) -> Dict[str, str]:
     ga_service = client.get_service("GoogleAdsService")
-    unique = sorted(set(resource_names))
+    unique = sorted({int(value) for value in criterion_ids if int(value) > 0})
     if not unique:
         return {}
-    placeholders = ", ".join([f"'{name}'" for name in unique])
+    placeholders = ", ".join(str(value) for value in unique)
     query = f"""
         SELECT
-          geo_target_constant.resource_name,
+          geo_target_constant.id,
           geo_target_constant.name,
-          geo_target_constant.target_type
+          geo_target_constant.country_code
         FROM geo_target_constant
-        WHERE geo_target_constant.resource_name IN ({placeholders})
+        WHERE geo_target_constant.id IN ({placeholders})
     """
-    rows = ga_service.search(customer_id="0", query=query)
+    rows = ga_service.search(customer_id=customer_id, query=query)
     mapping: Dict[str, str] = {}
     for row in rows:
-        mapping[row.geo_target_constant.resource_name] = row.geo_target_constant.name
+        geo_id = str(int(row.geo_target_constant.id or 0))
+        name = str(row.geo_target_constant.name or geo_id)
+        country_code = str(row.geo_target_constant.country_code or "").strip()
+        mapping[geo_id] = f"{name} ({country_code})" if country_code else name
     return mapping
 
 
 def _google_fetch_daily(customer_id: str, date_from: str, date_to: str) -> List[Dict[str, object]]:
     client = _google_ads_client()
     ga_service = client.get_service("GoogleAdsService")
-    query = f"""
-        SELECT
-          segments.date,
-          metrics.impressions,
-          metrics.clicks,
-          metrics.ctr,
-          metrics.average_cpc,
-          metrics.average_cpm,
-          metrics.cost_micros
-        FROM customer
-        WHERE segments.date BETWEEN '{date_from}' AND '{date_to}'
-    """
-    rows = ga_service.search(customer_id=customer_id, query=query)
-    daily: List[Dict[str, object]] = []
-    for row in rows:
-        metrics = row.metrics
-        daily.append(
-            {
-                "date": str(row.segments.date),
-                "impressions": int(metrics.impressions or 0),
-                "clicks": int(metrics.clicks or 0),
-                "ctr": float(metrics.ctr or 0),
-                "cpc": float(metrics.average_cpc or 0) / 1_000_000 if metrics.average_cpc else 0,
-                "cpm": float(metrics.average_cpm or 0) / 1_000_000 if metrics.average_cpm else 0,
-                "spend": float(metrics.cost_micros or 0) / 1_000_000,
-            }
-        )
-    return daily
+    queries = [
+        f"""
+            SELECT
+              segments.date,
+              metrics.impressions,
+              metrics.clicks,
+              metrics.ctr,
+              metrics.average_cpc,
+              metrics.average_cpm,
+              metrics.cost_micros
+            FROM customer
+            WHERE segments.date BETWEEN '{date_from}' AND '{date_to}'
+        """,
+        f"""
+            SELECT
+              segments.date,
+              metrics.impressions,
+              metrics.clicks,
+              metrics.ctr,
+              metrics.average_cpc,
+              metrics.average_cpm,
+              metrics.cost_micros
+            FROM campaign
+            WHERE segments.date BETWEEN '{date_from}' AND '{date_to}'
+        """,
+    ]
+    last_error = None
+    for query in queries:
+        try:
+            rows = ga_service.search(customer_id=customer_id, query=query)
+            daily: List[Dict[str, object]] = []
+            for row in rows:
+                metrics = row.metrics
+                daily.append(
+                    {
+                        "date": str(row.segments.date),
+                        "impressions": int(metrics.impressions or 0),
+                        "clicks": int(metrics.clicks or 0),
+                        "ctr": float(metrics.ctr or 0),
+                        "cpc": float(metrics.average_cpc or 0) / 1_000_000 if metrics.average_cpc else 0,
+                        "cpm": float(metrics.average_cpm or 0) / 1_000_000 if metrics.average_cpm else 0,
+                        "spend": float(metrics.cost_micros or 0) / 1_000_000,
+                    }
+                )
+            return daily
+        except Exception as exc:
+            last_error = exc
+            continue
+    if last_error:
+        raise last_error
+    return []
 
 
 def _tiktok_access_token() -> str:
@@ -3279,24 +5594,38 @@ def _tiktok_fetch_report(
     dimensions: List[str],
     metrics: List[str],
 ) -> List[Dict[str, object]]:
+    def _sanitize_dimensions(values: List[str]) -> List[str]:
+        blocked = {"campaign_name", "adgroup_name", "ad_name"}
+        cleaned = [v for v in values if v not in blocked]
+        return cleaned or [v for v in values if v]
+
+    def _request_with_dimensions(current_dimensions: List[str]) -> Dict[str, object]:
+        params = {
+            "advertiser_id": advertiser_id,
+            "report_type": "BASIC",
+            "data_level": data_level,
+            "dimensions": json.dumps(current_dimensions),
+            "metrics": json.dumps(metrics),
+            "start_date": date_from,
+            "end_date": date_to,
+            "page_size": 1000,
+        }
+        headers = {"Access-Token": _tiktok_access_token()}
+        resp = httpx.get(url, params=params, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"TikTok API error: {resp.text}")
+        return resp.json()
+
     url = "https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/"
-    params = {
-        "advertiser_id": advertiser_id,
-        "report_type": "BASIC",
-        "data_level": data_level,
-        "dimensions": json.dumps(dimensions),
-        "metrics": json.dumps(metrics),
-        "start_date": date_from,
-        "end_date": date_to,
-        "page_size": 1000,
-    }
-    headers = {"Access-Token": _tiktok_access_token()}
-    resp = httpx.get(url, params=params, headers=headers, timeout=30)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"TikTok API error: {resp.text}")
-    payload = resp.json()
+    payload = _request_with_dimensions(dimensions)
     if payload.get("code") not in (0, None):
-        raise HTTPException(status_code=502, detail=f"TikTok API error: {payload}")
+        message = str(payload.get("message") or "")
+        if int(payload.get("code") or 0) == 40002 and "dimensions" in message.lower():
+            sanitized = _sanitize_dimensions(dimensions)
+            if sanitized != dimensions:
+                payload = _request_with_dimensions(sanitized)
+        if payload.get("code") not in (0, None):
+            raise HTTPException(status_code=502, detail=f"TikTok API error: {payload}")
     data = payload.get("data") or {}
     rows = data.get("list") or []
     results: List[Dict[str, object]] = []
@@ -3674,6 +6003,11 @@ def list_wallet_transactions(current_user=Depends(get_current_user)):
         return [dict(row) for row in rows]
 
 
+def _require_access_owner(current_user):
+    if not current_user.get("can_manage_accesses"):
+        raise HTTPException(status_code=403, detail="Owner access required")
+
+
 @app.get("/profile")
 def get_profile(current_user=Depends(get_current_user)):
     if not get_conn:
@@ -3681,6 +6015,8 @@ def get_profile(current_user=Depends(get_current_user)):
     with get_conn() as conn:
         profile = _get_or_create_profile(conn, current_user["id"])
         profile["email"] = current_user["email"]
+        profile["primary_email"] = current_user.get("primary_email") or current_user["email"]
+        profile["can_manage_accesses"] = bool(current_user.get("can_manage_accesses"))
         if profile.get("avatar_path"):
             profile["avatar_url"] = f"/profile/avatar?token={_ensure_token(conn, current_user['id'])}"
         return profile
@@ -3711,9 +6047,80 @@ def update_profile(payload: ProfilePayload, current_user=Depends(get_current_use
         row = conn.execute("SELECT * FROM user_profiles WHERE user_id=?", (current_user["id"],)).fetchone()
         result = dict(row) if row else {}
         result["email"] = current_user["email"]
+        result["primary_email"] = current_user.get("primary_email") or current_user["email"]
+        result["can_manage_accesses"] = bool(current_user.get("can_manage_accesses"))
         if result.get("avatar_path"):
             result["avatar_url"] = f"/profile/avatar?token={_ensure_token(conn, current_user['id'])}"
         return result
+
+
+@app.get("/profile/accesses")
+def list_profile_accesses(current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
+    if not get_conn:
+        return {"items": [], "can_manage_accesses": True}
+    with get_conn() as conn:
+        _ensure_owner_access(conn, current_user["id"])
+        rows = conn.execute(
+            """
+            SELECT id, user_id, email, role, status, created_at
+            FROM user_accesses
+            WHERE user_id=?
+            ORDER BY CASE WHEN role='owner' THEN 0 ELSE 1 END, created_at ASC
+            """,
+            (current_user["id"],),
+        ).fetchall()
+        return {"can_manage_accesses": True, "items": [dict(row) for row in rows]}
+
+
+@app.post("/profile/accesses")
+def create_profile_access(payload: AccessCreatePayload, current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    email = _normalize_email(payload.email)
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
+    with get_conn() as conn:
+        owner = _ensure_owner_access(conn, current_user["id"])
+        if owner and _normalize_email(owner.get("email")) == email:
+            raise HTTPException(status_code=400, detail="Main email is already linked")
+        existing = _get_access_by_email(conn, email)
+        if existing:
+            raise HTTPException(status_code=400, detail="Email is already linked to an account")
+        conn.execute(
+            """
+            INSERT INTO user_accesses (user_id, email, role, status)
+            VALUES (?, ?, 'member', 'active')
+            """,
+            (current_user["id"], email),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT id, user_id, email, role, status, created_at FROM user_accesses WHERE email=?",
+            (email,),
+        ).fetchone()
+        return dict(row) if row else {"status": "ok"}
+
+
+@app.delete("/profile/accesses/{access_id}")
+def delete_profile_access(access_id: int, current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_accesses WHERE id=? AND user_id=?",
+            (access_id, current_user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Access not found")
+        if (row["role"] or "member") == "owner":
+            raise HTTPException(status_code=400, detail="Main email cannot be deleted")
+        conn.execute("DELETE FROM user_tokens WHERE user_id=? AND login_email=?", (current_user["id"], row["email"]))
+        conn.execute("DELETE FROM user_accesses WHERE id=?", (access_id,))
+        conn.commit()
+        return {"status": "ok"}
 
 
 @app.get("/fees")
@@ -3930,20 +6337,24 @@ def change_password(payload: ChangePasswordPayload, current_user=Depends(get_cur
     if not payload.current_password or not payload.new_password:
         raise HTTPException(status_code=400, detail="current_password and new_password are required")
     with get_conn() as conn:
-        user = conn.execute("SELECT * FROM users WHERE id=?", (current_user["id"],)).fetchone()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        if not _verify_password(payload.current_password, user["salt"], user["password_hash"]):
+        access = _get_access_by_email(conn, current_user["email"])
+        if not access or not access.get("password_hash") or not access.get("salt"):
+            raise HTTPException(status_code=404, detail="Access not found")
+        if not _verify_password(payload.current_password, access["salt"], access["password_hash"]):
             raise HTTPException(status_code=400, detail="Invalid current password")
         salt = secrets.token_hex(8)
         password_hash = _hash_password(payload.new_password, salt)
         conn.execute(
-            "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-            (password_hash, salt, current_user["id"]),
+            "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
+            (password_hash, salt, access["id"]),
         )
+        if (access.get("role") or "member") == "owner":
+            conn.execute(
+                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
+                (password_hash, salt, current_user["id"]),
+            )
         conn.execute("DELETE FROM user_tokens WHERE user_id=?", (current_user["id"],))
-        new_token = secrets.token_hex(24)
-        conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (current_user["id"], new_token))
+        new_token = _issue_user_token(conn, current_user["id"], current_user["email"])
         conn.commit()
         return {"status": "ok", "token": new_token}
 
@@ -3982,6 +6393,240 @@ def download_document(
         return FileResponse(row["file_path"], filename=os.path.basename(row["file_path"]))
 
 
+@app.get("/client-finance-documents")
+def list_client_finance_documents(current_user=Depends(get_current_user)):
+    if not get_conn:
+        return []
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+              id,
+              document_type,
+              title,
+              document_number,
+              document_date,
+              amount,
+              currency,
+              note,
+              file_name,
+              mime_type,
+              created_at,
+              updated_at
+            FROM client_finance_documents
+            WHERE user_id=?
+            ORDER BY COALESCE(NULLIF(document_date, ''), CAST(created_at AS TEXT)) DESC, id DESC
+            """,
+            (current_user["id"],),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.get("/client-finance-documents/{doc_id}")
+def download_client_finance_document(
+    doc_id: int,
+    token: Optional[str] = None,
+    current_user=Depends(get_optional_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    if token:
+        current_user = _get_user_by_token(token)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Missing token")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM client_finance_documents WHERE id=? AND user_id=?",
+            (doc_id, current_user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Document not found")
+        payload = dict(row)
+        file_path = payload.get("file_path")
+        file_name = payload.get("file_name") or os.path.basename(file_path or "")
+        r2_ref = _r2_parse_path(file_path)
+        if r2_ref:
+            bucket, key = r2_ref
+            url = _r2_presigned_url(key, bucket=bucket)
+            if not url:
+                raise HTTPException(status_code=500, detail="R2 not configured")
+            return RedirectResponse(url)
+        return FileResponse(
+            file_path,
+            media_type=payload.get("mime_type") or "application/octet-stream",
+            filename=file_name,
+        )
+
+
+@app.get("/admin/clients/{user_id}/documents")
+def admin_client_finance_documents(user_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        return []
+    with get_conn() as conn:
+        user = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        rows = conn.execute(
+            """
+            SELECT
+              id,
+              document_type,
+              title,
+              document_number,
+              document_date,
+              amount,
+              currency,
+              note,
+              file_name,
+              mime_type,
+              uploaded_by,
+              created_at,
+              updated_at
+            FROM client_finance_documents
+            WHERE user_id=?
+            ORDER BY COALESCE(NULLIF(document_date, ''), CAST(created_at AS TEXT)) DESC, id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.get("/admin/clients/{user_id}/documents/{doc_id}")
+def admin_download_client_finance_document(
+    user_id: int,
+    doc_id: int,
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM client_finance_documents WHERE id=? AND user_id=?",
+            (doc_id, user_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Document not found")
+        payload = dict(row)
+        file_path = payload.get("file_path")
+        file_name = payload.get("file_name") or os.path.basename(file_path or "")
+        r2_ref = _r2_parse_path(file_path)
+        if r2_ref:
+            bucket, key = r2_ref
+            url = _r2_presigned_url(key, bucket=bucket)
+            if not url:
+                raise HTTPException(status_code=500, detail="R2 not configured")
+            return RedirectResponse(url)
+        return FileResponse(
+            file_path,
+            media_type=payload.get("mime_type") or "application/octet-stream",
+            filename=file_name,
+        )
+
+
+@app.post("/admin/clients/{user_id}/documents/upload")
+def admin_upload_client_finance_document(
+    user_id: int,
+    document_type: str = Form(...),
+    title: str = Form(...),
+    file: UploadFile = File(...),
+    document_number: Optional[str] = Form(None),
+    document_date: Optional[str] = Form(None),
+    amount: Optional[float] = Form(None),
+    currency: Optional[str] = Form(None),
+    note: Optional[str] = Form(None),
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    doc_type = str(document_type or "").strip().lower()
+    if doc_type not in {"invoice", "avr"}:
+        raise HTTPException(status_code=400, detail="document_type must be invoice or avr")
+    safe_title = (title or "").strip()
+    if not safe_title:
+        raise HTTPException(status_code=400, detail="title is required")
+    if not file:
+        raise HTTPException(status_code=400, detail="file is required")
+    file_path = None
+    with get_conn() as conn:
+        try:
+            user = conn.execute("SELECT id, email FROM users WHERE id=?", (user_id,)).fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            file_path = _save_finance_document(file)
+            cur = conn.execute(
+                """
+                INSERT INTO client_finance_documents
+                (user_id, document_type, title, document_number, document_date, amount, currency, note, file_name, file_path, mime_type, uploaded_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    doc_type,
+                    safe_title,
+                    (document_number or "").strip() or None,
+                    (document_date or "").strip() or None,
+                    amount,
+                    (currency or "KZT").strip().upper(),
+                    (note or "").strip() or None,
+                    file.filename or None,
+                    file_path,
+                    file.content_type or "application/octet-stream",
+                    admin_user.get("email"),
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                """
+                SELECT
+                  id,
+                  document_type,
+                  title,
+                  document_number,
+                  document_date,
+                  amount,
+                  currency,
+                  note,
+                  file_name,
+                  mime_type,
+                  uploaded_by,
+                  created_at,
+                  updated_at
+                FROM client_finance_documents
+                WHERE id=?
+                """,
+                (cur.lastrowid,),
+            ).fetchone()
+            return dict(row)
+        except Exception:
+            _delete_stored_file(file_path)
+            raise
+
+
+@app.delete("/admin/clients/{user_id}/documents/{doc_id}")
+def admin_delete_client_finance_document(
+    user_id: int,
+    doc_id: int,
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM client_finance_documents WHERE id=? AND user_id=?",
+            (doc_id, user_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Document not found")
+        payload = dict(row)
+        conn.execute(
+            "DELETE FROM client_finance_documents WHERE id=? AND user_id=?",
+            (doc_id, user_id),
+        )
+        conn.commit()
+    _delete_stored_file(payload.get("file_path"))
+    return {"status": "ok", "id": doc_id}
+
+
 @app.get("/meta/insights", response_model=MetaInsightsResponse)
 def meta_insights(
     date_from: str,
@@ -4015,12 +6660,17 @@ def meta_insights(
     total_clicks = 0.0
     total_reach = 0.0
     currency = None
+    errors: List[str] = []
 
     for acc in accounts:
         external_id = acc.get("external_id") or acc.get("account_code")
         if not external_id:
             continue
-        rows = _meta_fetch_insights(external_id, date_from, date_to)
+        try:
+            rows = _meta_fetch_insights(external_id, date_from, date_to)
+        except Exception as exc:
+            errors.append(f"{acc.get('name') or external_id}: {exc}")
+            continue
         for row in rows:
             spend = float(row.get("spend") or 0)
             impressions = float(row.get("impressions") or 0)
@@ -4063,7 +6713,12 @@ def meta_insights(
         "clicks": total_clicks,
         "currency": currency or "USD",
     }
-    return {"summary": summary, "campaigns": campaigns}
+    status = "Данные обновлены."
+    if errors and not campaigns:
+        status = "Meta token expired or Meta API is unavailable."
+    elif errors:
+        status = f"Часть Meta аккаунтов недоступна: {len(errors)}"
+    return {"summary": summary, "campaigns": campaigns, "status": status}
 
 
 @app.get("/google/insights", response_model=GoogleInsightsResponse)
@@ -4099,18 +6754,18 @@ def google_insights(
     total_clicks = 0.0
     total_conversions = 0.0
     currency = None
+    errors: List[str] = []
 
     for acc in accounts:
-        external_id = acc.get("external_id") or acc.get("account_code")
+        external_id = _google_valid_customer_id_or_none(acc.get("external_id") or acc.get("account_code"))
         if not external_id:
             continue
         try:
             rows, acc_currency = _google_fetch_insights(str(external_id), date_from, date_to)
-        except google_api_exceptions.GoogleAPICallError as exc:
-            message = getattr(exc, "message", None) or str(exc)
-            raise HTTPException(status_code=502, detail=f"Google Ads API error: {message}")
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Google Ads error: {exc}")
+            message = getattr(exc, "message", None) or str(exc)
+            errors.append(f"{acc.get('name') or external_id}: {message}")
+            continue
         currency = currency or acc_currency
         for row in rows:
             total_spend += float(row.get("spend") or 0)
@@ -4133,7 +6788,12 @@ def google_insights(
         "conversions": total_conversions,
         "currency": currency or "USD",
     }
-    return {"summary": summary, "campaigns": campaigns}
+    status = "Данные обновлены."
+    if errors and not campaigns:
+        status = "Google token expired or Google Ads API is unavailable."
+    elif errors:
+        status = f"Часть Google аккаунтов недоступна: {len(errors)}"
+    return {"summary": summary, "campaigns": campaigns, "status": status}
 
 
 @app.get("/tiktok/insights", response_model=TikTokInsightsResponse)
@@ -4178,17 +6838,25 @@ def tiktok_insights(
     ads: List[Dict[str, object]] = []
 
     metrics = ["spend", "impressions", "clicks", "ctr", "cpc", "cpm"]
+    summary_currency = None
 
     for acc in accounts:
-        advertiser_id = acc.get("external_id") or acc.get("account_code") or os.getenv("TIKTOK_ADVERTISER_ID")
+        advertiser_id = acc.get("external_id") or acc.get("account_code")
         if not advertiser_id:
+            if account_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Для аккаунта TikTok id={acc.get('id')} не указан advertiser id (external_id/account_code).",
+                )
             continue
+        summary_currency = summary_currency or acc.get("currency")
+        advertiser_id = _tiktok_normalize_advertiser_id(advertiser_id)
         campaign_rows = _tiktok_fetch_report(
             str(advertiser_id),
             date_from,
             date_to,
             "AUCTION_CAMPAIGN",
-            ["campaign_id", "campaign_name"],
+            ["campaign_id"],
             metrics,
         )
         adgroup_rows = _tiktok_fetch_report(
@@ -4196,7 +6864,7 @@ def tiktok_insights(
             date_from,
             date_to,
             "AUCTION_ADGROUP",
-            ["adgroup_id", "adgroup_name", "campaign_id", "campaign_name"],
+            ["adgroup_id"],
             metrics,
         )
         ad_rows = _tiktok_fetch_report(
@@ -4204,7 +6872,7 @@ def tiktok_insights(
             date_from,
             date_to,
             "AUCTION_AD",
-            ["ad_id", "ad_name", "adgroup_id", "adgroup_name", "campaign_id", "campaign_name"],
+            ["ad_id"],
             metrics,
         )
         for row in campaign_rows:
@@ -4270,7 +6938,7 @@ def tiktok_insights(
         "cpm": cpm,
         "impressions": total_impressions,
         "clicks": total_clicks,
-        "currency": "USD",
+        "currency": summary_currency or "USD",
     }
     return {"summary": summary, "campaigns": campaigns, "adgroups": adgroups, "ads": ads}
 
@@ -4308,21 +6976,24 @@ def meta_audience(
         if not external_id:
             continue
         payload: Dict[str, object] = {"account_id": acc.get("id"), "name": acc.get("name") or external_id}
-        if group == "age_gender":
-            payload["age_gender"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["age", "gender"])
-        elif group == "geo":
-            payload["country"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["country"])
-            payload["region"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["region"])
-        else:
-            payload["publisher_platform"] = _meta_fetch_breakdowns(
-                str(external_id), date_from, date_to, ["publisher_platform"]
-            )
-            payload["impression_device"] = _meta_fetch_breakdowns(
-                str(external_id), date_from, date_to, ["impression_device"]
-            )
-            payload["device_platform"] = _meta_fetch_breakdowns(
-                str(external_id), date_from, date_to, ["device_platform"]
-            )
+        try:
+            if group == "age_gender":
+                payload["age_gender"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["age", "gender"])
+            elif group == "geo":
+                payload["country"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["country"])
+                payload["region"] = _meta_fetch_breakdowns(str(external_id), date_from, date_to, ["region"])
+            else:
+                payload["publisher_platform"] = _meta_fetch_breakdowns(
+                    str(external_id), date_from, date_to, ["publisher_platform"]
+                )
+                payload["impression_device"] = _meta_fetch_breakdowns(
+                    str(external_id), date_from, date_to, ["impression_device"]
+                )
+                payload["device_platform"] = _meta_fetch_breakdowns(
+                    str(external_id), date_from, date_to, ["device_platform"]
+                )
+        except Exception as exc:
+            payload["error"] = str(exc)
         results.append(payload)
     return {"accounts": results}
 
@@ -4357,7 +7028,7 @@ def google_audience(
 
     results = []
     for acc in accounts:
-        customer_id = acc.get("external_id") or acc.get("account_code")
+        customer_id = _google_valid_customer_id_or_none(acc.get("external_id") or acc.get("account_code"))
         if not customer_id:
             continue
         payload: Dict[str, object] = {"account_id": acc.get("id"), "name": acc.get("name") or customer_id}
@@ -4377,16 +7048,183 @@ def google_audience(
         results.append(payload)
     return {"accounts": results}
 
-@app.get("/insights/overview")
-def insights_overview(
+
+def _build_insights_overview_for_user(
+    current_user: Dict[str, object],
     date_from: str,
     date_to: str,
-    current_user=Depends(get_current_user),
-):
-    if not get_conn:
-        raise HTTPException(status_code=500, detail="DB not initialized")
-    if not date_from or not date_to:
-        raise HTTPException(status_code=400, detail="date_from and date_to are required")
+    meta_account_id: Optional[int] = None,
+    google_account_id: Optional[int] = None,
+    tiktok_account_id: Optional[int] = None,
+) -> Dict[str, object]:
+    def _to_float(value: object) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
+    def _merge_daily(target: Dict[str, Dict[str, object]], date_key: str, row: Dict[str, object]) -> None:
+        date_val = row.get(date_key)
+        if not date_val:
+            return
+        if date_val not in target:
+            target[date_val] = {"date": date_val, "spend": 0.0, "impressions": 0.0, "clicks": 0.0}
+        target[date_val]["spend"] += _to_float(row.get("spend"))
+        target[date_val]["impressions"] += _to_float(row.get("impressions"))
+        target[date_val]["clicks"] += _to_float(row.get("clicks"))
+
+    def _merge_account_daily(
+        target: Dict[str, Dict[int, Dict[str, object]]],
+        platform: str,
+        account: Dict[str, object],
+        date_key: str,
+        row: Dict[str, object],
+    ) -> None:
+        account_id = int(account.get("id") or 0)
+        if not account_id:
+            return
+        platform_bucket = target.setdefault(platform, {})
+        if account_id not in platform_bucket:
+            platform_bucket[account_id] = {
+                "account_id": account_id,
+                "name": account.get("name") or account.get("external_id") or account.get("account_code") or f"ID {account_id}",
+                "platform": platform,
+                "_daily_map": {},
+            }
+        _merge_daily(platform_bucket[account_id]["_daily_map"], date_key, row)
+
+    def _fetch_accounts(conn, platform: str, account_id: Optional[int]) -> List[Dict[str, object]]:
+        if account_id:
+            row = conn.execute(
+                "SELECT * FROM ad_accounts WHERE id=? AND user_id=? AND platform=?",
+                (account_id, current_user["id"], platform),
+            ).fetchone()
+            return [dict(row)] if row else []
+        rows = conn.execute(
+            "SELECT * FROM ad_accounts WHERE user_id=? AND platform=?",
+            (current_user["id"], platform),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    with get_conn() as conn:
+        meta_accounts = _fetch_accounts(conn, "meta", meta_account_id)
+        google_accounts = _fetch_accounts(conn, "google", google_account_id)
+        tiktok_accounts = _fetch_accounts(conn, "tiktok", tiktok_account_id)
+
+    totals = {
+        "meta": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+        "google": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+        "tiktok": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+    }
+    daily_by_account: Dict[str, Dict[int, Dict[str, object]]] = {"meta": {}, "google": {}, "tiktok": {}}
+    daily_meta: Dict[str, Dict[str, object]] = {}
+    daily_google: Dict[str, Dict[str, object]] = {}
+    daily_tiktok: Dict[str, Dict[str, object]] = {}
+    safe_meta_from = _meta_safe_date_from(date_from)
+
+    for acc in meta_accounts:
+        external_id = acc.get("external_id") or acc.get("account_code")
+        if not external_id:
+            continue
+        try:
+            rows = _meta_fetch_daily(str(external_id), safe_meta_from, date_to)
+            for row in rows:
+                _merge_daily(daily_meta, "date_start", row)
+                _merge_account_daily(daily_by_account, "meta", acc, "date_start", row)
+        except Exception:
+            continue
+
+    for acc in google_accounts:
+        external_id = _google_valid_customer_id_or_none(acc.get("external_id") or acc.get("account_code"))
+        if not external_id:
+            continue
+        try:
+            rows = _google_fetch_daily(str(external_id), date_from, date_to)
+            for row in rows:
+                _merge_daily(daily_google, "date", row)
+                _merge_account_daily(daily_by_account, "google", acc, "date", row)
+        except Exception:
+            continue
+
+    has_tiktok_accounts = False
+    for acc in tiktok_accounts:
+        adv_id = acc.get("external_id") or acc.get("account_code")
+        if not adv_id:
+            continue
+        has_tiktok_accounts = True
+        try:
+            for chunk_from, chunk_to in _date_chunks(date_from, date_to, 30):
+                rows = _tiktok_fetch_daily(str(adv_id), chunk_from, chunk_to)
+                for row in rows:
+                    _merge_daily(daily_tiktok, "date", row)
+                    _merge_account_daily(daily_by_account, "tiktok", acc, "date", row)
+        except Exception:
+            continue
+    if not has_tiktok_accounts:
+        env_adv = os.getenv("TIKTOK_ADVERTISER_ID")
+        if env_adv:
+            try:
+                for chunk_from, chunk_to in _date_chunks(date_from, date_to, 30):
+                    rows = _tiktok_fetch_daily(str(env_adv), chunk_from, chunk_to)
+                    for row in rows:
+                        _merge_daily(daily_tiktok, "date", row)
+            except Exception:
+                pass
+
+    def _finalize(daily_map: Dict[str, Dict[str, object]], platform: str) -> List[Dict[str, object]]:
+        rows = [daily_map[k] for k in sorted(daily_map.keys())]
+        totals[platform]["spend"] = sum(_to_float(r.get("spend")) for r in rows)
+        totals[platform]["impressions"] = sum(_to_float(r.get("impressions")) for r in rows)
+        totals[platform]["clicks"] = sum(_to_float(r.get("clicks")) for r in rows)
+        return rows
+
+    daily = {
+        "meta": _finalize(daily_meta, "meta"),
+        "google": _finalize(daily_google, "google"),
+        "tiktok": _finalize(daily_tiktok, "tiktok"),
+    }
+
+    serialized_daily_by_account: Dict[str, List[Dict[str, object]]] = {}
+    for platform, accounts_map in daily_by_account.items():
+        serialized_daily_by_account[platform] = []
+        for account_id in sorted(accounts_map.keys()):
+            account_payload = dict(accounts_map[account_id])
+            daily_map = account_payload.pop("_daily_map", {})
+            account_payload["daily"] = [daily_map[k] for k in sorted(daily_map.keys())]
+            serialized_daily_by_account[platform].append(account_payload)
+
+    return {
+        "totals": totals,
+        "daily": daily,
+        "daily_by_account": serialized_daily_by_account,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+
+
+def _assistant_history_range(req: PlanRequest) -> Tuple[str, str]:
+    mode = str(os.getenv("ASSISTANT_HISTORY_MODE", "full") or "full").lower()
+    end_date = date.today()
+    if mode == "plan" and req.date_start and req.date_end and req.date_end >= req.date_start:
+        return req.date_start.isoformat(), req.date_end.isoformat()
+    if mode == "lookback":
+        days = int(os.getenv("ASSISTANT_HISTORY_DAYS", "365") or 365)
+        start_date = end_date - timedelta(days=max(1, min(days, 3650)) - 1)
+        return start_date.isoformat(), end_date.isoformat()
+    # full history (bounded by configured start date to avoid unbounded API lookups)
+    start_str = os.getenv("ASSISTANT_HISTORY_START_DATE", "2023-01-01")
+    return start_str, end_date.isoformat()
+
+
+def _build_insights_overview_global(date_from: str, date_to: str) -> Dict[str, object]:
+    cache_key = f"{date_from}:{date_to}"
+    now = time.time()
+    if (
+        _ASSISTANT_GLOBAL_OVERVIEW_CACHE.get("key") == cache_key
+        and float(_ASSISTANT_GLOBAL_OVERVIEW_CACHE.get("ts") or 0.0) + _ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC > now
+        and isinstance(_ASSISTANT_GLOBAL_OVERVIEW_CACHE.get("data"), dict)
+    ):
+        return dict(_ASSISTANT_GLOBAL_OVERVIEW_CACHE["data"])  # type: ignore[index]
 
     def _to_float(value: object) -> float:
         try:
@@ -4405,67 +7243,84 @@ def insights_overview(
         target[date_val]["clicks"] += _to_float(row.get("clicks"))
 
     with get_conn() as conn:
-        meta_rows = conn.execute(
-            "SELECT * FROM ad_accounts WHERE user_id=? AND platform='meta'",
-            (current_user["id"],),
+        rows = conn.execute(
+            """
+            SELECT id, platform, external_id, account_code, status
+            FROM ad_accounts
+            WHERE platform IN ('meta', 'google', 'tiktok')
+            """,
         ).fetchall()
-        google_rows = conn.execute(
-            "SELECT * FROM ad_accounts WHERE user_id=? AND platform='google'",
-            (current_user["id"],),
-        ).fetchall()
-        tiktok_rows = conn.execute(
-            "SELECT * FROM ad_accounts WHERE user_id=? AND platform='tiktok'",
-            (current_user["id"],),
-        ).fetchall()
-        meta_accounts = [dict(r) for r in meta_rows]
-        google_accounts = [dict(r) for r in google_rows]
-        tiktok_accounts = [dict(r) for r in tiktok_rows]
+        accounts = [dict(r) for r in rows]
 
-    totals = {"meta": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
-              "google": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
-              "tiktok": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0}}
+    ids_by_platform: Dict[str, set] = {"meta": set(), "google": set(), "tiktok": set()}
+    debug: Dict[str, Dict[str, object]] = {
+        "meta": {"accounts_total": 0, "used_ids": 0, "missing_id": 0, "api_ok": 0, "api_failed": 0, "last_error": None},
+        "google": {"accounts_total": 0, "used_ids": 0, "missing_id": 0, "api_ok": 0, "api_failed": 0, "last_error": None},
+        "tiktok": {"accounts_total": 0, "used_ids": 0, "missing_id": 0, "api_ok": 0, "api_failed": 0, "last_error": None},
+    }
+    for acc in accounts:
+        status = str(acc.get("status") or "active").lower()
+        if status in {"archived", "disabled", "deleted"}:
+            continue
+        platform = str(acc.get("platform") or "").lower()
+        if platform in debug:
+            debug[platform]["accounts_total"] = int(debug[platform]["accounts_total"]) + 1
+        external_id = acc.get("external_id") or acc.get("account_code")
+        if platform == "google":
+            external_id = _google_valid_customer_id_or_none(external_id)
+        if platform in ids_by_platform and external_id:
+            ids_by_platform[platform].add(str(external_id))
+        elif platform in debug:
+            debug[platform]["missing_id"] = int(debug[platform]["missing_id"]) + 1
 
+    for platform in ("meta", "google", "tiktok"):
+        debug[platform]["used_ids"] = len(ids_by_platform[platform])
+
+    totals = {
+        "meta": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+        "google": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+        "tiktok": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
+    }
     daily_meta: Dict[str, Dict[str, object]] = {}
     daily_google: Dict[str, Dict[str, object]] = {}
     daily_tiktok: Dict[str, Dict[str, object]] = {}
+    safe_meta_from = _meta_safe_date_from(date_from)
 
-    for acc in meta_accounts:
-        external_id = acc.get("external_id") or acc.get("account_code")
-        if not external_id:
-            continue
+    for external_id in sorted(ids_by_platform["meta"]):
         try:
-            rows = _meta_fetch_daily(str(external_id), date_from, date_to)
+            rows = _meta_fetch_daily(external_id, safe_meta_from, date_to)
             for row in rows:
                 _merge_daily(daily_meta, "date_start", row)
+            debug["meta"]["api_ok"] = int(debug["meta"]["api_ok"]) + 1
         except Exception:
+            debug["meta"]["api_failed"] = int(debug["meta"]["api_failed"]) + 1
+            if not debug["meta"]["last_error"]:
+                debug["meta"]["last_error"] = traceback.format_exc(limit=1).strip().splitlines()[-1]
             continue
 
-    for acc in google_accounts:
-        external_id = acc.get("external_id") or acc.get("account_code")
-        if not external_id:
-            continue
+    for external_id in sorted(ids_by_platform["google"]):
         try:
-            rows = _google_fetch_daily(str(external_id), date_from, date_to)
+            rows = _google_fetch_daily(external_id, date_from, date_to)
             for row in rows:
                 _merge_daily(daily_google, "date", row)
+            debug["google"]["api_ok"] = int(debug["google"]["api_ok"]) + 1
         except Exception:
+            debug["google"]["api_failed"] = int(debug["google"]["api_failed"]) + 1
+            if not debug["google"]["last_error"]:
+                debug["google"]["last_error"] = traceback.format_exc(limit=1).strip().splitlines()[-1]
             continue
 
-    advertiser_ids: List[str] = []
-    for acc in tiktok_accounts:
-        adv_id = acc.get("external_id") or acc.get("account_code")
-        if adv_id:
-            advertiser_ids.append(str(adv_id))
-    if not advertiser_ids:
-        env_adv = os.getenv("TIKTOK_ADVERTISER_ID")
-        if env_adv:
-            advertiser_ids.append(str(env_adv))
-    for adv_id in sorted(set(advertiser_ids)):
+    for advertiser_id in sorted(ids_by_platform["tiktok"]):
         try:
-            rows = _tiktok_fetch_daily(adv_id, date_from, date_to)
-            for row in rows:
-                _merge_daily(daily_tiktok, "date", row)
+            for chunk_from, chunk_to in _date_chunks(date_from, date_to, 30):
+                rows = _tiktok_fetch_daily(advertiser_id, chunk_from, chunk_to)
+                for row in rows:
+                    _merge_daily(daily_tiktok, "date", row)
+            debug["tiktok"]["api_ok"] = int(debug["tiktok"]["api_ok"]) + 1
         except Exception:
+            debug["tiktok"]["api_failed"] = int(debug["tiktok"]["api_failed"]) + 1
+            if not debug["tiktok"]["last_error"]:
+                debug["tiktok"]["last_error"] = traceback.format_exc(limit=1).strip().splitlines()[-1]
             continue
 
     def _finalize(daily_map: Dict[str, Dict[str, object]], platform: str) -> List[Dict[str, object]]:
@@ -4480,8 +7335,674 @@ def insights_overview(
         "google": _finalize(daily_google, "google"),
         "tiktok": _finalize(daily_tiktok, "tiktok"),
     }
+    payload = {"totals": totals, "daily": daily, "date_from": date_from, "date_to": date_to, "debug": debug}
+    _ASSISTANT_GLOBAL_OVERVIEW_CACHE["key"] = cache_key
+    _ASSISTANT_GLOBAL_OVERVIEW_CACHE["ts"] = now
+    _ASSISTANT_GLOBAL_OVERVIEW_CACHE["data"] = payload
+    return payload
 
-    return {"totals": totals, "daily": daily}
+
+@app.get("/insights/overview")
+def insights_overview(
+    date_from: str,
+    date_to: str,
+    meta_account_id: Optional[int] = None,
+    google_account_id: Optional[int] = None,
+    tiktok_account_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    if not date_from or not date_to:
+        raise HTTPException(status_code=400, detail="date_from and date_to are required")
+    return _build_insights_overview_for_user(
+        current_user=current_user,
+        date_from=date_from,
+        date_to=date_to,
+        meta_account_id=meta_account_id,
+        google_account_id=google_account_id,
+        tiktok_account_id=tiktok_account_id,
+    )
+
+
+def _dashboard_export_fmt_money(value: object, currency: str = "USD") -> str:
+    try:
+        amount = float(value or 0)
+    except Exception:
+        amount = 0.0
+    return f"{amount:,.2f}".replace(",", " ") + f" {currency}"
+
+
+def _dashboard_export_fmt_int(value: object) -> str:
+    try:
+        amount = float(value or 0)
+    except Exception:
+        amount = 0.0
+    return f"{int(round(amount)):,}".replace(",", " ")
+
+
+def _dashboard_export_fmt_pct(value: object) -> str:
+    try:
+        amount = float(value or 0)
+    except Exception:
+        amount = 0.0
+    return f"{amount * 100:.2f}%"
+
+
+def _dashboard_export_safe_payload(loader, fallback: Dict[str, object]) -> Dict[str, object]:
+    try:
+        return loader()
+    except HTTPException as exc:
+        payload = dict(fallback)
+        payload["error"] = exc.detail
+        return payload
+    except Exception as exc:
+        payload = dict(fallback)
+        payload["error"] = str(exc)
+        return payload
+
+
+def _dashboard_export_collect_audience_rows(payload: Dict[str, object], group: str, platform: str) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    accounts = payload.get("accounts") or []
+    if not isinstance(accounts, list):
+        return rows
+    for account in accounts:
+        if not isinstance(account, dict) or account.get("error"):
+            continue
+        if group == "age_gender":
+            for row in account.get("age_gender") or []:
+                if not isinstance(row, dict):
+                    continue
+                if platform == "meta":
+                    label = f"{row.get('age') or '—'} / {row.get('gender') or '—'}"
+                else:
+                    label = f"{row.get('age_range') or '—'} / {row.get('gender') or '—'}"
+                rows.append(
+                    {
+                        "platform": platform,
+                        "segment": label,
+                        "impressions": row.get("impressions") or 0,
+                        "clicks": row.get("clicks") or 0,
+                        "spend": row.get("spend") or 0,
+                    }
+                )
+        elif group == "geo":
+            if platform == "meta":
+                for row in account.get("country") or []:
+                    if isinstance(row, dict):
+                        rows.append({"platform": platform, "segment": f"Country: {row.get('country') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                for row in account.get("region") or []:
+                    if isinstance(row, dict):
+                        rows.append({"platform": platform, "segment": f"Region: {row.get('region') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+            else:
+                for row in account.get("country") or []:
+                    if isinstance(row, dict):
+                        rows.append({"platform": platform, "segment": f"Country: {row.get('geo') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                for row in account.get("region") or []:
+                    if isinstance(row, dict):
+                        rows.append({"platform": platform, "segment": f"Region: {row.get('geo') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                for row in account.get("city") or []:
+                    if isinstance(row, dict):
+                        rows.append({"platform": platform, "segment": f"City: {row.get('geo') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+        elif group == "device":
+            source_rows = []
+            if platform == "meta":
+                source_rows.extend(account.get("impression_device") or [])
+                source_rows.extend(account.get("device_platform") or [])
+            else:
+                source_rows.extend(account.get("device") or [])
+            for row in source_rows:
+                if not isinstance(row, dict):
+                    continue
+                segment = row.get("impression_device") or row.get("device_platform") or row.get("device") or "—"
+                rows.append(
+                    {
+                        "platform": platform,
+                        "segment": str(segment),
+                        "impressions": row.get("impressions") or 0,
+                        "clicks": row.get("clicks") or 0,
+                        "spend": row.get("spend") or 0,
+                    }
+                )
+    return rows
+
+
+def _dashboard_export_aggregate_segments(rows: List[Dict[str, object]], platform_filter: str = "all", prefix: Optional[str] = None) -> List[Dict[str, object]]:
+    grouped: Dict[str, float] = {}
+    normalized_platform = str(platform_filter or "all").lower()
+    normalized_prefix = prefix.lower() if prefix else None
+    for row in rows:
+        platform = str(row.get("platform") or "").lower()
+        if normalized_platform != "all" and platform != normalized_platform:
+            continue
+        segment = str(row.get("segment") or "").strip()
+        if not segment:
+            continue
+        if normalized_prefix and not segment.lower().startswith(normalized_prefix):
+            continue
+        try:
+            impressions = float(row.get("impressions") or 0)
+            clicks = float(row.get("clicks") or 0)
+            spend = float(row.get("spend") or 0)
+        except Exception:
+            impressions = 0.0
+            clicks = 0.0
+            spend = 0.0
+        weight = impressions if impressions > 0 else clicks if clicks > 0 else spend
+        if weight <= 0:
+            continue
+        grouped[segment] = grouped.get(segment, 0.0) + weight
+    total = sum(grouped.values()) or 0.0
+    items = []
+    for label, value in sorted(grouped.items(), key=lambda item: item[1], reverse=True)[:10]:
+        items.append({"label": label, "value": value, "share": (value / total) if total else 0.0})
+    return items
+
+
+def _dashboard_export_bar_rows(rows: List[Dict[str, object]], metric: str) -> List[Dict[str, object]]:
+    points = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            value = float(row.get(metric) or 0)
+        except Exception:
+            value = 0.0
+        points.append({"date": row.get("date") or "—", "value": value})
+    max_value = max([point["value"] for point in points], default=0.0) or 1.0
+    for point in points:
+        point["width"] = (point["value"] / max_value) * 100.0
+    return points
+
+
+def _dashboard_export_html(payload: Dict[str, object]) -> str:
+    overview = payload.get("overview") or {}
+    totals = overview.get("totals") or {}
+    meta = payload.get("meta") or {}
+    google = payload.get("google") or {}
+    tiktok = payload.get("tiktok") or {}
+    age_items = payload.get("audience_age") or []
+    geo_items = payload.get("audience_geo") or []
+    device_items = payload.get("audience_device") or []
+    account_trend = payload.get("account_trend") or {}
+    daily_points = payload.get("daily_points") or []
+    generated_at = payload.get("generated_at") or datetime.utcnow().strftime("%d.%m.%Y %H:%M")
+
+    total_spend = sum(float((totals.get(key) or {}).get("spend") or 0) for key in ("meta", "google", "tiktok"))
+    total_impressions = sum(float((totals.get(key) or {}).get("impressions") or 0) for key in ("meta", "google", "tiktok"))
+    total_clicks = sum(float((totals.get(key) or {}).get("clicks") or 0) for key in ("meta", "google", "tiktok"))
+
+    def summary_card(label: str, value: str, note: str) -> str:
+        return f"""
+        <div class="kpi-card">
+          <div class="kpi-label">{html.escape(label)}</div>
+          <div class="kpi-value">{html.escape(value)}</div>
+          <div class="kpi-note">{html.escape(note)}</div>
+        </div>
+        """
+
+    def platform_block(title: str, platform_payload: Dict[str, object], currency_default: str = "USD") -> str:
+        summary = platform_payload.get("summary") or {}
+        campaigns = platform_payload.get("campaigns") or []
+        error = platform_payload.get("error")
+        rows_html = ""
+        for row in campaigns[:8]:
+            rows_html += f"""
+            <tr>
+              <td>{html.escape(str(row.get('campaign_name') or row.get('campaign_id') or '—'))}</td>
+              <td>{html.escape(_dashboard_export_fmt_money(row.get('spend') or 0, row.get('currency') or row.get('account_currency') or summary.get('currency') or currency_default))}</td>
+              <td>{html.escape(_dashboard_export_fmt_int(row.get('impressions') or 0))}</td>
+              <td>{html.escape(_dashboard_export_fmt_int(row.get('clicks') or 0))}</td>
+              <td>{html.escape(_dashboard_export_fmt_pct(row.get('ctr') or 0))}</td>
+            </tr>
+            """
+        if not rows_html:
+            rows_html = '<tr><td colspan="5">Нет данных</td></tr>'
+        return f"""
+        <section class="section">
+          <div class="section-head">
+            <h2>{html.escape(title)}</h2>
+            <div class="section-note">{html.escape(str(error or 'Данные обновлены.'))}</div>
+          </div>
+          <div class="mini-kpis">
+            {summary_card('Расход', _dashboard_export_fmt_money(summary.get('spend') or 0, summary.get('currency') or currency_default), 'Итог по платформе')}
+            {summary_card('Показы', _dashboard_export_fmt_int(summary.get('impressions') or 0), 'За выбранный период')}
+            {summary_card('Клики', _dashboard_export_fmt_int(summary.get('clicks') or 0), 'Клики и переходы')}
+            {summary_card('CTR', _dashboard_export_fmt_pct(summary.get('ctr') or 0), 'Средний CTR')}
+          </div>
+          <table class="report-table">
+            <thead>
+              <tr>
+                <th>Кампания</th>
+                <th>Расход</th>
+                <th>Показы</th>
+                <th>Клики</th>
+                <th>CTR</th>
+              </tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+        </section>
+        """
+
+    def segment_block(title: str, rows: List[Dict[str, object]]) -> str:
+        content = ""
+        for row in rows:
+            value_text = _dashboard_export_fmt_int(row.get("value") or 0)
+            width = min(100.0, max(4.0, float(row.get("share") or 0) * 100.0)) if rows else 0.0
+            content += f"""
+            <div class="segment-row">
+              <div class="segment-head">
+                <span>{html.escape(str(row.get('label') or '—'))}</span>
+                <strong>{html.escape(value_text)} · {html.escape(f"{float(row.get('share') or 0) * 100:.1f}%")}</strong>
+              </div>
+              <div class="segment-bar"><span style="width:{width:.2f}%"></span></div>
+            </div>
+            """
+        if not content:
+            content = '<div class="empty">Нет данных</div>'
+        return f"""
+        <section class="section section-half">
+          <div class="section-head">
+            <h2>{html.escape(title)}</h2>
+          </div>
+          <div class="segment-list">{content}</div>
+        </section>
+        """
+
+    daily_rows_html = ""
+    for row in daily_points[:18]:
+        daily_rows_html += f"""
+        <tr>
+          <td>{html.escape(str(row.get('date') or '—'))}</td>
+          <td>{html.escape(_dashboard_export_fmt_money(row.get('spend') or 0, 'USD'))}</td>
+          <td>{html.escape(_dashboard_export_fmt_int(row.get('impressions') or 0))}</td>
+          <td>{html.escape(_dashboard_export_fmt_int(row.get('clicks') or 0))}</td>
+        </tr>
+        """
+    if not daily_rows_html:
+        daily_rows_html = '<tr><td colspan="4">Нет данных</td></tr>'
+
+    trend_metric = str(account_trend.get("metric_label") or "Показы")
+    trend_rows_html = ""
+    for row in account_trend.get("points") or []:
+        value = row.get("value") or 0
+        value_text = _dashboard_export_fmt_money(value, "USD") if account_trend.get("metric") == "spend" else _dashboard_export_fmt_int(value)
+        trend_rows_html += f"""
+        <div class="trend-row">
+          <span>{html.escape(str(row.get('date') or '—'))}</span>
+          <div class="trend-bar"><span style="width:{float(row.get('width') or 0):.2f}%"></span></div>
+          <strong>{html.escape(value_text)}</strong>
+        </div>
+        """
+    if not trend_rows_html:
+        trend_rows_html = '<div class="empty">Нет данных</div>'
+
+    return f"""
+    <!doctype html>
+    <html lang="ru">
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          @page {{
+            size: A4;
+            margin: 12mm;
+          }}
+          body {{
+            margin: 0;
+            font-family: DejaVu Sans, Arial, sans-serif;
+            color: #0f172a;
+            background: #f5f8ff;
+            font-size: 12px;
+          }}
+          .page {{
+            padding: 12px 18px 24px;
+            background:
+              radial-gradient(900px at 100% 0%, rgba(59,130,246,0.10), transparent 55%),
+              linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%);
+          }}
+          .hero {{
+            border-radius: 18px;
+            padding: 20px;
+            background: linear-gradient(135deg, #071225 0%, #122445 52%, #113c6b 100%);
+            color: #f8fbff;
+            margin-bottom: 14px;
+          }}
+          .eyebrow {{
+            font-size: 10px;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            opacity: 0.72;
+            margin-bottom: 8px;
+          }}
+          .hero h1 {{
+            margin: 0 0 10px;
+            font-size: 24px;
+          }}
+          .hero-meta {{
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+          }}
+          .pill {{
+            display: inline-block;
+            padding: 7px 10px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.14);
+            font-size: 11px;
+          }}
+          .kpi-grid, .mini-kpis, .section-grid {{
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+          }}
+          .kpi-card {{
+            flex: 1 1 180px;
+            min-width: 180px;
+            border-radius: 16px;
+            background: #ffffff;
+            border: 1px solid #d7e2f4;
+            padding: 14px;
+            box-sizing: border-box;
+          }}
+          .kpi-label {{
+            color: #5b6b86;
+            font-size: 11px;
+            margin-bottom: 6px;
+          }}
+          .kpi-value {{
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 6px;
+          }}
+          .kpi-note {{
+            color: #64748b;
+            font-size: 11px;
+          }}
+          .section {{
+            margin-top: 14px;
+            border-radius: 18px;
+            background: #ffffff;
+            border: 1px solid #d7e2f4;
+            padding: 16px;
+            page-break-inside: avoid;
+          }}
+          .section-half {{
+            flex: 1 1 280px;
+            min-width: 280px;
+          }}
+          .section-head {{
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: baseline;
+            margin-bottom: 10px;
+          }}
+          .section h2 {{
+            margin: 0;
+            font-size: 17px;
+          }}
+          .section-note {{
+            color: #64748b;
+            font-size: 11px;
+          }}
+          .report-table {{
+            width: 100%;
+            border-collapse: collapse;
+          }}
+          .report-table th, .report-table td {{
+            border-bottom: 1px solid #e5edf8;
+            padding: 8px 6px;
+            text-align: left;
+            vertical-align: top;
+          }}
+          .report-table th {{
+            color: #5b6b86;
+            font-size: 11px;
+          }}
+          .segment-row, .trend-row {{
+            margin-bottom: 10px;
+          }}
+          .segment-head, .trend-row {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+          }}
+          .segment-bar, .trend-bar {{
+            height: 8px;
+            border-radius: 999px;
+            background: #e7eefb;
+            overflow: hidden;
+            flex: 1 1 auto;
+          }}
+          .segment-bar span {{
+            display: block;
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #3b82f6, #22c1ff);
+          }}
+          .trend-bar span {{
+            display: block;
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #0f766e, #14b8a6);
+          }}
+          .empty {{
+            color: #64748b;
+          }}
+        </style>
+      </head>
+      <body>
+        <div class="page">
+          <section class="hero">
+            <div class="eyebrow">Envidicy · Dashboard Export</div>
+            <h1>Отчет по эффективности кампаний</h1>
+            <div class="hero-meta">
+              <span class="pill">Период: {html.escape(str(payload.get('date_from') or '—'))} — {html.escape(str(payload.get('date_to') or '—'))}</span>
+              <span class="pill">Сформирован: {html.escape(str(generated_at))}</span>
+            </div>
+          </section>
+
+          <div class="kpi-grid">
+            {summary_card('Расход', _dashboard_export_fmt_money(total_spend, 'USD'), 'По всем подключенным платформам')}
+            {summary_card('Показы', _dashboard_export_fmt_int(total_impressions), 'Суммарный delivery')}
+            {summary_card('Клики', _dashboard_export_fmt_int(total_clicks), 'Суммарный clickstream')}
+            {summary_card('Аккаунты', _dashboard_export_fmt_int(payload.get('account_count') or 0), 'Активные кабинеты в отчете')}
+          </div>
+
+          {platform_block('Meta Insights', meta, 'USD')}
+          {platform_block('Google Insights', google, 'USD')}
+          {platform_block('TikTok Insights', tiktok, 'USD')}
+
+          <section class="section">
+            <div class="section-head">
+              <h2>Динамика по дням</h2>
+            </div>
+            <table class="report-table">
+              <thead>
+                <tr>
+                  <th>Дата</th>
+                  <th>Расход</th>
+                  <th>Показы</th>
+                  <th>Клики</th>
+                </tr>
+              </thead>
+              <tbody>{daily_rows_html}</tbody>
+            </table>
+          </section>
+
+          <section class="section">
+            <div class="section-head">
+              <h2>Динамика по аккаунту</h2>
+              <div class="section-note">{html.escape(str(account_trend.get('title') or 'Выбранный аккаунт'))}</div>
+            </div>
+            <div class="section-note" style="margin-bottom:10px;">Метрика: {html.escape(trend_metric)}</div>
+            {trend_rows_html}
+          </section>
+
+          <div class="section-grid">
+            {segment_block('Аудитория · Возраст / Пол', age_items)}
+            {segment_block('Аудитория · Гео', geo_items)}
+            {segment_block('Аудитория · Девайсы', device_items)}
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+
+@app.get("/dashboard/export/pdf")
+def dashboard_export_pdf(
+    date_from: str,
+    date_to: str,
+    meta_date_from: Optional[str] = None,
+    meta_date_to: Optional[str] = None,
+    google_date_from: Optional[str] = None,
+    google_date_to: Optional[str] = None,
+    tiktok_date_from: Optional[str] = None,
+    tiktok_date_to: Optional[str] = None,
+    meta_account_id: Optional[int] = None,
+    google_account_id: Optional[int] = None,
+    tiktok_account_id: Optional[int] = None,
+    meta_platform_account_id: Optional[int] = None,
+    google_platform_account_id: Optional[int] = None,
+    tiktok_platform_account_id: Optional[int] = None,
+    audience_age_platform: str = "all",
+    audience_geo_platform: str = "all",
+    audience_geo_level: str = "country",
+    audience_device_platform: str = "all",
+    account_trend_platform: str = "meta",
+    account_trend_account_id: Optional[int] = None,
+    account_trend_metric: str = "impressions",
+    current_user=Depends(get_current_user),
+):
+    if not date_from or not date_to:
+        raise HTTPException(status_code=400, detail="date_from and date_to are required")
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+
+    overview = _build_insights_overview_for_user(
+        current_user=current_user,
+        date_from=date_from,
+        date_to=date_to,
+        meta_account_id=meta_account_id,
+        google_account_id=google_account_id,
+        tiktok_account_id=tiktok_account_id,
+    )
+    meta_payload = _dashboard_export_safe_payload(
+        lambda: meta_insights(meta_date_from or date_from, meta_date_to or date_to, meta_platform_account_id, current_user),
+        {"summary": {}, "campaigns": []},
+    )
+    google_payload = _dashboard_export_safe_payload(
+        lambda: google_insights(google_date_from or date_from, google_date_to or date_to, google_platform_account_id, current_user),
+        {"summary": {}, "campaigns": []},
+    )
+    tiktok_payload = _dashboard_export_safe_payload(
+        lambda: tiktok_insights(tiktok_date_from or date_from, tiktok_date_to or date_to, tiktok_platform_account_id, current_user),
+        {"summary": {}, "campaigns": []},
+    )
+    meta_age = _dashboard_export_safe_payload(
+        lambda: meta_audience(date_from, date_to, "age_gender", meta_account_id, current_user),
+        {"accounts": []},
+    )
+    google_age = _dashboard_export_safe_payload(
+        lambda: google_audience(date_from, date_to, "age_gender", google_account_id, current_user),
+        {"accounts": []},
+    )
+    meta_geo = _dashboard_export_safe_payload(
+        lambda: meta_audience(date_from, date_to, "geo", meta_account_id, current_user),
+        {"accounts": []},
+    )
+    google_geo = _dashboard_export_safe_payload(
+        lambda: google_audience(date_from, date_to, "geo", google_account_id, current_user),
+        {"accounts": []},
+    )
+    meta_device = _dashboard_export_safe_payload(
+        lambda: meta_audience(date_from, date_to, "device", meta_account_id, current_user),
+        {"accounts": []},
+    )
+    google_device = _dashboard_export_safe_payload(
+        lambda: google_audience(date_from, date_to, "device", google_account_id, current_user),
+        {"accounts": []},
+    )
+
+    age_rows = _dashboard_export_collect_audience_rows(meta_age, "age_gender", "meta") + _dashboard_export_collect_audience_rows(google_age, "age_gender", "google")
+    geo_rows = _dashboard_export_collect_audience_rows(meta_geo, "geo", "meta") + _dashboard_export_collect_audience_rows(google_geo, "geo", "google")
+    device_rows = _dashboard_export_collect_audience_rows(meta_device, "device", "meta") + _dashboard_export_collect_audience_rows(google_device, "device", "google")
+
+    daily_points = []
+    daily_map: Dict[str, Dict[str, float]] = {}
+    for platform_key in ("meta", "google", "tiktok"):
+        for row in overview.get("daily", {}).get(platform_key, []):
+            if not isinstance(row, dict):
+                continue
+            date_key = str(row.get("date") or "")
+            if not date_key:
+                continue
+            bucket = daily_map.setdefault(date_key, {"spend": 0.0, "impressions": 0.0, "clicks": 0.0})
+            bucket["spend"] += float(row.get("spend") or 0)
+            bucket["impressions"] += float(row.get("impressions") or 0)
+            bucket["clicks"] += float(row.get("clicks") or 0)
+    for date_key in sorted(daily_map.keys(), reverse=True):
+        daily_points.append({"date": date_key, **daily_map[date_key]})
+
+    trend_platform = str(account_trend_platform or "meta").lower()
+    trend_accounts = overview.get("daily_by_account", {}).get(trend_platform, []) or []
+    selected_trend = None
+    for account in trend_accounts:
+        if str(account.get("account_id")) == str(account_trend_account_id):
+            selected_trend = account
+            break
+    if selected_trend is None and trend_accounts:
+        selected_trend = trend_accounts[0]
+    trend_points = _dashboard_export_bar_rows(selected_trend.get("daily", []) if isinstance(selected_trend, dict) else [], account_trend_metric)
+
+    with get_conn() as conn:
+        account_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM ad_accounts WHERE user_id=? AND platform IN ('meta','google','tiktok')",
+            (current_user["id"],),
+        ).fetchone()["c"]
+
+    html_doc = _dashboard_export_html(
+        {
+            "date_from": date_from,
+            "date_to": date_to,
+            "generated_at": datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC"),
+            "account_count": account_count,
+            "overview": overview,
+            "meta": meta_payload,
+            "google": google_payload,
+            "tiktok": tiktok_payload,
+            "daily_points": daily_points,
+            "account_trend": {
+                "metric": account_trend_metric,
+                "metric_label": "Клики" if account_trend_metric == "clicks" else "Расход" if account_trend_metric == "spend" else "Показы",
+                "title": selected_trend.get("name") if isinstance(selected_trend, dict) else "Нет данных",
+                "points": trend_points[:20],
+            },
+            "audience_age": _dashboard_export_aggregate_segments(age_rows, audience_age_platform),
+            "audience_geo": _dashboard_export_aggregate_segments(
+                geo_rows,
+                audience_geo_platform,
+                "country:" if audience_geo_level == "country" else "region:" if audience_geo_level == "region" else "city:",
+            ),
+            "audience_device": _dashboard_export_aggregate_segments(device_rows, audience_device_platform),
+        }
+    )
+
+    try:
+        from weasyprint import HTML
+    except Exception:
+        raise HTTPException(status_code=500, detail="PDF renderer is not available")
+
+    buffer = BytesIO()
+    HTML(string=html_doc, base_url=os.path.dirname(__file__)).write_pdf(buffer)
+    filename = f"dashboard_report_{date_from}_{date_to}.pdf"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(BytesIO(buffer.getvalue()), media_type="application/pdf", headers=headers)
 
 
 @app.post("/admin/documents/upload")
@@ -4514,6 +8035,109 @@ def admin_get_company_profile(admin_user=Depends(get_admin_user)):
         raise HTTPException(status_code=500, detail="DB not initialized")
     with get_conn() as conn:
         return _get_company_profile(conn)
+
+
+def _ensure_billing_issuers_seed(conn) -> None:
+    rows = conn.execute("SELECT issuer_type FROM billing_issuers").fetchall()
+    existing = {str(row["issuer_type"]).lower() for row in rows}
+    if {"too", "ip"}.issubset(existing):
+        return
+    base = _get_company_profile(conn)
+    if "too" not in existing:
+        conn.execute(
+            """
+            INSERT INTO billing_issuers
+            (issuer_type, name, bin, iin, legal_address, factual_address, bank, iban, bic, kbe, currency, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                "too",
+                base.get("name"),
+                base.get("bin"),
+                base.get("iin"),
+                base.get("legal_address"),
+                base.get("factual_address"),
+                base.get("bank"),
+                base.get("iban"),
+                base.get("bic"),
+                base.get("kbe"),
+                base.get("currency") or "KZT",
+            ),
+        )
+    if "ip" not in existing:
+        conn.execute(
+            """
+            INSERT INTO billing_issuers
+            (issuer_type, name, bin, iin, legal_address, factual_address, bank, iban, bic, kbe, currency, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                "ip",
+                base.get("name"),
+                None,
+                base.get("iin"),
+                base.get("legal_address"),
+                base.get("factual_address"),
+                base.get("bank"),
+                base.get("iban"),
+                base.get("bic"),
+                base.get("kbe"),
+                base.get("currency") or "KZT",
+            ),
+        )
+    conn.commit()
+
+
+@app.get("/admin/billing-issuers")
+def admin_list_billing_issuers(admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        _ensure_billing_issuers_seed(conn)
+        rows = conn.execute("SELECT * FROM billing_issuers ORDER BY CASE issuer_type WHEN 'too' THEN 0 ELSE 1 END, issuer_type").fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.put("/admin/billing-issuers/{issuer_type}")
+def admin_update_billing_issuer(issuer_type: str, payload: BillingIssuerPayload, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    normalized = _normalize_issuer_type(issuer_type, "")
+    if normalized not in {"too", "ip"}:
+        raise HTTPException(status_code=400, detail="issuer_type must be too or ip")
+    with get_conn() as conn:
+        _ensure_billing_issuers_seed(conn)
+        row = conn.execute("SELECT * FROM billing_issuers WHERE issuer_type=?", (normalized,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Issuer profile not found")
+        profile = dict(row)
+        for key in ("name", "bin", "iin", "legal_address", "factual_address", "bank", "iban", "bic", "kbe", "currency"):
+            value = getattr(payload, key, None)
+            if value is not None:
+                profile[key] = str(value).strip() or None
+        conn.execute(
+            """
+            UPDATE billing_issuers
+            SET name=?, bin=?, iin=?, legal_address=?, factual_address=?, bank=?, iban=?, bic=?, kbe=?, currency=?, updated_at=CURRENT_TIMESTAMP
+            WHERE issuer_type=?
+            """,
+            (
+                profile.get("name"),
+                profile.get("bin"),
+                profile.get("iin"),
+                profile.get("legal_address"),
+                profile.get("factual_address"),
+                profile.get("bank"),
+                profile.get("iban"),
+                profile.get("bic"),
+                profile.get("kbe"),
+                profile.get("currency") or "KZT",
+                normalized,
+            ),
+        )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM billing_issuers WHERE issuer_type=?", (normalized,)).fetchone()
+        return dict(updated) if updated else {}
 
 
 @app.put("/admin/company-profile")
@@ -4594,18 +8218,24 @@ def admin_create_legal_entity(payload: AdminLegalEntityPayload, admin_user=Depen
     if not payload.bin.strip() or not payload.short_name.strip() or not payload.full_name.strip() or not payload.legal_address.strip():
         raise HTTPException(status_code=400, detail="bin, short_name, full_name and legal_address are required")
     with get_conn() as conn:
+        issuer_type = _normalize_issuer_type(payload.issuer_type, "too")
+        tax_mode = _tax_mode_for_issuer(issuer_type)
         user = conn.execute("SELECT id FROM users WHERE email=?", (user_email,)).fetchone()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         cur = conn.execute(
             """
-            INSERT INTO legal_entities (name, short_name, full_name, bin, address, legal_address)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO legal_entities (name, short_name, full_name, issuer_type, tax_mode, contract_number, contract_date, bin, address, legal_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.short_name.strip(),
                 payload.short_name.strip(),
                 payload.full_name.strip(),
+                issuer_type,
+                tax_mode,
+                (payload.contract_number or "").strip() or None,
+                (payload.contract_date or "").strip() or None,
                 payload.bin.strip(),
                 payload.legal_address.strip(),
                 payload.legal_address.strip(),
@@ -4635,22 +8265,28 @@ def admin_update_legal_entity(entity_id: int, payload: AdminLegalEntityPayload, 
     if not payload.bin.strip() or not payload.short_name.strip() or not payload.full_name.strip() or not payload.legal_address.strip():
         raise HTTPException(status_code=400, detail="bin, short_name, full_name and legal_address are required")
     with get_conn() as conn:
-        entity = conn.execute("SELECT id FROM legal_entities WHERE id=?", (entity_id,)).fetchone()
+        entity = conn.execute("SELECT id, tax_mode, issuer_type FROM legal_entities WHERE id=?", (entity_id,)).fetchone()
         if not entity:
             raise HTTPException(status_code=404, detail="Legal entity not found")
+        issuer_type = _normalize_issuer_type(payload.issuer_type, _normalize_issuer_type(entity.get("issuer_type"), "too"))
+        tax_mode = _tax_mode_for_issuer(issuer_type)
         user = conn.execute("SELECT id FROM users WHERE email=?", (user_email,)).fetchone()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         conn.execute(
             """
             UPDATE legal_entities
-            SET name=?, short_name=?, full_name=?, bin=?, address=?, legal_address=?
+            SET name=?, short_name=?, full_name=?, issuer_type=?, tax_mode=?, contract_number=?, contract_date=?, bin=?, address=?, legal_address=?
             WHERE id=?
             """,
             (
                 payload.short_name.strip(),
                 payload.short_name.strip(),
                 payload.full_name.strip(),
+                issuer_type,
+                tax_mode,
+                (payload.contract_number or "").strip() or None,
+                (payload.contract_date or "").strip() or None,
                 payload.bin.strip(),
                 payload.legal_address.strip(),
                 payload.legal_address.strip(),
@@ -4675,32 +8311,57 @@ def admin_update_legal_entity(entity_id: int, payload: AdminLegalEntityPayload, 
 def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user=Depends(get_current_user)):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
+    if not payload.legal_entity_id:
+        raise HTTPException(status_code=400, detail="legal_entity_id is required")
     with get_conn() as conn:
         legal_entity = None
-        if payload.legal_entity_id:
-            legal_entity = conn.execute(
-                """
-                SELECT le.*
-                FROM legal_entities le
-                JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
-                WHERE le.id=? AND ule.user_id=?
-                """,
-                (payload.legal_entity_id, current_user["id"]),
-            ).fetchone()
-            if not legal_entity:
-                raise HTTPException(status_code=404, detail="Legal entity not found")
-            legal_entity = dict(legal_entity)
+        legal_entity = conn.execute(
+            """
+            SELECT le.*
+            FROM legal_entities le
+            JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
+            WHERE le.id=? AND ule.user_id=?
+            """,
+            (payload.legal_entity_id, current_user["id"]),
+        ).fetchone()
+        if not legal_entity:
+            raise HTTPException(status_code=404, detail="Legal entity not found")
+        legal_entity = dict(legal_entity)
         entity_name = _format_legal_entity_name(legal_entity) if legal_entity else None
         entity_address = (legal_entity.get("legal_address") or legal_entity.get("address")) if legal_entity else None
         client_name = payload.client_name or entity_name
         client_bin = payload.client_bin or (legal_entity.get("bin") if legal_entity else None)
         client_address = payload.client_address or entity_address
         client_email = payload.client_email or (legal_entity.get("email") if legal_entity else None)
+        issuer_type = _normalize_issuer_type((legal_entity or {}).get("issuer_type"), "too")
+        amount_kind = "gross"
+        tax_mode = _tax_mode_for_issuer(issuer_type)
+        vat_rate = _normalize_vat_rate_for_mode(tax_mode, payload.vat_rate if payload.vat_rate is not None else 12.0)
+        contract_number = ((legal_entity or {}).get("contract_number") or "").strip() or None
+        contract_date = ((legal_entity or {}).get("contract_date") or "").strip() or None
+        if issuer_type == "too" and (not contract_number or not contract_date):
+            raise HTTPException(
+                status_code=400,
+                detail="Contract number and contract date are required for TOO issuer",
+            )
+        issuer_profile = _get_billing_issuer_profile(conn, issuer_type)
+        issuer_name = issuer_profile.get("name")
+        issuer_bin = issuer_profile.get("bin")
+        issuer_iin = issuer_profile.get("iin")
+        issuer_legal_address = issuer_profile.get("legal_address")
+        issuer_factual_address = issuer_profile.get("factual_address")
+        issuer_bank = issuer_profile.get("bank")
+        issuer_iban = issuer_profile.get("iban")
+        issuer_bic = issuer_profile.get("bic")
+        issuer_kbe = issuer_profile.get("kbe")
+        issuer_currency = issuer_profile.get("currency") or "KZT"
+        invoice_number = _next_invoice_number(conn)
+        invoice_date = datetime.utcnow().date().isoformat()
         cur = conn.execute(
             """
             INSERT INTO wallet_topup_requests
-            (user_id, amount, currency, note, status, legal_entity_id, client_name, client_bin, client_address, client_email, order_ref)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (user_id, amount, currency, note, status, amount_kind, issuer_type, tax_mode, vat_rate, contract_number, contract_date, issuer_name, issuer_bin, issuer_iin, issuer_legal_address, issuer_factual_address, issuer_bank, issuer_iban, issuer_bic, issuer_kbe, issuer_currency, legal_entity_id, client_name, client_bin, client_address, client_email, order_ref, invoice_number, invoice_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 current_user["id"],
@@ -4708,12 +8369,30 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
                 payload.currency,
                 payload.note,
                 "requested",
+                amount_kind,
+                issuer_type,
+                tax_mode,
+                vat_rate,
+                contract_number,
+                contract_date,
+                issuer_name,
+                issuer_bin,
+                issuer_iin,
+                issuer_legal_address,
+                issuer_factual_address,
+                issuer_bank,
+                issuer_iban,
+                issuer_bic,
+                issuer_kbe,
+                issuer_currency,
                 payload.legal_entity_id,
                 client_name,
                 client_bin,
                 client_address,
                 client_email,
                 payload.order_ref,
+                invoice_number,
+                invoice_date,
             ),
         )
         conn.commit()
@@ -4730,12 +8409,30 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
                         "amount": payload.amount,
                         "currency": payload.currency,
                         "note": payload.note,
+                        "amount_kind": amount_kind,
                         "legal_entity_id": payload.legal_entity_id,
                         "client_name": client_name,
                         "client_bin": client_bin,
                         "client_address": client_address,
                         "client_email": client_email,
                         "order_ref": payload.order_ref,
+                        "tax_mode": tax_mode,
+                        "vat_rate": vat_rate,
+                        "issuer_type": issuer_type,
+                        "contract_number": contract_number,
+                        "contract_date": contract_date,
+                        "issuer_name": issuer_name,
+                        "issuer_bin": issuer_bin,
+                        "issuer_iin": issuer_iin,
+                        "issuer_legal_address": issuer_legal_address,
+                        "issuer_factual_address": issuer_factual_address,
+                        "issuer_bank": issuer_bank,
+                        "issuer_iban": issuer_iban,
+                        "issuer_bic": issuer_bic,
+                        "issuer_kbe": issuer_kbe,
+                        "issuer_currency": issuer_currency,
+                        "invoice_number": invoice_number,
+                        "invoice_date": invoice_date,
                     },
                     timeout=10,
                 )
@@ -4757,6 +8454,9 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
         return {
             "id": request_id,
             "status": "requested",
+            "amount_kind": amount_kind,
+            "invoice_number": invoice_number,
+            "invoice_date": invoice_date,
             "invoice_url": f"/wallet/topup-requests/{request_id}/invoice",
         }
 
@@ -4802,18 +8502,6 @@ def wallet_topup_invoice_page(
         ).fetchone()
         if not request_row:
             raise HTTPException(status_code=404, detail="Request not found")
-        invoice_row = conn.execute(
-            "SELECT * FROM invoice_uploads WHERE request_id=? ORDER BY created_at DESC LIMIT 1",
-            (request_id,),
-        ).fetchone()
-        if invoice_row and invoice_row.get("pdf_path"):
-            return HTMLResponse(
-                content=_wallet_invoice_page_html(
-                    dict(request_row),
-                    dict(invoice_row),
-                    token,
-                )
-            )
         req = dict(request_row)
         try:
             created_at = req["created_at"]
@@ -4836,16 +8524,31 @@ def wallet_topup_invoice_page(
             except ValueError:
                 pass
         date_str = _format_date_ru(dt)
-        amount = _format_amount(req.get("amount") or 0)
+        amount_val = float(req.get("amount") or 0)
+        amount = _format_amount(amount_val)
         currency = req.get("currency") or "KZT"
-        amount_words = _amount_to_words_ru(req.get("amount") or 0)
-        date_str = f"{date_str} Рі."
-        company = _get_company_profile(conn)
+        amount_words = _amount_to_words_ru(amount_val)
+        date_str = f"{date_str} г."
+        tax_mode = _normalize_tax_mode(req.get("tax_mode"), "without_vat")
+        vat_rate = _normalize_vat_rate_for_mode(tax_mode, req.get("vat_rate"))
+        tax = _invoice_tax_breakdown(amount_val, tax_mode, vat_rate)
+        issuer_type = _normalize_issuer_type(req.get("issuer_type"), "too")
+        issuer_profile = _get_billing_issuer_profile(conn, issuer_type)
+        company = _request_issuer_snapshot(req, issuer_profile)
         company_name = company.get("name") or BENEFICIARY["name"]
         description = (
             f"За услуги по использованию Программного обеспечения Исполнителя "
             f"\"{company_name}\" по счету {number} от {dt.strftime('%d.%m.%Y')} г."
         )
+        contract_number = (req.get("contract_number") or "").strip()
+        contract_date = (req.get("contract_date") or "").strip()
+        contract_note = "Публичный договор возмездного оказания услуг от 22.04.2025 г."
+        if contract_number and contract_date:
+            contract_note = f"Договор № {contract_number} от {contract_date}"
+        elif contract_number:
+            contract_note = f"Договор № {contract_number}"
+        elif contract_date:
+            contract_note = f"Договор от {contract_date}"
         beneficiary_bin = company.get("bin") or company.get("iin") or BENEFICIARY["bin"]
         payload = {
             "request_id": request_id,
@@ -4863,10 +8566,15 @@ def wallet_topup_invoice_page(
             "payer_bin": req.get("client_bin") or "ИИН/БИН не указан",
             "payer_address": req.get("client_address") or "Адрес не указан",
             "description": description,
-            "contract_note": "Публичный договор возмездного оказания услуг от 22.04.2025 г.",
+            "contract_note": contract_note,
             "amount": amount,
             "currency": currency,
             "amount_words": amount_words,
+            "tax_mode": tax["tax_mode"],
+            "vat_rate": tax["vat_rate"],
+            "amount_net": _format_amount(tax["net_amount"]),
+            "vat_amount": _format_amount(tax["vat_amount"]),
+            "vat_note": tax["vat_note"],
             "token": token or "",
         }
         return HTMLResponse(content=_invoice_1c_html(payload))
@@ -4945,16 +8653,31 @@ def wallet_topup_invoice_generated_pdf(
                 dt = datetime.utcnow()
         else:
             dt = datetime.utcnow()
-        date_str = _format_date_ru(dt) + " Рі."
-        amount = _format_amount(req.get("amount") or 0)
+        date_str = _format_ru_date(dt.isoformat()) + " г."
+        amount_val = float(req.get("amount") or 0)
+        amount = _format_amount(amount_val)
         currency = req.get("currency") or "KZT"
-        amount_words = _amount_to_words_ru(req.get("amount") or 0)
-        company = _get_company_profile(conn)
+        amount_words = _amount_to_words_ru(amount_val)
+        tax_mode = _normalize_tax_mode(req.get("tax_mode"), "without_vat")
+        vat_rate = _normalize_vat_rate_for_mode(tax_mode, req.get("vat_rate"))
+        tax = _invoice_tax_breakdown(amount_val, tax_mode, vat_rate)
+        issuer_type = _normalize_issuer_type(req.get("issuer_type"), "too")
+        issuer_profile = _get_billing_issuer_profile(conn, issuer_type)
+        company = _request_issuer_snapshot(req, issuer_profile)
         beneficiary_bin = company.get("bin") or company.get("iin") or BENEFICIARY["bin"]
         description = (
             f"За услуги по использованию Программного обеспечения Исполнителя "
             f"\"{company.get('name') or BENEFICIARY['name']}\" по счету {number} от {dt.strftime('%d.%m.%Y')} г."
         )
+        contract_number = (req.get("contract_number") or "").strip()
+        contract_date = (req.get("contract_date") or "").strip()
+        contract_note = "Публичный договор возмездного оказания услуг от 22.04.2025 г."
+        if contract_number and contract_date:
+            contract_note = f"Договор № {contract_number} от {contract_date}"
+        elif contract_number:
+            contract_note = f"Договор № {contract_number}"
+        elif contract_date:
+            contract_note = f"Договор от {contract_date}"
         payload = {
             "request_id": request_id,
             "number": number,
@@ -4971,10 +8694,15 @@ def wallet_topup_invoice_generated_pdf(
             "payer_bin": req.get("client_bin") or "ИИН/БИН не указан",
             "payer_address": req.get("client_address") or "Адрес не указан",
             "description": description,
-            "contract_note": "Публичный договор возмездного оказания услуг от 22.04.2025 г.",
+            "contract_note": contract_note,
             "amount": amount,
             "currency": currency,
             "amount_words": amount_words,
+            "tax_mode": tax["tax_mode"],
+            "vat_rate": tax["vat_rate"],
+            "amount_net": _format_amount(tax["net_amount"]),
+            "vat_amount": _format_amount(tax["vat_amount"]),
+            "vat_note": tax["vat_note"],
         }
         html = _invoice_1c_html(payload)
         try:
@@ -5023,16 +8751,22 @@ def create_legal_entity(payload: LegalEntityPayload, current_user=Depends(get_cu
     short_name = (payload.short_name or name).strip()
     full_name = (payload.full_name or name).strip()
     legal_address = (payload.legal_address or payload.address or "").strip() or None
+    issuer_type = _normalize_issuer_type(payload.issuer_type, "too")
+    tax_mode = _tax_mode_for_issuer(issuer_type)
     with get_conn() as conn:
         cur = conn.execute(
             """
-            INSERT INTO legal_entities (name, short_name, full_name, bin, address, legal_address, email, bank, iban, bic, kbe)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO legal_entities (name, short_name, full_name, issuer_type, tax_mode, contract_number, contract_date, bin, address, legal_address, email, bank, iban, bic, kbe)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 name,
                 short_name,
                 full_name,
+                issuer_type,
+                tax_mode,
+                (payload.contract_number or "").strip() or None,
+                (payload.contract_date or "").strip() or None,
                 payload.bin,
                 payload.address,
                 legal_address,
@@ -5068,7 +8802,7 @@ def update_legal_entity(entity_id: int, payload: LegalEntityPayload, current_use
     with get_conn() as conn:
         row = conn.execute(
             """
-            SELECT le.id FROM legal_entities le
+            SELECT le.id, le.tax_mode, le.issuer_type FROM legal_entities le
             JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
             WHERE le.id=? AND ule.user_id=?
             """,
@@ -5076,16 +8810,22 @@ def update_legal_entity(entity_id: int, payload: LegalEntityPayload, current_use
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Legal entity not found")
+        issuer_type = _normalize_issuer_type(payload.issuer_type, _normalize_issuer_type(row.get("issuer_type"), "too"))
+        tax_mode = _tax_mode_for_issuer(issuer_type)
         conn.execute(
             """
             UPDATE legal_entities
-            SET name=?, short_name=?, full_name=?, bin=?, address=?, legal_address=?, email=?, bank=?, iban=?, bic=?, kbe=?
+            SET name=?, short_name=?, full_name=?, issuer_type=?, tax_mode=?, contract_number=?, contract_date=?, bin=?, address=?, legal_address=?, email=?, bank=?, iban=?, bic=?, kbe=?
             WHERE id=?
             """,
             (
                 name,
                 short_name,
                 full_name,
+                issuer_type,
+                tax_mode,
+                (payload.contract_number or "").strip() or None,
+                (payload.contract_date or "").strip() or None,
                 payload.bin,
                 payload.address,
                 legal_address,
@@ -5267,9 +9007,9 @@ def list_account_requests(current_user=Depends(get_current_user)):
                    a.account_code as account_code_db,
                    a.budget_total as budget_total,
                    a.currency as account_currency,
-                   COALESCE((SELECT SUM(t.amount_input)
-                             FROM topups t
-                             WHERE t.account_id = a.id AND t.status='completed'), 0) as topup_completed_total
+                   COALESCE((SELECT SUM(COALESCE(afe.amount_kzt, 0))
+                             FROM account_funding_events afe
+                             WHERE afe.account_id = a.id), 0) as topup_completed_total
             FROM account_requests r
             LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
             WHERE r.user_id=?
@@ -5316,6 +9056,7 @@ def admin_list_account_requests(admin_user=Depends(get_admin_user)):
     if not get_conn:
         return []
     with get_conn() as conn:
+        _sync_completed_topup_funding_events(conn)
         rows = conn.execute(
             """
             SELECT r.*,
@@ -5324,9 +9065,9 @@ def admin_list_account_requests(admin_user=Depends(get_admin_user)):
                    a.account_code as account_code_db,
                    a.budget_total as budget_total,
                    a.currency as account_currency,
-                   COALESCE((SELECT SUM(t.amount_input)
-                             FROM topups t
-                             WHERE t.account_id = a.id AND t.status='completed'), 0) as topup_completed_total
+                   COALESCE((SELECT SUM(COALESCE(afe.amount_kzt, 0))
+                             FROM account_funding_events afe
+                             WHERE afe.account_id = a.id), 0) as topup_completed_total
             FROM account_requests r
             JOIN users u ON u.id = r.user_id
             LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
@@ -5352,18 +9093,264 @@ def admin_list_accounts(admin_user=Depends(get_admin_user)):
         return _attach_live_billing_many([dict(row) for row in rows])
 
 
+@app.get("/admin/agencies")
+def admin_list_agencies(admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        return []
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.*, u.email as owner_email
+            FROM agencies a
+            LEFT JOIN users u ON u.id = a.owner_user_id
+            ORDER BY a.created_at DESC, a.id DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.post("/admin/agencies")
+def admin_create_agency(payload: AgencyCreatePayload, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        owner_user_id = payload.owner_user_id
+        if owner_user_id is not None:
+            owner = conn.execute("SELECT id FROM users WHERE id=?", (owner_user_id,)).fetchone()
+            if not owner:
+                raise HTTPException(status_code=404, detail="Owner user not found")
+        slug_base = _agency_slugify(payload.slug or payload.name, f"agency-{secrets.token_hex(3)}")
+        slug = slug_base
+        suffix = 2
+        while conn.execute("SELECT id FROM agencies WHERE slug=?", (slug,)).fetchone():
+            slug = f"{slug_base}-{suffix}"
+            suffix += 1
+        cur = conn.execute(
+            """
+            INSERT INTO agencies (name, slug, owner_user_id, status)
+            VALUES (?, ?, ?, ?)
+            """,
+            (payload.name.strip(), slug, owner_user_id, "active"),
+        )
+        agency_id = cur.lastrowid
+        if owner_user_id is not None:
+            _ensure_agency_member(conn, int(agency_id), owner_user_id, role="owner", status="active")
+        conn.commit()
+        return {"id": agency_id, "name": payload.name.strip(), "slug": slug, "owner_user_id": owner_user_id, "status": "active"}
+
+
+@app.get("/admin/agencies/{agency_id}")
+def admin_get_agency_detail(agency_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        agency = conn.execute(
+            """
+            SELECT a.*, u.email as owner_email
+            FROM agencies a
+            LEFT JOIN users u ON u.id = a.owner_user_id
+            WHERE a.id=?
+            """,
+            (agency_id,),
+        ).fetchone()
+        if not agency:
+            raise HTTPException(status_code=404, detail="Agency not found")
+
+        members = conn.execute(
+            """
+            SELECT m.*, u.email
+            FROM agency_members m
+            JOIN users u ON u.id = m.user_id
+            WHERE m.agency_id=?
+            ORDER BY m.created_at DESC, m.id DESC
+            """,
+            (agency_id,),
+        ).fetchall()
+        accounts = conn.execute(
+            """
+            SELECT
+              aa.*,
+              a.platform,
+              a.name,
+              a.external_id,
+              a.account_code,
+              a.currency,
+              a.status as ad_account_status,
+              u.email as user_email
+            FROM agency_ad_accounts aa
+            JOIN ad_accounts a ON a.id = aa.ad_account_id
+            LEFT JOIN users u ON u.id = a.user_id
+            WHERE aa.agency_id=?
+            ORDER BY aa.created_at DESC, aa.id DESC
+            """,
+            (agency_id,),
+        ).fetchall()
+        accesses = conn.execute(
+            """
+            SELECT
+              aua.*,
+              aa.ad_account_id,
+              a.name as account_name,
+              a.platform,
+              u.email
+            FROM agency_user_account_access aua
+            JOIN agency_ad_accounts aa ON aa.id = aua.agency_ad_account_id
+            JOIN ad_accounts a ON a.id = aa.ad_account_id
+            JOIN users u ON u.id = aua.user_id
+            WHERE aua.agency_id=?
+            ORDER BY aua.created_at DESC, aua.id DESC
+            """,
+            (agency_id,),
+        ).fetchall()
+        return {
+            "agency": dict(agency),
+            "members": [dict(row) for row in members],
+            "accounts": [dict(row) for row in accounts],
+            "accesses": [dict(row) for row in accesses],
+        }
+
+
+@app.post("/admin/agencies/{agency_id}/members")
+def admin_add_agency_member(agency_id: int, payload: AgencyMemberCreatePayload, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        agency = conn.execute("SELECT id FROM agencies WHERE id=?", (agency_id,)).fetchone()
+        if not agency:
+            raise HTTPException(status_code=404, detail="Agency not found")
+        user = conn.execute("SELECT id FROM users WHERE id=?", (payload.user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        _ensure_agency_member(conn, agency_id, payload.user_id, role=payload.role, status=payload.status or "active")
+        conn.execute(
+            "UPDATE agency_members SET role=?, status=? WHERE agency_id=? AND user_id=?",
+            (payload.role, payload.status or "active", agency_id, payload.user_id),
+        )
+        conn.commit()
+        return {"status": "ok", "agency_id": agency_id, "user_id": payload.user_id, "role": payload.role}
+
+
+@app.post("/admin/agencies/{agency_id}/accounts/{account_id}")
+def admin_attach_agency_account(agency_id: int, account_id: int, payload: AgencyAccountAttachPayload, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        agency = conn.execute("SELECT id FROM agencies WHERE id=?", (agency_id,)).fetchone()
+        if not agency:
+            raise HTTPException(status_code=404, detail="Agency not found")
+        account = conn.execute("SELECT id, name FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        agency_account_id = _ensure_agency_account_mapping(conn, agency_id, account_id, label=payload.label or account.get("name"), status=payload.status or "active")
+        conn.execute(
+            "UPDATE agency_ad_accounts SET label=?, status=? WHERE id=?",
+            (payload.label or account.get("name"), payload.status or "active", agency_account_id),
+        )
+        conn.commit()
+        return {"status": "ok", "agency_id": agency_id, "ad_account_id": account_id, "agency_ad_account_id": agency_account_id}
+
+
+@app.post("/admin/agencies/{agency_id}/accounts/{account_id}/access")
+def admin_grant_agency_account_access(
+    agency_id: int,
+    account_id: int,
+    payload: AgencyAccountAccessPayload,
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        agency_account = conn.execute(
+            "SELECT id FROM agency_ad_accounts WHERE agency_id=? AND ad_account_id=?",
+            (agency_id, account_id),
+        ).fetchone()
+        if not agency_account:
+            raise HTTPException(status_code=404, detail="Agency account mapping not found")
+        member = conn.execute(
+            "SELECT id FROM agency_members WHERE agency_id=? AND user_id=? AND COALESCE(status, 'active')='active'",
+            (agency_id, payload.user_id),
+        ).fetchone()
+        if not member:
+            raise HTTPException(status_code=400, detail="User is not an active member of this agency")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO agency_user_account_access (agency_id, user_id, agency_ad_account_id, access_level)
+            VALUES (?, ?, ?, ?)
+            """,
+            (agency_id, payload.user_id, agency_account["id"], payload.access_level),
+        )
+        conn.execute(
+            """
+            UPDATE agency_user_account_access
+            SET access_level=?
+            WHERE agency_id=? AND user_id=? AND agency_ad_account_id=?
+            """,
+            (payload.access_level, agency_id, payload.user_id, agency_account["id"]),
+        )
+        conn.commit()
+        return {"status": "ok", "agency_id": agency_id, "user_id": payload.user_id, "ad_account_id": account_id, "access_level": payload.access_level}
+
+
 @app.post("/admin/accounts")
 def admin_create_account(payload: AdminAccountCreate, admin_user=Depends(get_admin_user)):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
+    normalized_currency = "KZT" if payload.platform == "yandex" else payload.currency
     with get_conn() as conn:
         user = conn.execute("SELECT id FROM users WHERE id=?", (payload.user_id,)).fetchone()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
+        existing = _find_existing_account(
+            conn,
+            user_id=int(payload.user_id),
+            platform=payload.platform,
+            name=payload.name,
+        )
+        if existing:
+            agency = _get_or_create_default_agency(conn, payload.user_id)
+            conn.execute(
+                """
+                UPDATE ad_accounts
+                SET external_id=?,
+                    account_code=?,
+                    visible_to_client=?,
+                    currency=?,
+                    status=?
+                WHERE id=?
+                """,
+                (
+                    payload.external_id,
+                    payload.account_code,
+                    1 if payload.visible_to_client is None else (1 if payload.visible_to_client else 0),
+                    normalized_currency,
+                    payload.status or "pending",
+                    existing["id"],
+                ),
+            )
+            if agency:
+                _ensure_agency_account_mapping(
+                    conn,
+                    int(agency["id"]),
+                    int(existing["id"]),
+                    label=payload.name,
+                    status=payload.status or "pending",
+                )
+            conn.commit()
+            return {
+                "id": existing["id"],
+                "user_id": payload.user_id,
+                "platform": payload.platform,
+                "name": payload.name,
+                "external_id": payload.external_id,
+                "account_code": payload.account_code,
+                "visible_to_client": 1 if payload.visible_to_client is None else (1 if payload.visible_to_client else 0),
+                "currency": normalized_currency,
+                "status": payload.status or "pending",
+            }
         cur = conn.execute(
             """
-            INSERT INTO ad_accounts (user_id, platform, name, external_id, account_code, currency, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO ad_accounts (user_id, platform, name, external_id, account_code, visible_to_client, currency, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.user_id,
@@ -5371,10 +9358,20 @@ def admin_create_account(payload: AdminAccountCreate, admin_user=Depends(get_adm
                 payload.name,
                 payload.external_id,
                 payload.account_code,
-                payload.currency,
+                1 if payload.visible_to_client is None else (1 if payload.visible_to_client else 0),
+                normalized_currency,
                 payload.status or "pending",
             ),
         )
+        agency = _get_or_create_default_agency(conn, payload.user_id)
+        if agency:
+            _ensure_agency_account_mapping(
+                conn,
+                int(agency["id"]),
+                int(cur.lastrowid),
+                label=payload.name,
+                status=payload.status or "pending",
+            )
         conn.commit()
         return {
             "id": cur.lastrowid,
@@ -5383,7 +9380,8 @@ def admin_create_account(payload: AdminAccountCreate, admin_user=Depends(get_adm
             "name": payload.name,
             "external_id": payload.external_id,
             "account_code": payload.account_code,
-            "currency": payload.currency,
+            "visible_to_client": 1 if payload.visible_to_client is None else (1 if payload.visible_to_client else 0),
+            "currency": normalized_currency,
             "status": payload.status or "pending",
         }
 
@@ -5396,6 +9394,8 @@ def admin_update_account(account_id: int, payload: AdminAccountUpdate, admin_use
         row = conn.execute("SELECT * FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Account not found")
+        current_platform = str(row["platform"] or "").lower()
+        next_platform = str(payload.platform or current_platform).lower()
         updates = []
         params: List[object] = []
         if payload.user_id is not None:
@@ -5418,9 +9418,15 @@ def admin_update_account(account_id: int, payload: AdminAccountUpdate, admin_use
         if payload.account_code is not None:
             updates.append("account_code=?")
             params.append(payload.account_code)
+        if payload.visible_to_client is not None:
+            updates.append("visible_to_client=?")
+            params.append(1 if payload.visible_to_client else 0)
         if payload.currency is not None:
             updates.append("currency=?")
-            params.append(payload.currency)
+            params.append("KZT" if next_platform == "yandex" else payload.currency)
+        elif next_platform == "yandex":
+            updates.append("currency=?")
+            params.append("KZT")
         if payload.status is not None:
             updates.append("status=?")
             params.append(payload.status)
@@ -5430,6 +9436,23 @@ def admin_update_account(account_id: int, payload: AdminAccountUpdate, admin_use
         conn.execute(f"UPDATE ad_accounts SET {', '.join(updates)} WHERE id=?", params)
         conn.commit()
         return {"id": account_id, "status": "updated"}
+
+
+@app.delete("/admin/accounts/{account_id}")
+def admin_delete_account(account_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute("SELECT id, name FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+        topups_count = conn.execute("SELECT COUNT(1) AS cnt FROM topups WHERE account_id=?", (account_id,)).fetchone()["cnt"]
+        wallet_tx_count = conn.execute("SELECT COUNT(1) AS cnt FROM wallet_transactions WHERE account_id=?", (account_id,)).fetchone()["cnt"]
+        if int(topups_count or 0) > 0 or int(wallet_tx_count or 0) > 0:
+            raise HTTPException(status_code=409, detail="Account cannot be deleted because it already has linked operations")
+        conn.execute("DELETE FROM ad_accounts WHERE id=?", (account_id,))
+        conn.commit()
+        return {"id": account_id, "status": "deleted", "name": row["name"]}
 
 
 @app.get("/admin/topups")
@@ -5454,45 +9477,110 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
     if not get_conn:
         return []
     with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT u.id, u.email,
-              COALESCE(SUM(CASE WHEN t.seen_by_admin=0 THEN 1 ELSE 0 END), 0) as unread_topups,
-              COALESCE(SUM(CASE WHEN t.status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
-              COALESCE(SUM(CASE WHEN t.status='completed' THEN COALESCE(t.amount_net, t.amount_input) ELSE 0 END), 0) as completed_total,
-              COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
-              MAX(t.created_at) as last_activity
-            FROM users u
-            LEFT JOIN topups t ON t.user_id = u.id
-            GROUP BY u.id, u.email
-            HAVING COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) > 0
-               OR COALESCE(u.is_client, 0) = 1
-            ORDER BY unread_topups DESC, u.email ASC
-            """
-        ).fetchall()
-        clients = [dict(row) for row in rows]
-        topup_rows = conn.execute(
-            """
-            SELECT t.user_id, t.amount_input, t.amount_net, t.fx_rate, t.currency, a.currency as account_currency
-            FROM topups t
-            LEFT JOIN ad_accounts a ON a.id = t.account_id
-            WHERE t.status='completed'
-            """
-        ).fetchall()
-        prepared_topups = _attach_topup_account_amount([dict(row) for row in topup_rows])
-        totals_usd: Dict[int, float] = {}
-        for row in prepared_topups:
+        _sync_completed_topup_funding_events(conn)
+        clients: List[Dict[str, object]] = []
+        try:
             try:
-                user_id = int(row.get("user_id"))
-            except (TypeError, ValueError):
-                continue
-            try:
-                amount_usd = float(row.get("amount_account_usd") or 0.0)
-            except (TypeError, ValueError):
-                amount_usd = 0.0
-            totals_usd[user_id] = totals_usd.get(user_id, 0.0) + amount_usd
-        for row in clients:
-            row["completed_total_usd"] = totals_usd.get(int(row["id"]), 0.0)
+                rows = conn.execute(
+                    """
+                    SELECT
+                      u.id,
+                      u.email,
+                      COALESCE(ts.unread_topups, 0) as unread_topups,
+                      COALESCE(ts.pending_requests, 0) as pending_requests,
+                      COALESCE(ts.completed_total_kzt, 0) as completed_total,
+                      COALESCE(ts.completed_count, 0) as completed_count,
+                      COALESCE(ts.last_topup_at, ws.last_funding_at) as last_activity
+                    FROM users u
+                    LEFT JOIN (
+                      SELECT
+                        user_id,
+                        COALESCE(SUM(CASE WHEN seen_by_admin=0 THEN 1 ELSE 0 END), 0) as unread_topups,
+                        COALESCE(SUM(CASE WHEN status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
+                        COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
+                        COALESCE((
+                          SELECT SUM(COALESCE(afe.amount_kzt, 0))
+                          FROM account_funding_events afe
+                          WHERE afe.user_id = t.user_id
+                        ), 0) as completed_total_kzt,
+                        MAX(created_at) as last_topup_at
+                      FROM topups t
+                      GROUP BY user_id
+                    ) ts ON ts.user_id = u.id
+                    LEFT JOIN (
+                      SELECT
+                        user_id,
+                        COALESCE(SUM(CASE WHEN type='adjustment' AND amount > 0 THEN amount ELSE 0 END), 0) as completed_total,
+                        MAX(created_at) as last_funding_at
+                      FROM wallet_transactions
+                      GROUP BY user_id
+                    ) ws ON ws.user_id = u.id
+                    WHERE COALESCE(ts.completed_count, 0) > 0 OR COALESCE(u.is_client, 0) = 1
+                    ORDER BY unread_topups DESC, u.email ASC
+                    """
+                ).fetchall()
+            except Exception:
+                rows = conn.execute(
+                    """
+                    SELECT
+                      u.id,
+                      u.email,
+                      0 as unread_topups,
+                      COALESCE(ts.pending_requests, 0) as pending_requests,
+                      COALESCE(ts.completed_total_kzt, 0) as completed_total,
+                      COALESCE(ts.completed_count, 0) as completed_count,
+                      COALESCE(ts.last_topup_at, ws.last_funding_at) as last_activity
+                    FROM users u
+                    LEFT JOIN (
+                      SELECT
+                        user_id,
+                        COALESCE(SUM(CASE WHEN status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
+                        COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
+                        COALESCE((
+                          SELECT SUM(COALESCE(afe.amount_kzt, 0))
+                          FROM account_funding_events afe
+                          WHERE afe.user_id = t.user_id
+                        ), 0) as completed_total_kzt,
+                        MAX(created_at) as last_topup_at
+                      FROM topups t
+                      GROUP BY user_id
+                    ) ts ON ts.user_id = u.id
+                    LEFT JOIN (
+                      SELECT
+                        user_id,
+                        COALESCE(SUM(CASE WHEN type='adjustment' AND amount > 0 THEN amount ELSE 0 END), 0) as completed_total,
+                        MAX(created_at) as last_funding_at
+                      FROM wallet_transactions
+                      GROUP BY user_id
+                    ) ws ON ws.user_id = u.id
+                    WHERE COALESCE(ts.completed_count, 0) > 0 OR COALESCE(u.is_client, 0) = 1
+                    ORDER BY u.email ASC
+                    """
+                ).fetchall()
+            clients = [dict(row) for row in rows]
+            for row in clients:
+                row["completed_total"] = float(row.get("completed_total") or 0.0)
+                row["completed_total_kzt"] = float(row.get("completed_total_kzt") or row.get("completed_total") or 0.0)
+        except Exception:
+            fallback_rows = conn.execute(
+                """
+                SELECT u.id, u.email, 0 as unread_topups,
+                  COALESCE(SUM(CASE WHEN t.status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
+                  COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
+                  MAX(t.created_at) as last_activity
+                FROM users u
+                LEFT JOIN topups t ON t.user_id = u.id
+                GROUP BY u.id, u.email
+                HAVING COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) > 0
+                ORDER BY u.email ASC
+                """
+            ).fetchall()
+            clients = []
+            for row in fallback_rows:
+                payload = dict(row)
+                payload["completed_total"] = 0.0
+                payload["completed_total_kzt"] = 0.0
+                clients.append(payload)
         return clients
 
 
@@ -5622,7 +9710,7 @@ def admin_client_topups(user_id: int, admin_user=Depends(get_admin_user)):
             """
             SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency
             FROM topups t
-            JOIN ad_accounts a ON a.id = t.account_id
+            LEFT JOIN ad_accounts a ON a.id = t.account_id
             WHERE t.user_id=? AND t.status='completed'
             ORDER BY t.created_at DESC
             """,
@@ -5656,6 +9744,58 @@ def admin_client_wallet_transactions(user_id: int, admin_user=Depends(get_admin_
             payload["amount_usd"] = _convert_amount_to_usd(payload.get("amount"), payload.get("currency"), rates_data)
             result.append(payload)
         return result
+
+
+@app.get("/admin/clients/{user_id}/invoice-summary")
+def admin_client_invoice_summary(user_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        return {"invoice_total_kzt": 0.0, "invoice_count": 0}
+    with get_conn() as conn:
+        user = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        rows = conn.execute(
+            """
+            SELECT
+              i.id as invoice_id,
+              i.amount as invoice_amount,
+              COALESCE(i.currency, 'KZT') as invoice_currency
+            FROM wallet_topup_requests r
+            JOIN invoice_uploads i ON i.id = (
+              SELECT id
+              FROM invoice_uploads
+              WHERE request_id = r.id AND COALESCE(status, 'pending') = 'ready'
+              ORDER BY created_at DESC
+              LIMIT 1
+            )
+            WHERE r.user_id=? AND COALESCE(r.status, 'requested') = 'invoice_ready'
+            ORDER BY r.created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+
+        def _to_float(value: object) -> float:
+            if value is None:
+                return 0.0
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                text = str(value).replace("\xa0", "").replace(" ", "").replace(",", ".").strip()
+                try:
+                    return float(text)
+                except (TypeError, ValueError):
+                    return 0.0
+
+        total_kzt = 0.0
+        count = 0
+        for row in rows:
+            amount = _to_float(row.get("invoice_amount"))
+            if amount <= 0:
+                continue
+            # Wallet invoices are treated as KZT source of truth for admin summary.
+            total_kzt += float(amount)
+            count += 1
+        return {"invoice_total_kzt": round(total_kzt, 2), "invoice_count": count}
 
 
 @app.get("/admin/clients/{user_id}/accounts")
@@ -5791,8 +9931,8 @@ def admin_export_topups(admin_user=Depends(get_admin_user)):
     ws.title = "Topups"
     ws.append(
         [
-            "Р”Р°С‚Р°",
-            "РљР»РёРµРЅС‚",
+            "Дата",
+            "Клиент",
             "Платформа",
             "Аккаунт",
             "Сумма",
@@ -5814,21 +9954,25 @@ def admin_export_topups(admin_user=Depends(get_admin_user)):
             """
         ).fetchall()
         for row in rows:
-            fee = (row["amount_input"] or 0) * (row["fee_percent"] or 0) / 100.0
-            vat = (row["amount_input"] or 0) * (row["vat_percent"] or 0) / 100.0
-            gross = (row["amount_input"] or 0) + fee + vat
+            payload = dict(row)
+            amount_input = float(payload.get("amount_input") or 0)
+            fee_percent = float(payload.get("fee_percent") or 0)
+            vat_percent = float(payload.get("vat_percent") or 0)
+            fee = amount_input * fee_percent / 100.0
+            vat = amount_input * vat_percent / 100.0
+            gross = amount_input + fee + vat
             ws.append(
                 [
-                    row["created_at"],
-                    row["user_email"],
-                    row["account_platform"],
-                    row["account_name"],
-                    row["amount_input"],
+                    payload.get("created_at"),
+                    payload.get("user_email"),
+                    payload.get("account_platform"),
+                    payload.get("account_name"),
+                    amount_input,
                     round(fee, 2),
                     round(vat, 2),
                     round(gross, 2),
-                    row["currency"],
-                    row["status"],
+                    payload.get("currency"),
+                    payload.get("status"),
                 ]
             )
     buf = BytesIO()
@@ -5880,20 +10024,41 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                     INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (row["user_id"], row["account_id"], -gross_amount, row["currency"], "topup", "Account topup"),
+                    (row["user_id"], row["account_id"], -gross_amount, row["currency"], "topup", f"Account topup #{topup_id}"),
                 )
                 conn.execute("UPDATE topups SET status=? WHERE id=?", (next_status, topup_id))
 
-            acc = conn.execute("SELECT budget_total FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
-            base_amount = row["amount_net"] if row["amount_net"] else row["amount_input"]
-            new_total = (acc["budget_total"] or 0) + (base_amount or 0)
-            conn.execute(
-                "UPDATE ad_accounts SET budget_total=? WHERE id=?",
-                (new_total, row["account_id"]),
+            account_row = conn.execute("SELECT platform, name, currency FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
+            topup_payload = _attach_topup_account_amount(
+                [
+                    {
+                        **dict(row),
+                        "account_platform": account_row["platform"] if account_row else None,
+                        "account_currency": account_row["currency"] if account_row else row["currency"],
+                    }
+                ]
+            )[0]
+            budget_delta = float(topup_payload.get("amount_account") or 0)
+            if budget_delta > 0:
+                acc = conn.execute("SELECT budget_total FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
+                current_total = float(acc["budget_total"] or 0) if acc else 0.0
+                conn.execute(
+                    "UPDATE ad_accounts SET budget_total=? WHERE id=?",
+                    (current_total + budget_delta, row["account_id"]),
+                )
+            _record_account_funding_event(
+                conn,
+                account_id=int(row["account_id"]),
+                user_id=int(row["user_id"]),
+                platform=str(account_row["platform"] if account_row else ""),
+                amount=topup_payload.get("amount_account") or 0,
+                currency=str(account_row["currency"] if account_row else row["currency"] or "USD"),
+                source_type="topup",
+                source_id=topup_id,
+                note=f"Completed topup #{topup_id}",
             )
             conn.execute("UPDATE users SET is_client=1 WHERE id=?", (row["user_id"],))
             user_row = conn.execute("SELECT email FROM users WHERE id=?", (row["user_id"],)).fetchone()
-            account_row = conn.execute("SELECT platform, name FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
             _send_telegram_alert(
                 "\n".join(
                     [
@@ -6018,36 +10183,62 @@ def admin_update_account_request_status(
                 "UPDATE account_requests SET account_code=? WHERE id=?",
                 (payload.account_code, request_id),
             )
+        if payload.contract_code is not None:
+            conn.execute(
+                "UPDATE account_requests SET contract_code=? WHERE id=?",
+                (payload.contract_code, request_id),
+            )
         default_currency = "EUR" if row["platform"] == "telegram" else "USD"
+        ensured_account_id: Optional[int] = None
         if payload.budget_total is not None:
-            existing_acc = conn.execute(
-                "SELECT id, currency FROM ad_accounts WHERE user_id=? AND platform=? AND name=?",
-                (row["user_id"], row["platform"], row["name"]),
-            ).fetchone()
+            existing_acc = _find_existing_account(
+                conn,
+                user_id=int(row["user_id"]),
+                platform=str(row["platform"] or ""),
+                name=str(row["name"] or ""),
+            )
             if existing_acc:
+                ensured_account_id = int(existing_acc["id"])
                 conn.execute(
                     "UPDATE ad_accounts SET budget_total=? WHERE id=?",
                     (payload.budget_total, existing_acc["id"]),
                 )
             elif payload.status == "approved":
-                conn.execute(
+                cur = conn.execute(
                     "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency, account_code, budget_total) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (row["user_id"], row["platform"], row["name"], None, default_currency, payload.account_code, payload.budget_total),
                 )
+                ensured_account_id = int(cur.lastrowid)
         if payload.status == "approved":
-            existing = conn.execute(
-                "SELECT id FROM ad_accounts WHERE user_id=? AND platform=? AND name=?",
-                (row["user_id"], row["platform"], row["name"]),
-            ).fetchone()
+            existing = _find_existing_account(
+                conn,
+                user_id=int(row["user_id"]),
+                platform=str(row["platform"] or ""),
+                name=str(row["name"] or ""),
+            )
             if not existing:
-                conn.execute(
+                cur = conn.execute(
                     "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency, account_code, budget_total) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (row["user_id"], row["platform"], row["name"], None, default_currency, payload.account_code, payload.budget_total),
                 )
+                ensured_account_id = int(cur.lastrowid)
             elif payload.account_code:
                 conn.execute(
                     "UPDATE ad_accounts SET account_code=? WHERE id=?",
                     (payload.account_code, existing["id"]),
+                )
+                ensured_account_id = int(existing["id"])
+            elif existing:
+                ensured_account_id = int(existing["id"])
+        if ensured_account_id:
+            agency = _get_or_create_default_agency(conn, int(row["user_id"]))
+            if agency:
+                _ensure_agency_account_mapping(
+                    conn,
+                    int(agency["id"]),
+                    int(ensured_account_id),
+                    label=str(row["name"] or ""),
+                    status=payload.status or str(row.get("status") or "new"),
                 )
         conn.execute("UPDATE account_requests SET status=? WHERE id=?", (payload.status, request_id))
         _insert_request_event(
@@ -6145,7 +10336,7 @@ def invoice_preview():
         "beneficiary_iban": company.get("iban") or BENEFICIARY["iban"],
         "beneficiary_bic": company.get("bic") or BENEFICIARY["bic"],
         "beneficiary_kbe": company.get("kbe") or BENEFICIARY["kbe"],
-        "payer_name": "РћРћРћ РљР»РёРµРЅС‚",
+        "payer_name": "ООО Клиент",
         "payer_bin": "ИИН/БИН не указан",
         "payer_address": "Адрес не указан",
         "description": "Пополнение рекламного аккаунта",
@@ -6166,15 +10357,321 @@ def invoice_preview():
 
 
 @app.get("/accounts")
-def list_accounts(current_user=Depends(get_current_user)):
+def list_accounts(include_live_billing: int = 0, current_user=Depends(get_current_user)):
     if not get_conn:
         return []
     with get_conn() as conn:
-        query = "SELECT * FROM ad_accounts WHERE user_id=?"
-        params: List[object] = [current_user["id"]]
-        query += " ORDER BY created_at DESC"
-        rows = conn.execute(query, params).fetchall()
-        return _attach_live_billing_many([dict(row) for row in rows])
+        rows = _list_accessible_accounts(conn, current_user)
+        conn.commit()
+        if include_live_billing:
+            return _attach_live_billing_many(rows)
+        for row in rows:
+            row["live_billing"] = None
+        return rows
+
+
+@app.get("/agencies/mine")
+def list_my_agencies(current_user=Depends(get_current_user)):
+    if not get_conn:
+        return {"items": []}
+    with get_conn() as conn:
+        memberships = _list_user_agency_memberships(conn, current_user["id"])
+        if not memberships:
+            _get_or_create_default_agency(conn, current_user["id"])
+            memberships = _list_user_agency_memberships(conn, current_user["id"])
+        conn.commit()
+        return {"items": memberships}
+
+
+@app.get("/accounts/spend")
+def list_accounts_period_spend(
+    date_from: str,
+    date_to: str,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        return {"date_from": date_from, "date_to": date_to, "items": []}
+    if not date_from or not date_to:
+        raise HTTPException(status_code=400, detail="date_from and date_to are required")
+    try:
+        from_dt = datetime.strptime(date_from, "%Y-%m-%d").date()
+        to_dt = datetime.strptime(date_to, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be in YYYY-MM-DD format")
+    if from_dt > to_dt:
+        raise HTTPException(status_code=400, detail="date_from must be less than or equal to date_to")
+
+    with get_conn() as conn:
+        account_rows = _list_accessible_accounts(conn, current_user)
+        accounts = [
+            {
+                "id": row["id"],
+                "platform": row["platform"],
+                "external_id": row.get("external_id"),
+                "account_code": row.get("account_code"),
+                "name": row.get("name"),
+                "currency": row.get("currency"),
+            }
+            for row in account_rows
+        ]
+        account_ids = [int(row.get("id") or 0) for row in accounts if int(row.get("id") or 0) > 0]
+        spend_map: Dict[int, float] = {}
+        if account_ids:
+            placeholders = ",".join(["?"] * len(account_ids))
+            spend_rows = conn.execute(
+                f"""
+                SELECT account_id, COALESCE(SUM(spend), 0) AS spend_total
+                FROM ad_account_stats
+                WHERE account_id IN ({placeholders})
+                  AND stat_date BETWEEN ? AND ?
+                GROUP BY account_id
+                """,
+                [*account_ids, date_from, date_to],
+            ).fetchall()
+            spend_map = {int(row["account_id"]): float(row.get("spend_total") or 0) for row in spend_rows}
+        conn.commit()
+
+    items: List[Dict[str, object]] = []
+    for acc in accounts:
+        account_id = int(acc.get("id") or 0)
+        platform = str(acc.get("platform") or "").lower().strip()
+        currency = acc.get("currency") or "USD"
+        payload: Dict[str, object] = {
+            "account_id": account_id,
+            "platform": platform,
+            "currency": currency,
+            "spend": float(spend_map.get(account_id, 0.0)),
+        }
+        items.append(payload)
+
+    return {"date_from": date_from, "date_to": date_to, "items": items}
+
+
+@app.get("/accounts/spend/daily")
+def list_accounts_period_spend_daily(
+    date_from: str,
+    date_to: str,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        return {"date_from": date_from, "date_to": date_to, "items": []}
+    if not date_from or not date_to:
+        raise HTTPException(status_code=400, detail="date_from and date_to are required")
+    try:
+        from_dt = datetime.strptime(date_from, "%Y-%m-%d").date()
+        to_dt = datetime.strptime(date_to, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be in YYYY-MM-DD format")
+    if from_dt > to_dt:
+        raise HTTPException(status_code=400, detail="date_from must be less than or equal to date_to")
+
+    with get_conn() as conn:
+        account_rows = _list_accessible_accounts(conn, current_user)
+        account_ids = [
+            int(row.get("id") or 0)
+            for row in account_rows
+            if int(row.get("id") or 0) > 0 and str(row.get("platform") or "").lower().strip() in {"meta", "google", "tiktok"}
+        ]
+
+        spend_by_date: Dict[str, float] = {}
+        if account_ids:
+            placeholders = ",".join(["?"] * len(account_ids))
+            rows = conn.execute(
+                f"""
+                SELECT stat_date, COALESCE(SUM(spend), 0) AS spend
+                FROM ad_account_stats
+                WHERE account_id IN ({placeholders})
+                  AND stat_date BETWEEN ? AND ?
+                GROUP BY stat_date
+                ORDER BY stat_date ASC
+                """,
+                [*account_ids, date_from, date_to],
+            ).fetchall()
+            for row in rows:
+                spend_by_date[str(row.get("stat_date") or "")] = _finance_to_float(row.get("spend"))
+        conn.commit()
+
+    items: List[Dict[str, object]] = []
+    cursor = from_dt
+    while cursor <= to_dt:
+        date_key = cursor.isoformat()
+        items.append(
+            {
+                "date": date_key,
+                "spend": round(float(spend_by_date.get(date_key, 0.0)), 6),
+            }
+        )
+        cursor += timedelta(days=1)
+
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "items": items,
+    }
+
+
+@app.post("/accounts/finance/sync")
+def sync_accounts_finance(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    account_id: Optional[int] = None,
+    refresh_live_billing: int = 0,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+
+    today_iso = datetime.utcnow().date().isoformat()
+    from_value = date_from or date_to or today_iso
+    to_value = date_to or from_value
+    try:
+        from_dt = datetime.strptime(from_value, "%Y-%m-%d").date()
+        to_dt = datetime.strptime(to_value, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be in YYYY-MM-DD format")
+    if from_dt > to_dt:
+        raise HTTPException(status_code=400, detail="date_from must be less than or equal to date_to")
+
+    with get_conn() as conn:
+        accounts = [dict(row) for row in _list_accessible_accounts(conn, current_user)]
+        accounts = [row for row in accounts if str(row.get("platform") or "").lower().strip() in {"meta", "google", "tiktok"}]
+        if account_id is not None:
+            accounts = [row for row in accounts if int(row.get("id") or 0) == int(account_id)]
+            if not accounts:
+                raise HTTPException(status_code=404, detail="Account not found")
+
+        items: List[Dict[str, object]] = []
+        ok_count = 0
+        for account in accounts:
+            account_payload: Dict[str, object] = {
+                "account_id": account.get("id"),
+                "platform": account.get("platform"),
+            }
+            try:
+                daily_rows = _finance_collect_daily_rows_for_account(account, from_value, to_value)
+                _finance_upsert_daily_rows(conn, account=account, rows=daily_rows)
+                snapshot = _finance_refresh_snapshot_for_account(
+                    conn,
+                    account=account,
+                    refresh_live_billing=bool(refresh_live_billing),
+                )
+                account_payload.update(snapshot)
+                account_payload["synced_days"] = len(daily_rows)
+                account_payload["status"] = "ok"
+                ok_count += 1
+            except Exception as exc:
+                logging.exception("Finance sync failed for account_id=%s", account.get("id"))
+                account_payload["status"] = "error"
+                account_payload["error"] = str(exc)
+            items.append(account_payload)
+
+        conn.commit()
+        return {
+            "ok": True,
+            "date_from": from_value,
+            "date_to": to_value,
+            "requested_count": len(accounts),
+            "synced_count": ok_count,
+            "items": items,
+        }
+
+
+@app.get("/accounts/finance/summary")
+def accounts_finance_summary(
+    account_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+
+    with get_conn() as conn:
+        accounts = [dict(row) for row in _list_accessible_accounts(conn, current_user)]
+        accounts = [row for row in accounts if str(row.get("platform") or "").lower().strip() in {"meta", "google", "tiktok"}]
+        if account_id is not None:
+            accounts = [row for row in accounts if int(row.get("id") or 0) == int(account_id)]
+            if not accounts:
+                raise HTTPException(status_code=404, detail="Account not found")
+
+        wallet = _get_or_create_wallet(conn, current_user["id"])
+        internal_client_balance = _finance_to_float(wallet.get("balance"))
+
+        snapshot_map: Dict[int, Dict[str, object]] = {}
+        if accounts:
+            account_ids = [int(row.get("id") or 0) for row in accounts if int(row.get("id") or 0) > 0]
+            if account_ids:
+                placeholders = ",".join(["?"] * len(account_ids))
+                rows = conn.execute(
+                    f"""
+                    SELECT *
+                    FROM ad_account_finance_snapshots
+                    WHERE client_id=? AND account_id IN ({placeholders})
+                    """,
+                    [current_user["id"], *account_ids],
+                ).fetchall()
+                snapshot_map = {int(row["account_id"]): dict(row) for row in rows}
+
+        items: List[Dict[str, object]] = []
+        for acc in accounts:
+            acc_id = int(acc.get("id") or 0)
+            platform = str(acc.get("platform") or "").lower().strip()
+            currency = str(acc.get("currency") or "USD").upper()
+            snapshot = snapshot_map.get(acc_id)
+            spend_today = _finance_to_float(snapshot.get("spend_today")) if snapshot else 0.0
+            spend_total = _finance_to_float(snapshot.get("spend_total")) if snapshot else 0.0
+            optional_balance = snapshot.get("optional_balance") if snapshot else None
+            remaining_balance = (
+                _finance_to_float(snapshot.get("remaining_balance"))
+                if snapshot
+                else internal_client_balance - spend_total
+            )
+            last_synced_at = snapshot.get("last_synced_at") if snapshot else None
+
+            items.append(
+                {
+                    "platform": platform,
+                    "account_id": acc_id,
+                    "client_id": int(acc.get("user_id") or current_user["id"]),
+                    "currency": currency,
+                    "spend_today": round(spend_today, 6),
+                    "spend_total": round(spend_total, 6),
+                    "optional_balance": optional_balance,
+                    "internal_client_balance": round(internal_client_balance, 6),
+                    "remaining_balance": round(remaining_balance, 6),
+                    "last_synced_at": last_synced_at,
+                    "account_name": acc.get("name"),
+                    "status": acc.get("status"),
+                    "sync_state": "ready" if last_synced_at else "pending_sync",
+                }
+            )
+
+        conn.commit()
+        return {
+            "items": items,
+            "count": len(items),
+            "client_id": current_user["id"],
+            "wallet_currency": wallet.get("currency") or "KZT",
+            "internal_client_balance": round(internal_client_balance, 6),
+        }
+
+
+@app.post("/accounts/{account_id}/refresh-live-billing")
+def refresh_account_live_billing(account_id: int, current_user=Depends(get_current_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM ad_accounts WHERE id=? AND user_id=?",
+            (account_id, current_user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+        payload = _attach_live_billing(dict(row), force_refresh=True)
+        return {
+            "id": payload.get("id"),
+            "platform": payload.get("platform"),
+            "live_billing": payload.get("live_billing"),
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
 
 
 @app.post("/accounts")
@@ -6190,10 +10687,47 @@ def create_account(
     if platform not in {"meta", "google", "tiktok", "yandex", "telegram", "monochrome"}:
         raise HTTPException(status_code=400, detail="Unsupported platform")
     with get_conn() as conn:
+        existing = _find_existing_account(
+            conn,
+            user_id=int(current_user["id"]),
+            platform=platform,
+            name=name,
+        )
+        agency = _get_or_create_default_agency(conn, int(current_user["id"]))
+        if existing:
+            conn.execute(
+                "UPDATE ad_accounts SET external_id=?, currency=? WHERE id=?",
+                (external_id, currency, existing["id"]),
+            )
+            if agency:
+                _ensure_agency_account_mapping(
+                    conn,
+                    int(agency["id"]),
+                    int(existing["id"]),
+                    label=name,
+                    status=str(existing.get("status") or "active"),
+                )
+            conn.commit()
+            return {
+                "id": existing["id"],
+                "user_id": current_user["id"],
+                "platform": platform,
+                "name": name,
+                "external_id": external_id,
+                "currency": currency,
+            }
         cur = conn.execute(
             "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency) VALUES (?, ?, ?, ?, ?)",
             (current_user["id"], platform, name, external_id, currency),
         )
+        if agency:
+            _ensure_agency_account_mapping(
+                conn,
+                int(agency["id"]),
+                int(cur.lastrowid),
+                label=name,
+                status="active",
+            )
         conn.commit()
         return {
             "id": cur.lastrowid,
@@ -6209,20 +10743,166 @@ def create_account(
 def list_topups(account_id: Optional[int] = None, status: Optional[str] = None, current_user=Depends(get_current_user)):
     if not get_conn:
         return []
+    try:
+        with get_conn() as conn:
+            query = "SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency FROM topups t JOIN ad_accounts a ON a.id=t.account_id WHERE 1=1"
+            params: List[object] = []
+            if account_id:
+                query += " AND t.account_id=?"
+                params.append(account_id)
+            if status:
+                query += " AND t.status=?"
+                params.append(status)
+            query += " AND t.user_id=?"
+            params.append(current_user["id"])
+            query += " ORDER BY t.created_at DESC"
+            rows = conn.execute(query, params).fetchall()
+            return _attach_topup_account_amount([dict(row) for row in rows])
+    except Exception as exc:
+        logging.exception("Failed to list topups for user_id=%s: %s", current_user.get("id"), exc)
+        return []
+
+
+@app.get("/accounts/funding-totals")
+def account_funding_totals(current_user=Depends(get_current_user)):
+    if not get_conn:
+        return {"items": []}
     with get_conn() as conn:
-        query = "SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency FROM topups t JOIN ad_accounts a ON a.id=t.account_id WHERE 1=1"
-        params: List[object] = []
-        if account_id:
-            query += " AND t.account_id=?"
-            params.append(account_id)
-        if status:
-            query += " AND t.status=?"
-            params.append(status)
-        query += " AND t.user_id=?"
-        params.append(current_user["id"])
-        query += " ORDER BY t.created_at DESC"
-        rows = conn.execute(query, params).fetchall()
-        return _attach_topup_account_amount([dict(row) for row in rows])
+        rows = conn.execute(
+            """
+            SELECT
+              t.*,
+              a.platform as account_platform,
+              a.currency as account_currency
+            FROM topups t
+            JOIN ad_accounts a ON a.id = t.account_id
+            WHERE t.user_id=? AND t.status IN ('pending', 'completed')
+            ORDER BY t.created_at DESC
+            """,
+            (current_user["id"],),
+        ).fetchall()
+        prepared = _attach_topup_account_amount([dict(row) for row in rows])
+        totals_map: Dict[str, Dict[str, object]] = {}
+        for row in prepared:
+            account_id = row.get("account_id")
+            if not account_id:
+                continue
+            key = str(account_id)
+            bucket = totals_map.setdefault(
+                key,
+                {
+                    "account_id": int(account_id),
+                    "amount": 0.0,
+                    "currency": row.get("account_currency") or row.get("currency") or "USD",
+                    "amount_kzt": 0.0,
+                    "amount_usd": 0.0,
+                },
+            )
+            bucket["amount"] = float(bucket["amount"] or 0) + float(row.get("amount_account") or 0)
+            bucket["amount_kzt"] = float(bucket["amount_kzt"] or 0) + float(row.get("amount_account_kzt") or 0)
+            bucket["amount_usd"] = float(bucket["amount_usd"] or 0) + float(row.get("amount_account_usd") or 0)
+        items = [totals_map[key] for key in sorted(totals_map.keys(), key=lambda value: int(value))]
+        conn.commit()
+        return {"items": items}
+
+
+@app.get("/admin/accounts/{account_id}/funding-events")
+def admin_account_funding_events(account_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        return []
+    with get_conn() as conn:
+        _sync_completed_topup_funding_events(conn, account_id=account_id)
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM account_funding_events
+            WHERE account_id=?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (account_id,),
+        ).fetchall()
+        conn.commit()
+        return [dict(row) for row in rows]
+
+
+@app.post("/admin/accounts/{account_id}/funding-events")
+def admin_create_account_funding_event(account_id: int, payload: AdminAccountFundingCreate, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute("SELECT id, user_id, platform, currency, name FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+        currency = "KZT" if str(row["platform"] or "").lower() == "yandex" else str(payload.currency or row["currency"] or "USD").upper()
+        _record_account_funding_event(
+            conn,
+            account_id=account_id,
+            user_id=int(row["user_id"]),
+            platform=str(row["platform"] or ""),
+            amount=payload.amount,
+            currency=currency,
+            source_type="admin_manual",
+            note=payload.note or f"Manual funding for {row['name']}",
+            created_by=admin_user.get("email"),
+            occurred_at=payload.occurred_at,
+        )
+        conn.commit()
+        return {"status": "ok", "account_id": account_id, "currency": currency, "amount": payload.amount}
+
+
+@app.post("/admin/accounts/{account_id}/funding-events/{event_id}/reverse")
+def admin_reverse_account_funding_event(
+    account_id: int,
+    event_id: int,
+    payload: AdminAccountFundingReverse,
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        event = conn.execute(
+            """
+            SELECT *
+            FROM account_funding_events
+            WHERE id=? AND account_id=?
+            """,
+            (event_id, account_id),
+        ).fetchone()
+        if not event:
+            raise HTTPException(status_code=404, detail="Funding event not found")
+        if event.get("source_type") != "admin_manual":
+            raise HTTPException(status_code=400, detail="Only manual funding events can be reversed")
+        if event.get("reversal_for_event_id") is not None:
+            raise HTTPException(status_code=400, detail="Reversal events cannot be reversed")
+        if event.get("reversed_by_event_id") is not None:
+            raise HTTPException(status_code=400, detail="Funding event already reversed")
+
+        reversal_note = payload.note or f"Reverse manual funding #{event_id}"
+        reversal_id = _record_account_funding_event(
+            conn,
+            account_id=int(event["account_id"]),
+            user_id=int(event["user_id"]),
+            platform=str(event.get("platform") or ""),
+            amount=-float(event.get("amount") or 0),
+            currency=str(event.get("currency") or "USD"),
+            source_type="admin_reversal",
+            source_id=event_id,
+            note=reversal_note,
+            created_by=admin_user.get("email"),
+            reversal_for_event_id=event_id,
+        )
+        if reversal_id is None:
+            raise HTTPException(status_code=500, detail="Failed to create reversal event")
+        conn.execute(
+            """
+            UPDATE account_funding_events
+            SET reversed_by_event_id=?, voided_at=?, voided_by=?
+            WHERE id=?
+            """,
+            (reversal_id, datetime.utcnow().isoformat(), admin_user.get("email"), event_id),
+        )
+        conn.commit()
+        return {"status": "ok", "event_id": event_id, "reversal_event_id": reversal_id}
 
 
 class TopupCreatePayload(BaseModel):
@@ -6250,7 +10930,7 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
     account_id = payload.account_id
     fee_percent = payload.fee_percent
     vat_percent = payload.vat_percent
-    currency = payload.currency
+    currency = str(payload.currency or "KZT").upper()
     fx_rate = payload.fx_rate
     with get_conn() as conn:
         acc = conn.execute("SELECT platform, currency, user_id FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
@@ -6282,9 +10962,19 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
                     f"Максимальная сумма пополнения при текущей комиссии: {max_input:.2f} {currency}."
                 ),
             )
-        if fx_rate and fx_rate > 0 and str(acc["currency"] or currency).upper() != str(currency).upper():
-            amount_net = amount_input / fx_rate
+        account_currency = str(acc["currency"] or currency).upper()
+        if account_currency != currency:
+            # Source of truth for KZT -> account-currency conversions is backend marked BCC rate.
+            if currency == "KZT" and account_currency in {"USD", "EUR"}:
+                resolved_rate = _get_marked_bcc_sell_rate(account_currency)
+                if not resolved_rate or resolved_rate <= 0:
+                    raise HTTPException(status_code=400, detail=f"FX rate is unavailable for {account_currency}/KZT")
+                fx_rate = float(resolved_rate)
+                amount_net = amount_input / fx_rate
+            else:
+                raise HTTPException(status_code=400, detail=f"Unsupported topup currency pair: {currency} -> {account_currency}")
         else:
+            fx_rate = None
             amount_net = amount_input
         cur = conn.execute(
             """
