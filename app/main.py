@@ -9982,7 +9982,7 @@ def list_accounts_period_spend(
     for acc in accounts:
         account_id = acc.get("id")
         platform = str(acc.get("platform") or "").lower().strip()
-        external_id = acc.get("external_id") or acc.get("account_code") or acc.get("name")
+        external_id = acc.get("external_id") or acc.get("account_code")
         currency = acc.get("currency") or "USD"
         payload: Dict[str, object] = {
             "account_id": account_id,

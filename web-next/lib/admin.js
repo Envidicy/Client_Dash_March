@@ -22,7 +22,7 @@ export async function adminFetch(router, path, options = {}) {
   }
 
   if (res.status === 403) {
-    throw new Error('Нет доступа к админке.')
+    throw new Error('Admin access denied.')
   }
 
   return res

@@ -13,7 +13,7 @@ import {
 } from '../../lib/auth'
 
 function money(v, d = 2) {
-  return Number(v || 0).toLocaleString('ru-RU', {
+  return Number(v || 0).toLocaleString('en-US', {
     minimumFractionDigits: d,
     maximumFractionDigits: d,
   })
@@ -37,9 +37,9 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
   const pathname = usePathname()
 
   const [profile, setProfile] = useState({ email: '', name: '' })
-  const [walletText, setWalletText] = useState('Баланс: —')
-  const [rateUsd, setRateUsd] = useState('USD: курс недоступен')
-  const [rateEur, setRateEur] = useState('EUR: курс недоступен')
+  const [walletText, setWalletText] = useState('Balance: —')
+  const [rateUsd, setRateUsd] = useState('USD: rate unavailable')
+  const [rateEur, setRateEur] = useState('EUR: rate unavailable')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
@@ -58,24 +58,24 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
   const navItems = useMemo(() => {
     if (area === 'admin') {
       return [
-        { label: 'Админ · Заявки', href: '/admin/requests' },
-        { label: 'Админ · Клиенты', href: '/admin/clients' },
-        { label: 'Админ · Аккаунты', href: '/admin/accounts' },
-        { label: 'Админ · Пополнения', href: '/admin/topups' },
-        { label: 'Админ · Кошелек', href: '/admin/wallet' },
-        { label: 'Админ · Пользователи', href: '/admin/users' },
-        { label: 'Админ · Агентства', href: '/admin/agencies' },
-        { label: 'Админ · Компания', href: '/admin/company' },
-        { label: 'Админ · Контрагенты', href: '/admin/legal-entities' },
+        { label: 'Admin · Requests', href: '/admin/requests' },
+        { label: 'Admin · Clients', href: '/admin/clients' },
+        { label: 'Admin · Accounts', href: '/admin/accounts' },
+        { label: 'Admin · Top-ups', href: '/admin/topups' },
+        { label: 'Admin · Wallet', href: '/admin/wallet' },
+        { label: 'Admin · Users', href: '/admin/users' },
+        { label: 'Admin · Agencies', href: '/admin/agencies' },
+        { label: 'Admin · Company', href: '/admin/company' },
+        { label: 'Admin · Entities', href: '/admin/legal-entities' },
       ]
     }
     return [
-      { label: 'Пополнение аккаунтов', href: '/funds' },
-      { label: 'Финансы', href: '/funds' },
-      { label: 'Медиапланирование', href: '/plan' },
-      { label: 'Дашборд', href: '/dashboard' },
-      { label: 'Инструменты', href: '/tools' },
-      { label: 'Настройки', href: '/settings' },
+      { label: 'Top-up Accounts', href: '/funds' },
+      { label: 'Finance', href: '/funds' },
+      { label: 'Planning', href: '/plan' },
+      { label: 'Dashboard', href: '/dashboard' },
+      { label: 'Tools', href: '/tools' },
+      { label: 'Settings', href: '/settings' },
     ]
   }, [area])
 
@@ -92,7 +92,7 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
         const data = await res.json()
         setProfile({
           email: data.email || '',
-          name: data.name || data.company || 'Профиль',
+          name: data.name || data.company || 'Profile',
         })
       } catch {
         // ignore
@@ -114,13 +114,13 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
 
         if (usdRate && eurRate) {
           setWalletText(
-            `Баланс: ₸${money(balanceKzt, 0)} · $${money(balanceKzt / usdRate)} · €${money(balanceKzt / eurRate)}`
+            `Balance: ₸${money(balanceKzt, 0)} · $${money(balanceKzt / usdRate)} · €${money(balanceKzt / eurRate)}`
           )
         } else {
-          setWalletText(`Баланс: ₸${money(balanceKzt, 0)}`)
+          setWalletText(`Balance: ₸${money(balanceKzt, 0)}`)
         }
-        setRateUsd(usdRate ? `USD: 1$ = ${money(usdRate)} ₸` : 'USD: курс недоступен')
-        setRateEur(eurRate ? `EUR: 1€ = ${money(eurRate)} ₸` : 'EUR: курс недоступен')
+        setRateUsd(usdRate ? `USD: 1$ = ${money(usdRate)} ₸` : 'USD: rate unavailable')
+        setRateEur(eurRate ? `EUR: 1€ = ${money(eurRate)} ₸` : 'EUR: rate unavailable')
       } catch {
         // ignore
       }
@@ -182,7 +182,7 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
         </div>
         {area === 'client' ? (
           <div className="sidebar-rates-panel">
-            <div className="sidebar-rates-title">Курс пополнения</div>
+            <div className="sidebar-rates-title">Top-up rates</div>
             <div className="sidebar-rate-row">{rateUsd}</div>
             <div className="sidebar-rate-row">{rateEur}</div>
           </div>
@@ -190,11 +190,11 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
         <div className="nav-footer">
           {isAdmin && area === 'client' ? (
             <a className="nav-link" href="/admin/requests">
-              Админка
+              Admin panel
             </a>
           ) : null}
           <button className="nav-link nav-exit" onClick={logout} type="button">
-            Выход
+            Log out
           </button>
         </div>
       </nav>
@@ -204,7 +204,7 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
           <div className="nav-drawer-head">
             <span>Envidicy</span>
             <button className="btn ghost small" type="button" onClick={() => setDrawerOpen(false)}>
-              Закрыть
+              Close
             </button>
           </div>
           <div className="nav-drawer-links">
@@ -216,14 +216,14 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
           </div>
           {area === 'client' ? (
             <div className="sidebar-rates-panel">
-              <div className="sidebar-rates-title">Курс пополнения</div>
+              <div className="sidebar-rates-title">Top-up rates</div>
               <div className="sidebar-rate-row">{rateUsd}</div>
               <div className="sidebar-rate-row">{rateEur}</div>
             </div>
           ) : null}
           <div className="nav-drawer-footer">
             <button className="nav-link nav-exit" onClick={logout} type="button">
-              Выход
+              Log out
             </button>
           </div>
         </div>
@@ -233,9 +233,9 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
         <div className="bg-blur" />
         {impersonationActive ? (
           <div className="impersonation-banner">
-            <span>Вы вошли как клиент: {impersonationLabel || profile.email || ''}</span>
+            <span>Impersonating client: {impersonationLabel || profile.email || ''}</span>
             <button className="btn ghost small" onClick={logout} type="button">
-              Вернуться в админку
+              Return to admin
             </button>
           </div>
         ) : null}
@@ -249,7 +249,7 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
               <>
                 <div className="balance-pill">{walletText}</div>
                 <a className="topbar-topup-btn" href="/funds?action=topup-balance">
-                  Пополнить баланс
+                  Top up balance
                 </a>
               </>
             ) : null}
@@ -257,8 +257,8 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
               <button
                 className="topbar-icon-btn"
                 type="button"
-                aria-label="Уведомления"
-                title="Уведомления"
+                aria-label="Notifications"
+                title="Notifications"
                 aria-expanded={notificationsOpen}
                 onClick={() => {
                   setNotificationsOpen((v) => !v)
@@ -272,9 +272,9 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
               </button>
               <span className="topbar-icon-badge" aria-hidden="true" />
               {notificationsOpen ? (
-                <div className="topbar-popover" role="dialog" aria-label="Уведомления">
-                  <div className="topbar-popover-title">Уведомления</div>
-                  <div className="topbar-popover-item">Новых уведомлений пока нет</div>
+                <div className="topbar-popover" role="dialog" aria-label="Notifications">
+                  <div className="topbar-popover-title">Notifications</div>
+                  <div className="topbar-popover-item">No new notifications.</div>
                 </div>
               ) : null}
             </div>
@@ -282,8 +282,8 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
               <button
                 className="topbar-icon-btn"
                 type="button"
-                aria-label="Поддержка"
-                title="Поддержка"
+                aria-label="Support"
+                title="Support"
                 aria-expanded={supportOpen}
                 onClick={() => {
                   setSupportOpen((v) => !v)
@@ -296,8 +296,8 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
                 </svg>
               </button>
               {supportOpen ? (
-                <div className="topbar-popover" role="dialog" aria-label="Поддержка">
-                  <div className="topbar-popover-title">Поддержка</div>
+                <div className="topbar-popover" role="dialog" aria-label="Support">
+                  <div className="topbar-popover-title">Support</div>
                   <a className="topbar-popover-link" href="https://t.me/envidicy" target="_blank" rel="noreferrer">
                     Telegram
                   </a>
@@ -321,14 +321,14 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
               >
                 <span className="avatar">{(profile.email || 'U').trim().charAt(0).toUpperCase()}</span>
                 <span className="profile-meta">
-                  <span>{profile.name || 'Профиль'}</span>
+                  <span>{profile.name || 'Profile'}</span>
                   <span>{profile.email || ''}</span>
                 </span>
               </button>
               {profileMenuOpen ? (
                 <div className="profile-menu" role="menu">
                   <a className="profile-menu-item" href="/settings" onClick={() => setProfileMenuOpen(false)} role="menuitem">
-                    Настройки
+                    Settings
                   </a>
                   {isAdmin ? (
                     <a
@@ -337,7 +337,7 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
                       onClick={() => setProfileMenuOpen(false)}
                       role="menuitem"
                     >
-                      {area === 'admin' ? 'Клиентская часть' : 'Админка'}
+                      {area === 'admin' ? 'Client area' : 'Admin panel'}
                     </a>
                   ) : null}
                   <button
@@ -349,7 +349,7 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
                       logout()
                     }}
                   >
-                    Выход
+                    Log out
                   </button>
                 </div>
               ) : null}
