@@ -172,8 +172,7 @@ export default function ClientShell({
       <div className={styles.layout}>
         <aside className={styles.sidebar}>
           <div className={styles.brand}>
-            <h1 className={styles.brandTitle}>Architectural Ledger</h1>
-            <p className={styles.brandSubtitle}>Elite Financial Ops</p>
+            <h1 className={styles.brandTitle}>Envidicy</h1>
           </div>
 
           <nav className={styles.nav}>

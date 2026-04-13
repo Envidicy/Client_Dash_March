@@ -59,8 +59,7 @@ export default function AdminShell({ title, subtitle, actionLabel, actionOnClick
       <div className={styles.layout}>
         <aside className={styles.sidebar}>
           <div>
-            <h1 className={styles.brandTitle}>Architectural Ledger</h1>
-            <p className={styles.brandSubtitle}>Admin Control</p>
+            <h1 className={styles.brandTitle}>Envidicy</h1>
           </div>
 
           <nav className={styles.nav}>
