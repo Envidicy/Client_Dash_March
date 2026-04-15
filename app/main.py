@@ -3727,7 +3727,8 @@ def _get_or_create_default_agency(conn, user_id: int) -> Optional[Dict[str, obje
         ).fetchone()
         if not user:
             return None
-        base_name = user.get("company") or f"Agency {user_id}"
+        user_row = dict(user)
+        base_name = user_row.get("company") or f"Agency {user_id}"
         slug_base = _agency_slugify(base_name, f"agency-{user_id}")
         slug = slug_base
         suffix = 2
@@ -3758,12 +3759,13 @@ def _get_or_create_default_agency(conn, user_id: int) -> Optional[Dict[str, obje
         (user_id,),
     ).fetchall()
     for account in account_rows:
+        account_row = dict(account)
         _ensure_agency_account_mapping(
             conn,
             int(agency["id"]),
-            int(account["id"]),
-            label=account.get("name"),
-            status=account.get("status") or "active",
+            int(account_row["id"]),
+            label=account_row.get("name"),
+            status=account_row.get("status") or "active",
         )
     return agency
 
