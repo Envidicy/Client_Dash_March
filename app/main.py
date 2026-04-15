@@ -10210,6 +10210,37 @@ def admin_update_account_request_status(
 
             default_currency = "EUR" if request_platform == "telegram" else "USD"
             ensured_account_id: Optional[int] = None
+
+            def _insert_account_record() -> Optional[int]:
+                cur = conn.execute(
+                    "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency, account_code) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        request_user_id,
+                        request_platform,
+                        request_name,
+                        None,
+                        default_currency,
+                        payload.account_code,
+                    ),
+                )
+                return int(cur.lastrowid) if cur.lastrowid is not None else None
+
+            def _try_update_budget(account_id: int) -> None:
+                if payload.budget_total is None:
+                    return
+                try:
+                    conn.execute(
+                        "UPDATE ad_accounts SET budget_total=? WHERE id=?",
+                        (payload.budget_total, account_id),
+                    )
+                except Exception as budget_exc:
+                    logging.warning(
+                        "Skipped budget_total update account_id=%s request_id=%s: %s",
+                        account_id,
+                        request_id,
+                        budget_exc,
+                    )
+
             if payload.budget_total is not None:
                 existing_acc = _find_existing_account(
                     conn,
@@ -10219,24 +10250,11 @@ def admin_update_account_request_status(
                 )
                 if existing_acc:
                     ensured_account_id = int(existing_acc["id"])
-                    conn.execute(
-                        "UPDATE ad_accounts SET budget_total=? WHERE id=?",
-                        (payload.budget_total, existing_acc["id"]),
-                    )
+                    _try_update_budget(ensured_account_id)
                 elif payload.status == "approved":
-                    cur = conn.execute(
-                        "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency, account_code, budget_total) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            request_user_id,
-                            request_platform,
-                            request_name,
-                            None,
-                            default_currency,
-                            payload.account_code,
-                            payload.budget_total,
-                        ),
-                    )
-                    ensured_account_id = int(cur.lastrowid)
+                    ensured_account_id = _insert_account_record()
+                    if ensured_account_id:
+                        _try_update_budget(ensured_account_id)
 
             if payload.status == "approved":
                 existing = _find_existing_account(
@@ -10246,39 +10264,37 @@ def admin_update_account_request_status(
                     name=request_name,
                 )
                 if not existing:
-                    cur = conn.execute(
-                        "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency, account_code, budget_total) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            request_user_id,
-                            request_platform,
-                            request_name,
-                            None,
-                            default_currency,
-                            payload.account_code,
-                            payload.budget_total,
-                        ),
-                    )
-                    ensured_account_id = int(cur.lastrowid)
+                    ensured_account_id = _insert_account_record()
+                    if ensured_account_id:
+                        _try_update_budget(ensured_account_id)
                 elif payload.account_code:
                     conn.execute(
                         "UPDATE ad_accounts SET account_code=? WHERE id=?",
                         (payload.account_code, existing["id"]),
                     )
                     ensured_account_id = int(existing["id"])
+                    _try_update_budget(ensured_account_id)
                 else:
                     ensured_account_id = int(existing["id"])
 
             if ensured_account_id:
-                agency = _get_or_create_default_agency(conn, request_user_id)
-                if agency:
-                    _ensure_agency_account_mapping(
-                        conn,
-                        int(agency["id"]),
-                        int(ensured_account_id),
-                        label=request_name,
-                        status=payload.status or request_status,
+                try:
+                    agency = _get_or_create_default_agency(conn, request_user_id)
+                    if agency:
+                        _ensure_agency_account_mapping(
+                            conn,
+                            int(agency["id"]),
+                            int(ensured_account_id),
+                            label=request_name,
+                            status=payload.status or request_status,
+                        )
+                except Exception as agency_exc:
+                    logging.exception(
+                        "Failed to sync agency mapping request_id=%s account_id=%s: %s",
+                        request_id,
+                        ensured_account_id,
+                        agency_exc,
                     )
-
             conn.execute("UPDATE account_requests SET status=? WHERE id=?", (payload.status, request_id))
             _insert_request_event(
                 conn,
