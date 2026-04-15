@@ -105,6 +105,33 @@ export default function AdminRequestsPage() {
   })
 
   async function safeFetch(path, options = {}) {
+    const normalizedPath = String(path || '')
+    if (normalizedPath.startsWith('/admin/account-requests')) {
+      const token = getAuthToken()
+      if (!token) {
+        clearAuth()
+        router.push('/login')
+        throw new Error('Unauthorized')
+      }
+
+      const res = await fetch(`/api${normalizedPath}`, {
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          Authorization: `Bearer ${token}`,
+        },
+        cache: 'no-store',
+      })
+
+      if (res.status === 401) {
+        clearAuth()
+        router.push('/login')
+        throw new Error('Unauthorized')
+      }
+      if (res.status === 403) throw new Error('Нет доступа к админке.')
+      return res
+    }
+
     const res = await apiFetch(path, { ...options, headers: { ...(options.headers || {}), ...authHeaders() } })
     if (res.status === 401) {
       clearAuth()
