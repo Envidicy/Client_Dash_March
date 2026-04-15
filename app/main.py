@@ -1,4 +1,4 @@
-﻿from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Dict, List, Literal, Optional, Tuple
 from enum import Enum
@@ -10165,94 +10165,135 @@ def admin_update_account_request_status(
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM account_requests WHERE id=?", (request_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Request not found")
-        if payload.manager_email:
-            conn.execute(
-                "UPDATE account_requests SET manager_email=? WHERE id=?",
-                (payload.manager_email, request_id),
-            )
-        if payload.comment is not None:
-            conn.execute(
-                "UPDATE account_requests SET comment=? WHERE id=?",
-                (payload.comment, request_id),
-            )
-        if payload.account_code is not None:
-            conn.execute(
-                "UPDATE account_requests SET account_code=? WHERE id=?",
-                (payload.account_code, request_id),
-            )
-        if payload.contract_code is not None:
-            conn.execute(
-                "UPDATE account_requests SET contract_code=? WHERE id=?",
-                (payload.contract_code, request_id),
-            )
-        default_currency = "EUR" if row["platform"] == "telegram" else "USD"
-        ensured_account_id: Optional[int] = None
-        if payload.budget_total is not None:
-            existing_acc = _find_existing_account(
-                conn,
-                user_id=int(row["user_id"]),
-                platform=str(row["platform"] or ""),
-                name=str(row["name"] or ""),
-            )
-            if existing_acc:
-                ensured_account_id = int(existing_acc["id"])
-                conn.execute(
-                    "UPDATE ad_accounts SET budget_total=? WHERE id=?",
-                    (payload.budget_total, existing_acc["id"]),
-                )
-            elif payload.status == "approved":
-                cur = conn.execute(
-                    "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency, account_code, budget_total) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (row["user_id"], row["platform"], row["name"], None, default_currency, payload.account_code, payload.budget_total),
-                )
-                ensured_account_id = int(cur.lastrowid)
-        if payload.status == "approved":
-            existing = _find_existing_account(
-                conn,
-                user_id=int(row["user_id"]),
-                platform=str(row["platform"] or ""),
-                name=str(row["name"] or ""),
-            )
-            if not existing:
-                cur = conn.execute(
-                    "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency, account_code, budget_total) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (row["user_id"], row["platform"], row["name"], None, default_currency, payload.account_code, payload.budget_total),
-                )
-                ensured_account_id = int(cur.lastrowid)
-            elif payload.account_code:
-                conn.execute(
-                    "UPDATE ad_accounts SET account_code=? WHERE id=?",
-                    (payload.account_code, existing["id"]),
-                )
-                ensured_account_id = int(existing["id"])
-            elif existing:
-                ensured_account_id = int(existing["id"])
-        if ensured_account_id:
-            agency = _get_or_create_default_agency(conn, int(row["user_id"]))
-            if agency:
-                _ensure_agency_account_mapping(
-                    conn,
-                    int(agency["id"]),
-                    int(ensured_account_id),
-                    label=str(row["name"] or ""),
-                    status=payload.status or str(row.get("status") or "new"),
-                )
-        conn.execute("UPDATE account_requests SET status=? WHERE id=?", (payload.status, request_id))
-        _insert_request_event(
-            conn,
-            request_id=request_id,
-            admin_email=admin_user["email"],
-            event_type="status",
-            status=payload.status,
-            comment=payload.comment,
-            manager_email=payload.manager_email,
-        )
-        conn.commit()
-        return {"id": request_id, "status": payload.status}
+        try:
+            row = conn.execute("SELECT * FROM account_requests WHERE id=?", (request_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Request not found")
 
+            request_row = dict(row)
+            request_platform = str(request_row.get("platform") or "").strip().lower()
+            request_name = str(request_row.get("name") or "").strip()
+            request_status = str(request_row.get("status") or "new")
+
+            try:
+                request_user_id = int(request_row.get("user_id"))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Request has invalid user_id")
+
+            if not request_platform:
+                raise HTTPException(status_code=400, detail="Request has empty platform")
+            if not request_name:
+                raise HTTPException(status_code=400, detail="Request has empty account name")
+
+            if payload.manager_email:
+                conn.execute(
+                    "UPDATE account_requests SET manager_email=? WHERE id=?",
+                    (payload.manager_email, request_id),
+                )
+            if payload.comment is not None:
+                conn.execute(
+                    "UPDATE account_requests SET comment=? WHERE id=?",
+                    (payload.comment, request_id),
+                )
+            if payload.account_code is not None:
+                conn.execute(
+                    "UPDATE account_requests SET account_code=? WHERE id=?",
+                    (payload.account_code, request_id),
+                )
+            if payload.contract_code is not None:
+                conn.execute(
+                    "UPDATE account_requests SET contract_code=? WHERE id=?",
+                    (payload.contract_code, request_id),
+                )
+
+            default_currency = "EUR" if request_platform == "telegram" else "USD"
+            ensured_account_id: Optional[int] = None
+            if payload.budget_total is not None:
+                existing_acc = _find_existing_account(
+                    conn,
+                    user_id=request_user_id,
+                    platform=request_platform,
+                    name=request_name,
+                )
+                if existing_acc:
+                    ensured_account_id = int(existing_acc["id"])
+                    conn.execute(
+                        "UPDATE ad_accounts SET budget_total=? WHERE id=?",
+                        (payload.budget_total, existing_acc["id"]),
+                    )
+                elif payload.status == "approved":
+                    cur = conn.execute(
+                        "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency, account_code, budget_total) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            request_user_id,
+                            request_platform,
+                            request_name,
+                            None,
+                            default_currency,
+                            payload.account_code,
+                            payload.budget_total,
+                        ),
+                    )
+                    ensured_account_id = int(cur.lastrowid)
+
+            if payload.status == "approved":
+                existing = _find_existing_account(
+                    conn,
+                    user_id=request_user_id,
+                    platform=request_platform,
+                    name=request_name,
+                )
+                if not existing:
+                    cur = conn.execute(
+                        "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency, account_code, budget_total) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            request_user_id,
+                            request_platform,
+                            request_name,
+                            None,
+                            default_currency,
+                            payload.account_code,
+                            payload.budget_total,
+                        ),
+                    )
+                    ensured_account_id = int(cur.lastrowid)
+                elif payload.account_code:
+                    conn.execute(
+                        "UPDATE ad_accounts SET account_code=? WHERE id=?",
+                        (payload.account_code, existing["id"]),
+                    )
+                    ensured_account_id = int(existing["id"])
+                else:
+                    ensured_account_id = int(existing["id"])
+
+            if ensured_account_id:
+                agency = _get_or_create_default_agency(conn, request_user_id)
+                if agency:
+                    _ensure_agency_account_mapping(
+                        conn,
+                        int(agency["id"]),
+                        int(ensured_account_id),
+                        label=request_name,
+                        status=payload.status or request_status,
+                    )
+
+            conn.execute("UPDATE account_requests SET status=? WHERE id=?", (payload.status, request_id))
+            _insert_request_event(
+                conn,
+                request_id=request_id,
+                admin_email=admin_user["email"],
+                event_type="status",
+                status=payload.status,
+                comment=payload.comment,
+                manager_email=payload.manager_email,
+            )
+            conn.commit()
+            return {"id": request_id, "status": payload.status}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logging.exception("Failed to update request status request_id=%s: %s", request_id, exc)
+            raise HTTPException(status_code=500, detail="Failed to update request status")
 
 @app.get("/admin/account-requests/{request_id}/events")
 def admin_list_account_request_events(request_id: int, admin_user=Depends(get_admin_user)):
@@ -11087,3 +11128,4 @@ def invoice_by_topup(
 
 
 # Local run: uvicorn app.main:app --reload
+

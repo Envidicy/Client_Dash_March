@@ -112,7 +112,35 @@ export default function AdminRequestsPage() {
   })
 
   async function safeFetch(path, options = {}) {
-    return adminFetch(router, path, options)
+    const normalizedPath = String(path || '')
+    if (!normalizedPath.startsWith('/admin/account-requests')) {
+      return adminFetch(router, path, options)
+    }
+
+    const token = getAuthToken()
+    if (!token) {
+      router.push('/login')
+      throw new Error('Unauthorized')
+    }
+
+    const res = await fetch(`/api${normalizedPath}`, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+      cache: 'no-store',
+    })
+
+    if (res.status === 401) {
+      router.push('/login')
+      throw new Error('Unauthorized')
+    }
+    if (res.status === 403) {
+      throw new Error('Admin access denied.')
+    }
+
+    return res
   }
 
   async function fetchRequests() {
