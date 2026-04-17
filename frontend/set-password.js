@@ -1,23 +1,31 @@
-﻿const form = document.getElementById('set-password-form')
+const form = document.getElementById('set-password-form')
 const statusEl = document.getElementById('set-password-status')
 const apiBase = window.API_BASE || 'https://envidicy-dash-client.onrender.com'
 const search = new URLSearchParams(window.location.search)
 
 function init() {
-  const email = search.get('email') || ''
+  const email = (search.get('email') || '').trim()
+  const setupToken = (search.get('setup_token') || '').trim()
   const emailInput = document.getElementById('set-password-email')
+  const tokenInput = document.getElementById('set-password-token')
   if (emailInput && email) emailInput.value = email
+  if (tokenInput && setupToken) tokenInput.value = setupToken
 }
 
 if (form && statusEl) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault()
     const email = document.getElementById('set-password-email')?.value?.trim()
+    const setupToken = document.getElementById('set-password-token')?.value?.trim() || (search.get('setup_token') || '').trim()
     const next = document.getElementById('set-password-new')?.value?.trim()
     const confirm = document.getElementById('set-password-confirm')?.value?.trim()
 
     if (!email || !next) {
       statusEl.textContent = '\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 email \u0438 \u043d\u043e\u0432\u044b\u0439 \u043f\u0430\u0440\u043e\u043b\u044c.'
+      return
+    }
+    if (!setupToken) {
+      statusEl.textContent = '\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443 \u0438\u0437 \u043f\u0440\u0438\u0433\u043b\u0430\u0441\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0439 \u0441\u0441\u044b\u043b\u043a\u0438 \u0434\u043b\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0438 \u043f\u0430\u0440\u043e\u043b\u044f.'
       return
     }
     if (next !== confirm) {
@@ -30,7 +38,7 @@ if (form && statusEl) {
       const res = await fetch(`${apiBase}/auth/set-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, new_password: next }),
+        body: JSON.stringify({ email, setup_token: setupToken, new_password: next }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.detail || 'set-password failed')
