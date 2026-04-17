@@ -44,6 +44,7 @@ _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
 _ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
 _ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC = int(os.getenv("ASSISTANT_GLOBAL_CACHE_TTL_SEC", "3600") or 3600)
+_PUBLIC_URL_TOKEN_SECRET_FALLBACK = secrets.token_hex(32)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -2931,8 +2932,8 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
     vat_amount = payload.get("vat_amount", "0.00")
     vat_note = payload.get("vat_note", "")
     request_id = payload.get("request_id", "")
-    token = payload.get("token", "")
-    token_query = f"?token={token}" if token else ""
+    pdf_token = payload.get("pdf_token", "")
+    token_query = f"?token={pdf_token}" if pdf_token else ""
     pdf_url = f"/wallet/topup-requests/{request_id}/pdf-generated{token_query}"
     return f"""
 <!doctype html>
@@ -3666,6 +3667,119 @@ def _public_app_base_url() -> str:
 def _build_access_setup_url(email: str, setup_token: str) -> str:
     query = urlencode({"mode": "set-password", "email": email, "setup_token": setup_token})
     return f"{_public_app_base_url()}/login?{query}"
+
+
+def _url_token_ttl_sec() -> int:
+    try:
+        return max(60, int(os.getenv("PUBLIC_URL_TOKEN_TTL_SEC", "1800") or 1800))
+    except Exception:
+        return 1800
+
+
+def _url_token_secret() -> bytes:
+    raw = (os.getenv("PUBLIC_URL_TOKEN_SECRET") or os.getenv("URL_TOKEN_SECRET") or "").strip()
+    if not raw:
+        raw = _PUBLIC_URL_TOKEN_SECRET_FALLBACK
+    return str(raw).encode("utf-8")
+
+
+def _urlsafe_b64encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _urlsafe_b64decode(raw: str) -> bytes:
+    padded = raw + ("=" * ((4 - (len(raw) % 4)) % 4))
+    return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+
+def _issue_scoped_url_token(user_id: int, scope: str, resource_id: Optional[int] = None, ttl_sec: Optional[int] = None) -> str:
+    expires_at = int(time.time()) + (int(ttl_sec) if ttl_sec is not None else _url_token_ttl_sec())
+    payload = {
+        "uid": int(user_id),
+        "scp": str(scope),
+        "exp": int(expires_at),
+        "rid": int(resource_id) if resource_id is not None else None,
+    }
+    payload_b64 = _urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signature = hmac.new(_url_token_secret(), payload_b64.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload_b64}.{signature}"
+
+
+def _verify_scoped_url_token(token: str, scope: str, resource_id: Optional[int] = None) -> Optional[int]:
+    raw = str(token or "").strip()
+    if not raw or "." not in raw:
+        return None
+    payload_b64, signature = raw.rsplit(".", 1)
+    expected_signature = hmac.new(_url_token_secret(), payload_b64.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected_signature, signature):
+        return None
+    try:
+        payload = json.loads(_urlsafe_b64decode(payload_b64).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        uid = int(payload.get("uid"))
+        exp = int(payload.get("exp"))
+    except Exception:
+        return None
+    if payload.get("scp") != scope:
+        return None
+    if exp < int(time.time()):
+        return None
+    rid = payload.get("rid")
+    if resource_id is None:
+        if rid not in (None, "", 0):
+            return None
+    else:
+        try:
+            if int(rid) != int(resource_id):
+                return None
+        except Exception:
+            return None
+    return uid
+
+
+def _resolve_scoped_download_user_id(token: Optional[str], current_user: Optional[Dict[str, object]], scope: str, resource_id: Optional[int] = None) -> int:
+    if token:
+        uid = _verify_scoped_url_token(token, scope=scope, resource_id=resource_id)
+        if uid is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        return uid
+    if current_user and current_user.get("id"):
+        return int(current_user["id"])
+    raise HTTPException(status_code=401, detail="Missing token")
+
+
+def _build_avatar_url(user_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="avatar")
+    return f"/profile/avatar?{urlencode({'token': token})}"
+
+
+def _build_document_download_url(user_id: int, doc_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="document_download", resource_id=doc_id)
+    return f"/documents/{doc_id}?{urlencode({'token': token})}"
+
+
+def _build_client_finance_document_download_url(user_id: int, doc_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="client_finance_document_download", resource_id=doc_id)
+    return f"/client-finance-documents/{doc_id}?{urlencode({'token': token})}"
+
+
+def _build_wallet_invoice_page_url(user_id: int, request_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="wallet_invoice_page", resource_id=request_id)
+    return f"/wallet/topup-requests/{request_id}/invoice?{urlencode({'token': token})}"
+
+
+def _build_wallet_invoice_pdf_url(user_id: int, request_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="wallet_invoice_pdf_uploaded", resource_id=request_id)
+    return f"/wallet/topup-requests/{request_id}/pdf?{urlencode({'token': token})}"
+
+
+def _build_wallet_invoice_generated_pdf_url(user_id: int, request_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="wallet_invoice_pdf_generated", resource_id=request_id)
+    return f"/wallet/topup-requests/{request_id}/pdf-generated?{urlencode({'token': token})}"
 
 
 def _issue_user_token(conn, user_id: int, login_email: Optional[str] = None) -> str:
@@ -6047,7 +6161,7 @@ def get_profile(current_user=Depends(get_current_user)):
         profile["primary_email"] = current_user.get("primary_email") or current_user["email"]
         profile["can_manage_accesses"] = bool(current_user.get("can_manage_accesses"))
         if profile.get("avatar_path"):
-            profile["avatar_url"] = f"/profile/avatar?token={_ensure_token(conn, current_user['id'])}"
+            profile["avatar_url"] = _build_avatar_url(current_user["id"])
         return profile
 
 
@@ -6079,7 +6193,7 @@ def update_profile(payload: ProfilePayload, current_user=Depends(get_current_use
         result["primary_email"] = current_user.get("primary_email") or current_user["email"]
         result["can_manage_accesses"] = bool(current_user.get("can_manage_accesses"))
         if result.get("avatar_path"):
-            result["avatar_url"] = f"/profile/avatar?token={_ensure_token(conn, current_user['id'])}"
+            result["avatar_url"] = _build_avatar_url(current_user["id"])
         return result
 
 
@@ -6208,16 +6322,6 @@ def get_fees(current_user=Depends(get_current_user)):
         return _load_fee_config(profile.get("fee_config"))
 
 
-def _ensure_token(conn, user_id: int) -> str:
-    row = conn.execute("SELECT token FROM user_tokens WHERE user_id=? ORDER BY created_at DESC LIMIT 1", (user_id,)).fetchone()
-    if row and row["token"]:
-        return row["token"]
-    token = secrets.token_hex(32)
-    conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (user_id, token))
-    conn.commit()
-    return token
-
-
 @app.post("/profile/avatar")
 def upload_avatar(file: UploadFile = File(...), current_user=Depends(get_current_user)):
     if not get_conn:
@@ -6229,20 +6333,16 @@ def upload_avatar(file: UploadFile = File(...), current_user=Depends(get_current
         path = _save_avatar(file)
         conn.execute("UPDATE user_profiles SET avatar_path=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (path, current_user["id"]))
         conn.commit()
-        token = _ensure_token(conn, current_user["id"])
-        return {"status": "ok", "avatar_url": f"/profile/avatar?token={token}"}
+        return {"status": "ok", "avatar_url": _build_avatar_url(current_user["id"])}
 
 
 @app.get("/profile/avatar")
 def get_avatar(token: Optional[str] = None, current_user=Depends(get_optional_user)):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="avatar")
     with get_conn() as conn:
-        row = conn.execute("SELECT avatar_path FROM user_profiles WHERE user_id=?", (current_user["id"],)).fetchone()
+        row = conn.execute("SELECT avatar_path FROM user_profiles WHERE user_id=?", (user_id,)).fetchone()
         if not row or not row["avatar_path"]:
             raise HTTPException(status_code=404, detail="Avatar not found")
         return FileResponse(row["avatar_path"])
@@ -6444,7 +6544,12 @@ def list_documents(current_user=Depends(get_current_user)):
             "SELECT id, title, created_at FROM user_documents WHERE user_id=? ORDER BY created_at DESC",
             (current_user["id"],),
         ).fetchall()
-        return [dict(row) for row in rows]
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["download_url"] = _build_document_download_url(current_user["id"], int(item["id"]))
+            items.append(item)
+        return items
 
 
 @app.get("/documents/{doc_id}")
@@ -6455,14 +6560,11 @@ def download_document(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="document_download", resource_id=doc_id)
     with get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM user_documents WHERE id=? AND user_id=?",
-            (doc_id, current_user["id"]),
+            (doc_id, user_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -6495,7 +6597,12 @@ def list_client_finance_documents(current_user=Depends(get_current_user)):
             """,
             (current_user["id"],),
         ).fetchall()
-        return [dict(row) for row in rows]
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["download_url"] = _build_client_finance_document_download_url(current_user["id"], int(item["id"]))
+            items.append(item)
+        return items
 
 
 @app.get("/client-finance-documents/{doc_id}")
@@ -6506,14 +6613,11 @@ def download_client_finance_document(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="client_finance_document_download", resource_id=doc_id)
     with get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM client_finance_documents WHERE id=? AND user_id=?",
-            (doc_id, current_user["id"]),
+            (doc_id, user_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -8534,6 +8638,7 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
             "invoice_number": invoice_number,
             "invoice_date": invoice_date,
             "invoice_url": f"/wallet/topup-requests/{request_id}/invoice",
+            "invoice_public_url": _build_wallet_invoice_page_url(current_user["id"], request_id),
         }
 
 
@@ -8556,7 +8661,15 @@ def list_wallet_topup_requests(current_user=Depends(get_current_user)):
             """,
             (current_user["id"],),
         ).fetchall()
-        return [dict(row) for row in rows]
+        items = []
+        for row in rows:
+            item = dict(row)
+            request_id = int(item["id"])
+            item["invoice_public_url"] = _build_wallet_invoice_page_url(current_user["id"], request_id)
+            item["invoice_pdf_public_url"] = _build_wallet_invoice_pdf_url(current_user["id"], request_id)
+            item["invoice_generated_pdf_public_url"] = _build_wallet_invoice_generated_pdf_url(current_user["id"], request_id)
+            items.append(item)
+        return items
 
 
 @app.get("/wallet/topup-requests/{request_id}/invoice", response_class=HTMLResponse)
@@ -8567,14 +8680,11 @@ def wallet_topup_invoice_page(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="wallet_invoice_page", resource_id=request_id)
     with get_conn() as conn:
         request_row = conn.execute(
             "SELECT * FROM wallet_topup_requests WHERE id=? AND user_id=?",
-            (request_id, current_user["id"]),
+            (request_id, user_id),
         ).fetchone()
         if not request_row:
             raise HTTPException(status_code=404, detail="Request not found")
@@ -8651,7 +8761,7 @@ def wallet_topup_invoice_page(
             "amount_net": _format_amount(tax["net_amount"]),
             "vat_amount": _format_amount(tax["vat_amount"]),
             "vat_note": tax["vat_note"],
-            "token": token or "",
+            "pdf_token": _issue_scoped_url_token(user_id, scope="wallet_invoice_pdf_generated", resource_id=request_id),
         }
         return HTMLResponse(content=_invoice_1c_html(payload))
 
@@ -8664,14 +8774,11 @@ def wallet_topup_invoice_pdf(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="wallet_invoice_pdf_uploaded", resource_id=request_id)
     with get_conn() as conn:
         request_row = conn.execute(
             "SELECT id FROM wallet_topup_requests WHERE id=? AND user_id=?",
-            (request_id, current_user["id"]),
+            (request_id, user_id),
         ).fetchone()
         if not request_row:
             raise HTTPException(status_code=404, detail="Request not found")
@@ -8700,14 +8807,11 @@ def wallet_topup_invoice_generated_pdf(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="wallet_invoice_pdf_generated", resource_id=request_id)
     with get_conn() as conn:
         request_row = conn.execute(
             "SELECT * FROM wallet_topup_requests WHERE id=? AND user_id=?",
-            (request_id, current_user["id"]),
+            (request_id, user_id),
         ).fetchone()
         if not request_row:
             raise HTTPException(status_code=404, detail="Request not found")
@@ -11169,10 +11273,7 @@ def invoice_by_topup(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="topup_invoice_page", resource_id=topup_id)
     with get_conn() as conn:
         row = conn.execute(
             """
@@ -11181,7 +11282,7 @@ def invoice_by_topup(
             JOIN ad_accounts a ON a.id=t.account_id
             WHERE t.id=? AND t.user_id=?
             """,
-            (topup_id, current_user["id"]),
+            (topup_id, user_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Invoice not found")

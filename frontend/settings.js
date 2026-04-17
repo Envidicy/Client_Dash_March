@@ -56,6 +56,13 @@ function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+function absoluteApiUrl(path) {
+  const raw = String(path || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) return raw
+  return `${apiBase}${raw.startsWith('/') ? '' : '/'}${raw}`
+}
+
 function activateTab(name) {
   tabs.forEach((btn) => {
     if (btn.hidden) return
@@ -354,19 +361,19 @@ async function loadDocuments() {
       return
     }
     if (docs.empty) docs.empty.hidden = true
-    const token = typeof getAuthToken === 'function' ? getAuthToken() : localStorage.getItem('auth_token')
     docs.body.innerHTML = data
-      .map(
-        (row) => `
+      .map((row) => {
+        const docUrl = absoluteApiUrl(row.download_url || `/documents/${row.id}`)
+        return `
       <tr>
         <td>${row.title}</td>
         <td>${row.created_at?.split(' ')[0] || '?'}</td>
         <td style="text-align:right;">
-          <a class="btn ghost small" href="${apiBase}/documents/${row.id}${token ? `?token=${encodeURIComponent(token)}` : ''}" target="_blank" rel="noopener">\u0421\u043a\u0430\u0447\u0430\u0442\u044c</a>
+          <a class="btn ghost small" href="${docUrl}" target="_blank" rel="noopener">Скачать</a>
         </td>
       </tr>
     `
-      )
+      })
       .join('')
   } catch (e) {
     if (docs.empty) {
