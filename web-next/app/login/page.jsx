@@ -1,26 +1,57 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import AuthShell from '../../components/auth/AuthShell'
 import { apiFetch } from '../../lib/api'
 import { setAuth } from '../../lib/auth'
+import { useI18n } from '../../lib/i18n/client'
+import styles from './login.module.css'
 
 const ADMIN_EMAILS = new Set(['romant997@gmail.com', 'kolyadov.denis@gmail.com'])
 
 export default function LoginPage() {
   const router = useRouter()
+  const { locale, t } = useI18n()
   const [mode, setMode] = useState('login')
-  const [status, setStatus] = useState('Введите email и пароль, чтобы продолжить.')
   const [pending, setPending] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const [status, setStatus] = useState(t('login.statusLogin'))
+  const [setupEmailFromQuery, setSetupEmailFromQuery] = useState('')
+  const [setupTokenFromQuery, setSetupTokenFromQuery] = useState('')
 
-  const modeText = useMemo(
+  const helperText = useMemo(
     () =>
       mode === 'login'
-        ? 'Введите email и пароль, чтобы продолжить.'
-        : 'Укажите дополнительный email и задайте для него новый пароль.',
-    [mode]
+        ? t('login.statusLogin')
+        : t('login.statusSetPassword'),
+    [mode, t]
   )
+  const features = useMemo(
+    () => [
+      { icon: 'speed', title: t('login.feature1Title'), text: t('login.feature1Text') },
+      { icon: 'verified_user', title: t('login.feature2Title'), text: t('login.feature2Text') },
+      { icon: 'architecture', title: t('login.feature3Title'), text: t('login.feature3Text') },
+    ],
+    [t]
+  )
+
+  useEffect(() => {
+    setStatus(mode === 'login' ? t('login.statusLogin') : t('login.statusSetPassword'))
+  }, [locale, mode, t])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const queryMode = String(params.get('mode') || '').trim().toLowerCase()
+    const queryEmail = String(params.get('email') || '').trim()
+    const querySetupToken = String(params.get('setup_token') || '').trim()
+    setSetupEmailFromQuery(queryEmail)
+    setSetupTokenFromQuery(querySetupToken)
+    if (queryMode === 'set-password' || querySetupToken) {
+      setMode('set-password')
+    }
+  }, [])
 
   async function onLoginSubmit(event) {
     event.preventDefault()
@@ -29,12 +60,12 @@ export default function LoginPage() {
     const password = String(form.get('password') || '').trim()
 
     if (!email || !password) {
-      setStatus('Заполните, пожалуйста, email и пароль.')
+      setStatus(t('login.fillEmailPassword'))
       return
     }
 
     setPending(true)
-    setStatus('Выполняется вход...')
+    setStatus(t('login.signingIn'))
     try {
       const res = await apiFetch('/auth/login', {
         method: 'POST',
@@ -42,13 +73,13 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.detail || 'Не удалось войти')
+      if (!res.ok) throw new Error(data?.detail || 'Could not sign in')
       setAuth(data)
-      setStatus('Вход выполнен. Перенаправление...')
+      setStatus(t('login.accessGranted'))
       const nextEmail = String(data?.email || email || '').toLowerCase()
-      router.push(ADMIN_EMAILS.has(nextEmail) ? '/admin/requests' : '/plan')
+      router.push(ADMIN_EMAILS.has(nextEmail) ? '/admin/requests' : '/dashboard')
     } catch (error) {
-      setStatus(error?.message || 'Не удалось войти. Проверьте почту и пароль.')
+      setStatus(error?.message || t('login.signInFailed'))
     } finally {
       setPending(false)
     }
@@ -57,85 +88,167 @@ export default function LoginPage() {
   async function onSetPasswordSubmit(event) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    const email = String(form.get('email') || '').trim()
+    const email = String(form.get('email') || '').trim() || setupEmailFromQuery
+    const setupToken = String(form.get('setup_token') || '').trim() || setupTokenFromQuery
     const next = String(form.get('new_password') || '').trim()
     const confirm = String(form.get('confirm_password') || '').trim()
 
     if (!email || !next) {
-      setStatus('Заполните email и новый пароль.')
+      setStatus(t('login.fillEmailNewPassword'))
+      return
+    }
+    if (!setupToken) {
+      setStatus(t('login.inviteLinkRequired', 'Open this page from the invite setup link.'))
       return
     }
     if (next !== confirm) {
-      setStatus('Пароли не совпадают.')
+      setStatus(t('login.passwordsMismatch'))
       return
     }
 
     setPending(true)
-    setStatus('Сохранение пароля...')
+    setStatus(t('login.savingPassword'))
     try {
       const res = await apiFetch('/auth/set-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, new_password: next }),
+        body: JSON.stringify({ email, setup_token: setupToken, new_password: next }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.detail || 'Не удалось задать пароль')
+      if (!res.ok) throw new Error(data?.detail || 'Could not set password')
       setMode('login')
-      setStatus('Пароль сохранен. Теперь можно войти.')
+      setStatus(t('login.passwordSaved'))
     } catch (error) {
-      setStatus(error?.message || 'Не удалось задать пароль.')
+      setStatus(error?.message || t('login.passwordSetFailed'))
     } finally {
       setPending(false)
     }
   }
 
   return (
-    <AuthShell eyebrow="Вход" title="В ваш кабинет" status={status || modeText} right="Private">
-      <div className="auth-switch">
-        <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>
-          Войти
-        </button>
-        <button type="button" className={mode !== 'login' ? 'active' : ''} onClick={() => setMode('set-password')}>
-          Задать пароль
-        </button>
-      </div>
+    <div className={styles.page}>
+      <aside className={styles.hero}>
+        <div className={styles.pattern} />
+        <div className={styles.heroInner}>
+          <Link className={styles.brand} href="/login">
+            Envidicy
+          </Link>
 
-      {mode === 'login' ? (
-        <form className="auth-form" onSubmit={onLoginSubmit}>
-          <label>
-            <span>Email</span>
-            <input name="email" type="email" placeholder="name@gmail.com" required />
-          </label>
-          <label>
-            <span>Пароль</span>
-            <input name="password" type="password" placeholder="Введите" required />
-          </label>
-          <button disabled={pending} className="auth-primary" type="submit">
-            {pending ? 'Выполняется...' : 'Войти'}
-          </button>
-          <a className="auth-secondary" href="/register">
-            Создать аккаунт
-          </a>
-        </form>
-      ) : (
-        <form className="auth-form" onSubmit={onSetPasswordSubmit}>
-          <label>
-            <span>Email доступа</span>
-            <input name="email" type="email" placeholder="team@company.com" required />
-          </label>
-          <label>
-            <span>Новый пароль</span>
-            <input name="new_password" type="password" placeholder="Введите" required />
-          </label>
-          <label>
-            <span>Повторите пароль</span>
-            <input name="confirm_password" type="password" placeholder="Введите" required />
-          </label>
-          <button disabled={pending} className="auth-primary" type="submit">
-            {pending ? 'Сохраняем...' : 'Сохранить пароль'}
-          </button>
-        </form>
-      )}
-    </AuthShell>
+          <h1 className={styles.heroTitle}>{t('login.heroTitle')}</h1>
+          <p className={styles.heroSubtitle}>{t('login.heroSubtitle')}</p>
+
+          <div className={styles.featureList}>
+            {features.map((item) => (
+              <div className={styles.feature} key={item.title}>
+                <span className={`material-symbols-outlined ${styles.featureIcon}`}>{item.icon}</span>
+                <div>
+                  <p className={styles.featureTitle}>{item.title}</p>
+                  <p className={styles.featureText}>{item.text}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className={styles.heroFooter}>
+          <span>{t('login.trustedBy')}</span>
+          <div className={styles.heroLine} />
+        </div>
+      </aside>
+
+      <main className={styles.side}>
+        <div className={styles.panel}>
+          <span className={styles.mobileBrand}>Envidicy</span>
+
+          <div className={styles.panelHead}>
+            <h2 className={styles.panelTitle}>{mode === 'login' ? t('login.signIn') : t('login.setPassword')}</h2>
+            <p className={styles.panelText}>{helperText}</p>
+          </div>
+
+          <div className={styles.card}>
+            {mode === 'login' ? (
+              <form className={styles.form} onSubmit={onLoginSubmit}>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>{t('login.emailAddress')}</span>
+                  <input className={styles.fieldInput} name="email" type="email" placeholder="name@company.com" required />
+                </label>
+
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>{t('login.password')}</span>
+                  <span className={styles.fieldInputWrap}>
+                    <input
+                      name="password"
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="********"
+                      required
+                    />
+                    <button
+                      className={styles.visibilityButton}
+                      type="button"
+                      onClick={() => setShowPassword((value) => !value)}
+                      aria-label={showPassword ? t('login.hidePassword') : t('login.showPassword')}
+                    >
+                      <span className="material-symbols-outlined">
+                        {showPassword ? 'visibility_off' : 'visibility'}
+                      </span>
+                    </button>
+                  </span>
+                </label>
+
+                <button className={styles.submit} type="submit" disabled={pending}>
+                  <span>{pending ? t('login.signingIn') : t('login.signIn')}</span>
+                  <span className="material-symbols-outlined">arrow_forward</span>
+                </button>
+              </form>
+            ) : (
+              <form className={styles.form} onSubmit={onSetPasswordSubmit}>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>{t('login.emailAddress')}</span>
+                  <input
+                    className={styles.fieldInput}
+                    name="email"
+                    type="email"
+                    placeholder="name@company.com"
+                    defaultValue={setupEmailFromQuery}
+                    required
+                  />
+                </label>
+
+                <input name="setup_token" type="hidden" value={setupTokenFromQuery} readOnly />
+
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>{t('login.newPassword')}</span>
+                  <input className={styles.fieldInput} name="new_password" type="password" placeholder="********" required />
+                </label>
+
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>{t('login.confirmPassword')}</span>
+                  <input className={styles.fieldInput} name="confirm_password" type="password" placeholder="********" required />
+                </label>
+
+                <button className={styles.submit} type="submit" disabled={pending}>
+                  <span>{pending ? t('login.savingPassword') : t('login.savePassword')}</span>
+                  <span className="material-symbols-outlined">arrow_forward</span>
+                </button>
+              </form>
+            )}
+          </div>
+
+          <div className={styles.bottomLinks}>
+            <button type="button" onClick={() => setMode('set-password')}>
+              <span>{t('login.setPassword')}</span>
+              <span className="material-symbols-outlined">chevron_right</span>
+            </button>
+            <span className={styles.dot} />
+            <Link href="/register">
+              <span>{t('login.needAccess')}</span>
+              <span className="material-symbols-outlined">chevron_right</span>
+            </Link>
+          </div>
+
+          <p className={styles.status}>{status}</p>
+        </div>
+      </main>
+    </div>
   )
 }

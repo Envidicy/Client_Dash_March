@@ -4,6 +4,13 @@ let legalEntities = []
 let invoices = []
 let topups = []
 
+function absoluteApiUrl(path) {
+  const raw = String(path || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) return raw
+  return `${apiBase}${raw.startsWith('/') ? '' : '/'}${raw}`
+}
+
 renderHeader({
   eyebrow: 'Envidicy · Billing Desk',
   title: 'Финансы',
@@ -76,10 +83,9 @@ async function submitWalletTopupRequest() {
     }
     if (!res.ok) throw new Error('Failed to create topup request')
     const data = await res.json()
-    if (data?.invoice_url) {
-      const token = typeof getAuthToken === 'function' ? getAuthToken() : localStorage.getItem('auth_token')
-      const withToken = token ? `${data.invoice_url}?token=${encodeURIComponent(token)}` : data.invoice_url
-      window.location.href = `${apiBase}${withToken}`
+    const invoiceUrl = data?.invoice_public_url || data?.invoice_url
+    if (invoiceUrl) {
+      window.location.href = absoluteApiUrl(invoiceUrl)
       return
     }
     alert('Заявка создана.')
@@ -178,8 +184,7 @@ function renderInvoices(rows) {
   tbody.innerHTML = ''
   rows.forEach((r) => {
     const tr = document.createElement('tr')
-    const token = typeof getAuthToken === 'function' ? getAuthToken() : localStorage.getItem('auth_token')
-    const pdfUrl = `${apiBase}/wallet/topup-requests/${r.id}/pdf-generated${token ? `?token=${encodeURIComponent(token)}` : ''}`
+    const pdfUrl = absoluteApiUrl(r.invoice_generated_pdf_public_url || `/wallet/topup-requests/${r.id}/pdf-generated`)
     tr.innerHTML = `
       <td>${r.date}</td>
       <td>${r.counterparty}</td>
