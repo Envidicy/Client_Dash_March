@@ -45,6 +45,16 @@ _LIVE_BILLING_TTL_SEC = 300
 _ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
 _ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC = int(os.getenv("ASSISTANT_GLOBAL_CACHE_TTL_SEC", "3600") or 3600)
 _PUBLIC_URL_TOKEN_SECRET_FALLBACK = secrets.token_hex(32)
+_PASSWORD_HASH_SCHEME = "pbkdf2_sha256"
+_PASSWORD_HASH_ITERATIONS = max(120000, int(os.getenv("PASSWORD_HASH_ITERATIONS", "390000") or 390000))
+_LOGIN_RATE_LIMIT_MAX_FAILURES = max(3, int(os.getenv("LOGIN_RATE_LIMIT_MAX_FAILURES", "8") or 8))
+_LOGIN_RATE_LIMIT_WINDOW_SEC = max(60, int(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SEC", "300") or 300))
+_LOGIN_RATE_LIMIT_BLOCK_SEC = max(60, int(os.getenv("LOGIN_RATE_LIMIT_BLOCK_SEC", "900") or 900))
+_ADMIN_KEY_RATE_LIMIT_MAX_FAILURES = max(3, int(os.getenv("ADMIN_KEY_RATE_LIMIT_MAX_FAILURES", "5") or 5))
+_ADMIN_KEY_RATE_LIMIT_WINDOW_SEC = max(60, int(os.getenv("ADMIN_KEY_RATE_LIMIT_WINDOW_SEC", "600") or 600))
+_ADMIN_KEY_RATE_LIMIT_BLOCK_SEC = max(60, int(os.getenv("ADMIN_KEY_RATE_LIMIT_BLOCK_SEC", "1800") or 1800))
+_SECURITY_FAILURE_LOG: Dict[str, List[float]] = {}
+_SECURITY_BLOCKED_UNTIL: Dict[str, float] = {}
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -3607,12 +3617,107 @@ def _normalize_email(value: Optional[str]) -> str:
     return (value or "").strip().lower()
 
 
-def _hash_password(password: str, salt: str) -> str:
+def _issue_password_salt() -> str:
+    return secrets.token_hex(16)
+
+
+def _hash_password_legacy(password: str, salt: str) -> str:
     return hashlib.sha256(f"{salt}{password}".encode("utf-8")).hexdigest()
 
 
+def _hash_password(password: str, salt: str) -> str:
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        str(salt).encode("utf-8"),
+        _PASSWORD_HASH_ITERATIONS,
+    ).hex()
+    return f"{_PASSWORD_HASH_SCHEME}${_PASSWORD_HASH_ITERATIONS}${digest}"
+
+
 def _verify_password(password: str, salt: str, stored_hash: str) -> bool:
-    return hmac.compare_digest(_hash_password(password, salt), stored_hash)
+    raw = str(stored_hash or "")
+    if raw.startswith(f"{_PASSWORD_HASH_SCHEME}$"):
+        try:
+            _, iter_raw, digest = raw.split("$", 2)
+            iterations = int(iter_raw)
+        except Exception:
+            return False
+        check = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            str(salt).encode("utf-8"),
+            iterations,
+        ).hex()
+        return hmac.compare_digest(check, digest)
+    return hmac.compare_digest(_hash_password_legacy(password, salt), raw)
+
+
+def _password_hash_needs_upgrade(stored_hash: Optional[str], salt: Optional[str]) -> bool:
+    raw = str(stored_hash or "")
+    if not raw.startswith(f"{_PASSWORD_HASH_SCHEME}$"):
+        return True
+    return len(str(salt or "")) < 32
+
+
+def _upgrade_password_hash_if_needed(conn, access: Dict[str, object], plain_password: str) -> None:
+    if not _password_hash_needs_upgrade(access.get("password_hash"), access.get("salt")):
+        return
+    new_salt = _issue_password_salt()
+    new_hash = _hash_password(plain_password, new_salt)
+    conn.execute(
+        "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
+        (new_hash, new_salt, access["id"]),
+    )
+    if (access.get("role") or "member") == "owner":
+        conn.execute(
+            "UPDATE users SET password_hash=?, salt=? WHERE id=?",
+            (new_hash, new_salt, access["user_id"]),
+        )
+
+
+def _request_client_ip(request: Optional[Request]) -> str:
+    if not request:
+        return "unknown"
+    forwarded = str(request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip() or "unknown"
+    real_ip = str(request.headers.get("x-real-ip") or "").strip()
+    if real_ip:
+        return real_ip
+    try:
+        if request.client and request.client.host:
+            return str(request.client.host)
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _security_bucket_cleanup(bucket: str, window_sec: int) -> List[float]:
+    now = time.time()
+    attempts = [ts for ts in _SECURITY_FAILURE_LOG.get(bucket, []) if now - ts <= float(window_sec)]
+    _SECURITY_FAILURE_LOG[bucket] = attempts
+    return attempts
+
+
+def _security_assert_not_blocked(bucket: str) -> None:
+    now = time.time()
+    blocked_until = float(_SECURITY_BLOCKED_UNTIL.get(bucket, 0.0) or 0.0)
+    if blocked_until > now:
+        raise HTTPException(status_code=429, detail="Too many attempts. Please try again later")
+
+
+def _security_register_failure(bucket: str, max_failures: int, window_sec: int, block_sec: int) -> None:
+    attempts = _security_bucket_cleanup(bucket, window_sec)
+    attempts.append(time.time())
+    _SECURITY_FAILURE_LOG[bucket] = attempts
+    if len(attempts) >= int(max_failures):
+        _SECURITY_BLOCKED_UNTIL[bucket] = time.time() + float(block_sec)
+
+
+def _security_clear_failures(bucket: str) -> None:
+    _SECURITY_FAILURE_LOG.pop(bucket, None)
+    _SECURITY_BLOCKED_UNTIL.pop(bucket, None)
 
 
 def _ensure_owner_access(conn, user_id: int):
@@ -4069,13 +4174,25 @@ def admin_impersonate_user(user_id: int, admin_user=Depends(get_admin_user)):
         return {"id": user_id, "email": user["email"], "token": token}
 
 
-@app.get("/admin/check-key")
-def admin_check_key(key: str):
-    admin_key = os.getenv("ADMIN_PORTAL_KEY")
+@app.post("/admin/check-key")
+def admin_check_key(payload: Dict[str, object], request: Request):
+    admin_key = str(os.getenv("ADMIN_PORTAL_KEY") or "").strip()
     if not admin_key:
         raise HTTPException(status_code=500, detail="Admin portal key not set")
-    if key != admin_key:
+    key = str((payload or {}).get("key") or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="key is required")
+    bucket = f"admin-key:{_request_client_ip(request)}"
+    _security_assert_not_blocked(bucket)
+    if not hmac.compare_digest(key, admin_key):
+        _security_register_failure(
+            bucket,
+            max_failures=_ADMIN_KEY_RATE_LIMIT_MAX_FAILURES,
+            window_sec=_ADMIN_KEY_RATE_LIMIT_WINDOW_SEC,
+            block_sec=_ADMIN_KEY_RATE_LIMIT_BLOCK_SEC,
+        )
         raise HTTPException(status_code=403, detail="Invalid key")
+    _security_clear_failures(bucket)
     return {"status": "ok"}
 
 
@@ -4270,7 +4387,7 @@ def register(payload: AuthPayload):
         existing = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         if existing or _get_access_by_email(conn, email):
             raise HTTPException(status_code=400, detail="User already exists")
-        salt = secrets.token_hex(8)
+        salt = _issue_password_salt()
         password_hash = _hash_password(password, salt)
         cur = conn.execute(
             "INSERT INTO users (email, password_hash, salt) VALUES (?, ?, ?)",
@@ -4294,24 +4411,46 @@ def register(payload: AuthPayload):
 
 
 @app.post("/auth/login")
-def login(payload: AuthPayload):
+def login(payload: AuthPayload, request: Request):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     email = _normalize_email(payload.email)
     password = payload.password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
+    bucket = f"login:{_request_client_ip(request)}:{email}"
+    _security_assert_not_blocked(bucket)
     with get_conn() as conn:
         access = _get_access_by_email(conn, email)
         if not access or not access.get("password_hash") or not access.get("salt"):
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
             raise HTTPException(status_code=401, detail="Invalid credentials")
         if not _verify_password(password, access["salt"], access["password_hash"]):
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
             raise HTTPException(status_code=401, detail="Invalid credentials")
         user = conn.execute("SELECT * FROM users WHERE id=?", (access["user_id"],)).fetchone()
         if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        _upgrade_password_hash_if_needed(conn, access, password)
         token = _issue_user_token(conn, user["id"], access["email"])
         conn.commit()
+        _security_clear_failures(bucket)
         return {
             "id": user["id"],
             "email": access["email"],
@@ -4341,7 +4480,7 @@ def auth_access_status(email: str, current_user=Depends(get_current_user)):
 
 
 @app.post("/auth/set-password")
-def set_password(payload: SetPasswordPayload):
+def set_password(payload: SetPasswordPayload, request: Request):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     email = _normalize_email(payload.email)
@@ -4349,20 +4488,46 @@ def set_password(payload: SetPasswordPayload):
     setup_token = str(payload.setup_token or "").strip()
     if not email or not password or not setup_token:
         raise HTTPException(status_code=400, detail="email, setup_token and new_password are required")
+    bucket = f"set-password:{_request_client_ip(request)}:{email}"
+    _security_assert_not_blocked(bucket)
     with get_conn() as conn:
         access = _get_access_by_email(conn, email)
         generic_error = HTTPException(status_code=400, detail="Password setup is unavailable for this invite")
         if not access:
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
             raise generic_error
         if (access.get("role") or "member") == "owner":
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
             raise generic_error
         if access.get("password_hash"):
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
             raise generic_error
         expected_token = str(access.get("salt") or "").strip()
         if not expected_token or not hmac.compare_digest(expected_token, setup_token):
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
             raise generic_error
 
-        salt = secrets.token_hex(8)
+        salt = _issue_password_salt()
         password_hash = _hash_password(password, salt)
         conn.execute(
             "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
@@ -4370,6 +4535,7 @@ def set_password(payload: SetPasswordPayload):
         )
         conn.execute("DELETE FROM user_tokens WHERE user_id=? AND login_email=?", (access["user_id"], access["email"]))
         conn.commit()
+        _security_clear_failures(bucket)
         return {"status": "ok"}
 
 
@@ -4381,7 +4547,7 @@ def admin_reset_password(payload: PasswordReset, admin_user=Depends(get_admin_us
     password = payload.new_password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and new_password are required")
-    salt = secrets.token_hex(8)
+    salt = _issue_password_salt()
     password_hash = _hash_password(password, salt)
     with get_conn() as conn:
         access = _get_access_by_email(conn, email)
@@ -6518,7 +6684,7 @@ def change_password(payload: ChangePasswordPayload, current_user=Depends(get_cur
             raise HTTPException(status_code=404, detail="Access not found")
         if not _verify_password(payload.current_password, access["salt"], access["password_hash"]):
             raise HTTPException(status_code=400, detail="Invalid current password")
-        salt = secrets.token_hex(8)
+        salt = _issue_password_salt()
         password_hash = _hash_password(payload.new_password, salt)
         conn.execute(
             "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
