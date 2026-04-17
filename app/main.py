@@ -23,6 +23,7 @@ import json
 import html
 import os
 import shutil
+from urllib.parse import urlencode
 import httpx
 import boto3
 from botocore.config import Config as BotoConfig
@@ -3648,6 +3649,25 @@ def _get_access_by_email(conn, email: str):
     return None
 
 
+def _issue_access_setup_token() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def _public_app_base_url() -> str:
+    value = (
+        os.getenv("APP_PUBLIC_URL")
+        or os.getenv("FRONTEND_PUBLIC_URL")
+        or os.getenv("APP_BASE_URL")
+        or "https://app.envidicy.kz"
+    )
+    return str(value).strip().rstrip("/")
+
+
+def _build_access_setup_url(email: str, setup_token: str) -> str:
+    query = urlencode({"mode": "set-password", "email": email, "setup_token": setup_token})
+    return f"{_public_app_base_url()}/login?{query}"
+
+
 def _issue_user_token(conn, user_id: int, login_email: Optional[str] = None) -> str:
     token = secrets.token_hex(24)
     conn.execute("INSERT INTO user_tokens (user_id, token, login_email) VALUES (?, ?, ?)", (user_id, token, _normalize_email(login_email) or None))
@@ -3997,6 +4017,7 @@ class PasswordReset(BaseModel):
 class SetPasswordPayload(BaseModel):
     email: str
     new_password: str
+    setup_token: str
 
 
 class AccessCreatePayload(BaseModel):
@@ -4186,7 +4207,8 @@ def login(payload: AuthPayload):
 
 
 @app.get("/auth/access-status")
-def auth_access_status(email: str):
+def auth_access_status(email: str, current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     normalized = _normalize_email(email)
@@ -4194,9 +4216,9 @@ def auth_access_status(email: str):
         raise HTTPException(status_code=400, detail="Email is required")
     with get_conn() as conn:
         access = _get_access_by_email(conn, normalized)
-        if not access:
+        if not access or int(access.get("user_id") or 0) != int(current_user["id"]):
             return {"exists": False, "needs_password": False}
-        needs_password = not access.get("password_hash") or not access.get("salt")
+        needs_password = ((access.get("role") or "member") != "owner") and not bool(access.get("password_hash"))
         return {
             "exists": True,
             "needs_password": needs_password,
@@ -4210,24 +4232,29 @@ def set_password(payload: SetPasswordPayload):
         raise HTTPException(status_code=500, detail="DB not initialized")
     email = _normalize_email(payload.email)
     password = payload.new_password.strip()
-    if not email or not password:
-        raise HTTPException(status_code=400, detail="email and new_password are required")
+    setup_token = str(payload.setup_token or "").strip()
+    if not email or not password or not setup_token:
+        raise HTTPException(status_code=400, detail="email, setup_token and new_password are required")
     with get_conn() as conn:
         access = _get_access_by_email(conn, email)
+        generic_error = HTTPException(status_code=400, detail="Password setup is unavailable for this invite")
         if not access:
-            raise HTTPException(status_code=404, detail="Email is not linked to any account")
+            raise generic_error
+        if (access.get("role") or "member") == "owner":
+            raise generic_error
+        if access.get("password_hash"):
+            raise generic_error
+        expected_token = str(access.get("salt") or "").strip()
+        if not expected_token or not hmac.compare_digest(expected_token, setup_token):
+            raise generic_error
+
         salt = secrets.token_hex(8)
         password_hash = _hash_password(password, salt)
         conn.execute(
             "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
             (password_hash, salt, access["id"]),
         )
-        if (access.get("role") or "member") == "owner":
-            conn.execute(
-                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                (password_hash, salt, access["user_id"]),
-            )
-        conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
+        conn.execute("DELETE FROM user_tokens WHERE user_id=? AND login_email=?", (access["user_id"], access["email"]))
         conn.commit()
         return {"status": "ok"}
 
@@ -6065,14 +6092,22 @@ def list_profile_accesses(current_user=Depends(get_current_user)):
         _ensure_owner_access(conn, current_user["id"])
         rows = conn.execute(
             """
-            SELECT id, user_id, email, role, status, created_at
+            SELECT id, user_id, email, role, status, created_at, password_hash, salt
             FROM user_accesses
             WHERE user_id=?
             ORDER BY CASE WHEN role='owner' THEN 0 ELSE 1 END, created_at ASC
             """,
             (current_user["id"],),
         ).fetchall()
-        return {"can_manage_accesses": True, "items": [dict(row) for row in rows]}
+        items = []
+        for row in rows:
+            item = dict(row)
+            is_owner = (item.get("role") or "member") == "owner"
+            item["needs_password"] = (not is_owner) and (not bool(item.get("password_hash")))
+            item.pop("password_hash", None)
+            item.pop("salt", None)
+            items.append(item)
+        return {"can_manage_accesses": True, "items": items}
 
 
 @app.post("/profile/accesses")
@@ -6090,19 +6125,58 @@ def create_profile_access(payload: AccessCreatePayload, current_user=Depends(get
         existing = _get_access_by_email(conn, email)
         if existing:
             raise HTTPException(status_code=400, detail="Email is already linked to an account")
+        setup_token = _issue_access_setup_token()
         conn.execute(
             """
-            INSERT INTO user_accesses (user_id, email, role, status)
-            VALUES (?, ?, 'member', 'active')
+            INSERT INTO user_accesses (user_id, email, password_hash, salt, role, status)
+            VALUES (?, ?, NULL, ?, 'member', 'active')
             """,
-            (current_user["id"], email),
+            (current_user["id"], email, setup_token),
         )
         conn.commit()
         row = conn.execute(
             "SELECT id, user_id, email, role, status, created_at FROM user_accesses WHERE email=?",
             (email,),
         ).fetchone()
-        return dict(row) if row else {"status": "ok"}
+        data = dict(row) if row else {"status": "ok", "email": email}
+        data["needs_password"] = True
+        data["setup_token"] = setup_token
+        data["setup_url"] = _build_access_setup_url(email, setup_token)
+        return data
+
+
+@app.post("/profile/accesses/{access_id}/setup-token")
+def regenerate_profile_access_setup_token(access_id: int, current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_accesses WHERE id=? AND user_id=?",
+            (access_id, current_user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Access not found")
+        access = dict(row)
+        if (access.get("role") or "member") == "owner":
+            raise HTTPException(status_code=400, detail="Main email does not use setup token")
+        if access.get("password_hash"):
+            raise HTTPException(status_code=400, detail="Password is already set for this access")
+
+        setup_token = _issue_access_setup_token()
+        conn.execute(
+            "UPDATE user_accesses SET salt=?, status='active' WHERE id=?",
+            (setup_token, access_id),
+        )
+        conn.commit()
+        email = _normalize_email(access.get("email"))
+        return {
+            "id": access_id,
+            "email": email,
+            "needs_password": True,
+            "setup_token": setup_token,
+            "setup_url": _build_access_setup_url(email, setup_token),
+        }
 
 
 @app.delete("/profile/accesses/{access_id}")
