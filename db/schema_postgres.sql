@@ -322,6 +322,11 @@ CREATE TABLE IF NOT EXISTS user_tokens (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
   token TEXT NOT NULL UNIQUE,
+  login_email TEXT,
+  expires_at BIGINT,
+  absolute_expires_at BIGINT,
+  last_seen_at BIGINT,
+  revoked_at TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

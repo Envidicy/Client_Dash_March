@@ -366,6 +366,10 @@ def apply_schema():
               user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
               token TEXT NOT NULL UNIQUE,
               login_email TEXT,
+              expires_at INTEGER,
+              absolute_expires_at INTEGER,
+              last_seen_at INTEGER,
+              revoked_at TEXT,
               created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             """,
@@ -832,6 +836,10 @@ def apply_schema():
         _ensure_column(conn, "users", "password_hash", "TEXT")
         _ensure_column(conn, "users", "salt", "TEXT")
         _ensure_column(conn, "user_tokens", "login_email", "TEXT")
+        _ensure_column(conn, "user_tokens", "expires_at", "INTEGER")
+        _ensure_column(conn, "user_tokens", "absolute_expires_at", "INTEGER")
+        _ensure_column(conn, "user_tokens", "last_seen_at", "INTEGER")
+        _ensure_column(conn, "user_tokens", "revoked_at", "TEXT")
         _ensure_column(conn, "users", "is_client", "INTEGER")
         _ensure_column(conn, "ad_accounts", "user_id", "INTEGER")
         _ensure_column(conn, "ad_accounts", "account_code", "TEXT")

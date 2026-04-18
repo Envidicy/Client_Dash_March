@@ -54,6 +54,9 @@ _ADMIN_KEY_RATE_LIMIT_MAX_FAILURES = max(3, int(os.getenv("ADMIN_KEY_RATE_LIMIT_
 _ADMIN_KEY_RATE_LIMIT_WINDOW_SEC = max(60, int(os.getenv("ADMIN_KEY_RATE_LIMIT_WINDOW_SEC", "600") or 600))
 _ADMIN_KEY_RATE_LIMIT_BLOCK_SEC = max(60, int(os.getenv("ADMIN_KEY_RATE_LIMIT_BLOCK_SEC", "1800") or 1800))
 _SECURITY_FAILURE_LOG: Dict[str, List[float]] = {}
+_AUTH_TOKEN_IDLE_TTL_SEC = max(300, int(os.getenv("AUTH_TOKEN_IDLE_TTL_SEC", "86400") or 86400))
+_AUTH_TOKEN_ABSOLUTE_TTL_SEC = max(_AUTH_TOKEN_IDLE_TTL_SEC, int(os.getenv("AUTH_TOKEN_ABSOLUTE_TTL_SEC", "1209600") or 1209600))
+_AUTH_TOKEN_TOUCH_INTERVAL_SEC = max(30, int(os.getenv("AUTH_TOKEN_TOUCH_INTERVAL_SEC", "300") or 300))
 _SECURITY_BLOCKED_UNTIL: Dict[str, float] = {}
 
 
@@ -3901,9 +3904,47 @@ def _build_wallet_invoice_generated_pdf_url(user_id: int, request_id: int) -> st
     return f"/wallet/topup-requests/{request_id}/pdf-generated?{urlencode({'token': token})}"
 
 
+def _auth_now_ts() -> int:
+    return int(time.time())
+
+
+def _auth_token_exp_bounds(now_ts: Optional[int] = None) -> Tuple[int, int]:
+    now = int(now_ts if now_ts is not None else _auth_now_ts())
+    return now + _AUTH_TOKEN_IDLE_TTL_SEC, now + _AUTH_TOKEN_ABSOLUTE_TTL_SEC
+
+
+def _touch_user_token(conn, token_row: Dict[str, object], now_ts: Optional[int] = None) -> None:
+    now = int(now_ts if now_ts is not None else _auth_now_ts())
+    idle_until = int(token_row.get("expires_at") or 0)
+    absolute_until = int(token_row.get("absolute_expires_at") or 0)
+    last_seen = int(token_row.get("last_seen_at") or 0)
+    if last_seen and now - last_seen < _AUTH_TOKEN_TOUCH_INTERVAL_SEC:
+        return
+    next_idle = now + _AUTH_TOKEN_IDLE_TTL_SEC
+    if absolute_until > 0:
+        next_idle = min(next_idle, absolute_until)
+    if next_idle <= now:
+        return
+    if idle_until >= next_idle and last_seen and now <= last_seen:
+        return
+    conn.execute(
+        "UPDATE user_tokens SET expires_at=?, last_seen_at=? WHERE id=?",
+        (next_idle, now, token_row["token_id"]),
+    )
+
+
 def _issue_user_token(conn, user_id: int, login_email: Optional[str] = None) -> str:
     token = secrets.token_hex(24)
-    conn.execute("INSERT INTO user_tokens (user_id, token, login_email) VALUES (?, ?, ?)", (user_id, token, _normalize_email(login_email) or None))
+    now = _auth_now_ts()
+    idle_until, absolute_until = _auth_token_exp_bounds(now)
+    conn.execute(
+        """
+        INSERT INTO user_tokens (user_id, token, login_email, expires_at, absolute_expires_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, token, _normalize_email(login_email) or None, idle_until, absolute_until, now),
+    )
+    conn.execute("DELETE FROM user_tokens WHERE user_id=? AND expires_at IS NOT NULL AND expires_at <= ?", (user_id, now))
     return token
 
 
@@ -4125,22 +4166,84 @@ def _get_bearer_token(authorization: Optional[str]) -> Optional[str]:
     return parts[1].strip()
 
 
+def _load_token_user_row(conn, token: str) -> Optional[Dict[str, object]]:
+    row = conn.execute(
+        """
+        SELECT
+          u.*,
+          ut.id AS token_id,
+          ut.login_email,
+          ut.expires_at,
+          ut.absolute_expires_at,
+          ut.last_seen_at,
+          ut.revoked_at
+        FROM user_tokens ut
+        JOIN users u ON u.id = ut.user_id
+        WHERE ut.token=?
+        LIMIT 1
+        """,
+        (token,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _validate_and_refresh_token_row(conn, token_row: Dict[str, object], now_ts: Optional[int] = None) -> Optional[Dict[str, object]]:
+    now = int(now_ts if now_ts is not None else _auth_now_ts())
+    if str(token_row.get("revoked_at") or "").strip():
+        return None
+
+    absolute_until = int(token_row.get("absolute_expires_at") or 0)
+    idle_until = int(token_row.get("expires_at") or 0)
+    last_seen = int(token_row.get("last_seen_at") or 0)
+    changed = False
+
+    if absolute_until <= 0:
+        absolute_until = now + _AUTH_TOKEN_ABSOLUTE_TTL_SEC
+        changed = True
+    if idle_until <= 0:
+        idle_until = min(now + _AUTH_TOKEN_IDLE_TTL_SEC, absolute_until)
+        changed = True
+    if idle_until > absolute_until:
+        idle_until = absolute_until
+        changed = True
+    if last_seen <= 0:
+        last_seen = now
+        changed = True
+
+    if absolute_until <= now or idle_until <= now:
+        conn.execute("DELETE FROM user_tokens WHERE id=?", (token_row["token_id"],))
+        return None
+
+    if changed:
+        conn.execute(
+            """
+            UPDATE user_tokens
+            SET expires_at=?, absolute_expires_at=?, last_seen_at=?
+            WHERE id=?
+            """,
+            (idle_until, absolute_until, last_seen, token_row["token_id"]),
+        )
+        token_row["expires_at"] = idle_until
+        token_row["absolute_expires_at"] = absolute_until
+        token_row["last_seen_at"] = last_seen
+
+    _touch_user_token(conn, token_row, now)
+    return token_row
+
+
 def _get_user_by_token(token: Optional[str]):
     if not token:
         return None
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     with get_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT u.*, ut.login_email
-            FROM user_tokens ut
-            JOIN users u ON u.id = ut.user_id
-            WHERE ut.token=?
-            """,
-            (token,),
-        ).fetchone()
-        return _hydrate_token_user(conn, row) if row else None
+        token_row = _load_token_user_row(conn, token)
+        if not token_row:
+            return None
+        token_row = _validate_and_refresh_token_row(conn, token_row)
+        if not token_row:
+            return None
+        return _hydrate_token_user(conn, token_row)
 
 
 def get_current_user(authorization: Optional[str] = Header(None)):
@@ -4150,19 +4253,13 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     if not token:
         raise HTTPException(status_code=401, detail="Missing token")
     with get_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT u.*, ut.login_email
-            FROM user_tokens ut
-            JOIN users u ON u.id = ut.user_id
-            WHERE ut.token=?
-            """,
-            (token,),
-        ).fetchone()
-        if not row:
+        token_row = _load_token_user_row(conn, token)
+        if not token_row:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return _hydrate_token_user(conn, row)
-
+        token_row = _validate_and_refresh_token_row(conn, token_row)
+        if not token_row:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return _hydrate_token_user(conn, token_row)
 
 def get_optional_user(authorization: Optional[str] = Header(None)):
     token = _get_bearer_token(authorization)

@@ -323,6 +323,11 @@ CREATE TABLE IF NOT EXISTS user_tokens (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   token TEXT NOT NULL UNIQUE,
+  login_email TEXT,
+  expires_at INTEGER,
+  absolute_expires_at INTEGER,
+  last_seen_at INTEGER,
+  revoked_at TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
