@@ -3797,6 +3797,30 @@ def _ensure_owner_access(conn, user_id: int):
     return dict(row) if row else None
 
 
+def _legacy_find_user_auth_record(conn, email: str) -> Optional[Dict[str, object]]:
+    normalized = _normalize_email(email)
+    if not normalized:
+        return None
+
+    queries = [
+        ("SELECT id, email, password_hash, salt FROM users WHERE email=?", (normalized,)),
+        ("SELECT id, password_hash, salt FROM users WHERE email=?", (normalized,)),
+    ]
+    for sql, params in queries:
+        try:
+            row = conn.execute(sql, params).fetchone()
+        except Exception as exc:
+            if _is_users_auth_schema_error(exc):
+                continue
+            raise
+        if not row:
+            continue
+        out = dict(row)
+        out["email"] = _normalize_email(out.get("email") or normalized)
+        return out
+    return None
+
+
 def _get_access_by_email(conn, email: str):
     normalized = _normalize_email(email)
     row = None
@@ -4764,9 +4788,53 @@ def login(payload: AuthPayload, request: Request):
         raise HTTPException(status_code=400, detail="Email and password are required")
     bucket = f"login:{_request_client_ip(request)}:{email}"
     _security_assert_not_blocked(bucket)
+
+    try:
+        with get_conn() as conn:
+            access = _get_access_by_email(conn, email)
+            if not access or not access.get("password_hash") or not access.get("salt"):
+                _security_register_failure(
+                    bucket,
+                    max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                    window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                    block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+                )
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+            if not _verify_password(password, access["salt"], access["password_hash"]):
+                _security_register_failure(
+                    bucket,
+                    max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                    window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                    block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+                )
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+            user = conn.execute("SELECT * FROM users WHERE id=?", (access["user_id"],)).fetchone()
+            if not user:
+                _security_register_failure(
+                    bucket,
+                    max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                    window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                    block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+                )
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+            _upgrade_password_hash_if_needed(conn, access, password)
+            token = _issue_user_token(conn, user["id"], access.get("email") or user.get("email"))
+            conn.commit()
+            _security_clear_failures(bucket)
+            return {
+                "id": user["id"],
+                "email": access.get("email") or user.get("email") or email,
+                "token": token,
+                "can_manage_accesses": (access.get("role") or "member") == "owner",
+            }
+    except HTTPException:
+        raise
+    except Exception:
+        logging.exception("Primary auth flow failed for email=%s; trying legacy fallback", email)
+
     with get_conn() as conn:
-        access = _get_access_by_email(conn, email)
-        if not access or not access.get("password_hash") or not access.get("salt"):
+        legacy_user = _legacy_find_user_auth_record(conn, email)
+        if not legacy_user or not legacy_user.get("password_hash") or not legacy_user.get("salt"):
             _security_register_failure(
                 bucket,
                 max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
@@ -4774,7 +4842,7 @@ def login(payload: AuthPayload, request: Request):
                 block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
             )
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        if not _verify_password(password, access["salt"], access["password_hash"]):
+        if not _verify_password(password, legacy_user["salt"], legacy_user["password_hash"]):
             _security_register_failure(
                 bucket,
                 max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
@@ -4782,24 +4850,14 @@ def login(payload: AuthPayload, request: Request):
                 block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
             )
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        user = conn.execute("SELECT * FROM users WHERE id=?", (access["user_id"],)).fetchone()
-        if not user:
-            _security_register_failure(
-                bucket,
-                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
-                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
-                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
-            )
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        _upgrade_password_hash_if_needed(conn, access, password)
-        token = _issue_user_token(conn, user["id"], access["email"])
+        token = _issue_user_token(conn, int(legacy_user["id"]), legacy_user.get("email") or email)
         conn.commit()
         _security_clear_failures(bucket)
         return {
-            "id": user["id"],
-            "email": access["email"],
+            "id": int(legacy_user["id"]),
+            "email": legacy_user.get("email") or email,
             "token": token,
-            "can_manage_accesses": (access.get("role") or "member") == "owner",
+            "can_manage_accesses": True,
         }
 
 
