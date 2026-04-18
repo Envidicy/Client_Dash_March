@@ -4290,14 +4290,7 @@ def _list_accessible_accounts(conn, current_user) -> List[Dict[str, object]]:
 
     memberships = _list_user_agency_memberships(conn, user_id)
     if not memberships:
-        try:
-            _get_or_create_default_agency(conn, user_id)
-            memberships = _list_user_agency_memberships(conn, user_id)
-        except Exception:
-            logging.exception("Agency bootstrap failed for user_id=%s; fallback to direct accounts", user_id)
-            memberships = []
-
-    if not memberships:
+        # Do not auto-bootstrap agencies during read-path account listing.
         return fallback_visible
 
     admin_agency_ids = [int(row["agency_id"]) for row in memberships if row.get("role") in {"owner", "agency_admin"}]
@@ -4317,7 +4310,7 @@ def _list_accessible_accounts(conn, current_user) -> List[Dict[str, object]]:
             out = [dict(row) for row in rows]
             return [row for row in out if _is_client_visible(row)]
         except Exception:
-            logging.exception("Failed to list agency admin accounts for user_id=%s; fallback to direct accounts", user_id)
+            logging.warning("Failed to list agency admin accounts for user_id=%s; fallback to direct accounts", user_id)
             return fallback_visible
 
     try:
@@ -4335,7 +4328,7 @@ def _list_accessible_accounts(conn, current_user) -> List[Dict[str, object]]:
         out = [dict(row) for row in rows]
         return [row for row in out if _is_client_visible(row)]
     except Exception:
-        logging.exception("Failed to list delegated agency accounts for user_id=%s; fallback to direct accounts", user_id)
+        logging.warning("Failed to list delegated agency accounts for user_id=%s; fallback to direct accounts", user_id)
         return fallback_visible
 
 
@@ -11181,9 +11174,6 @@ def list_my_agencies(current_user=Depends(get_current_user)):
         return {"items": []}
     with get_conn() as conn:
         memberships = _list_user_agency_memberships(conn, current_user["id"])
-        if not memberships:
-            _get_or_create_default_agency(conn, current_user["id"])
-            memberships = _list_user_agency_memberships(conn, current_user["id"])
         conn.commit()
         return {"items": memberships}
 

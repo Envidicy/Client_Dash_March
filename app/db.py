@@ -205,27 +205,6 @@ def apply_schema():
             )
             """)
             conn.execute("""
-            CREATE TABLE IF NOT EXISTS agencies (
-              id BIGSERIAL PRIMARY KEY,
-              name TEXT NOT NULL,
-              slug TEXT NOT NULL UNIQUE,
-              owner_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
-              status TEXT DEFAULT 'active',
-              created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            )
-            """)
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS agency_members (
-              id BIGSERIAL PRIMARY KEY,
-              agency_id BIGINT REFERENCES agencies(id) ON DELETE CASCADE,
-              user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
-              role TEXT NOT NULL DEFAULT 'client_viewer',
-              status TEXT DEFAULT 'active',
-              created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-              UNIQUE(agency_id, user_id)
-            )
-            """)
-            conn.execute("""
             CREATE TABLE IF NOT EXISTS account_funding_events (
               id BIGSERIAL PRIMARY KEY,
               account_id BIGINT REFERENCES ad_accounts(id) ON DELETE CASCADE,
