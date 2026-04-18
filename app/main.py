@@ -3689,6 +3689,15 @@ def _is_user_accesses_schema_error(exc: Exception) -> bool:
     )
 
 
+def _is_users_auth_schema_error(exc: Exception) -> bool:
+    msg = str(exc or "").lower()
+    if "no such table: users" in msg:
+        return True
+    if "no such column" not in msg:
+        return False
+    return any(key in msg for key in ("password_hash", "salt", "email"))
+
+
 def _password_hash_needs_upgrade(stored_hash: Optional[str], salt: Optional[str]) -> bool:
     raw = str(stored_hash or "")
     if not raw.startswith(f"{_PASSWORD_HASH_SCHEME}$"):
@@ -3807,7 +3816,12 @@ def _get_access_by_email(conn, email: str):
         out.setdefault("email", normalized)
         return out
 
-    legacy_user = conn.execute("SELECT id, email, password_hash, salt FROM users WHERE email=?", (normalized,)).fetchone()
+    try:
+        legacy_user = conn.execute("SELECT id, email, password_hash, salt FROM users WHERE email=?", (normalized,)).fetchone()
+    except Exception as exc:
+        if not _is_users_auth_schema_error(exc):
+            raise
+        legacy_user = conn.execute("SELECT id, email FROM users WHERE email=?", (normalized,)).fetchone()
     if not legacy_user:
         return None
 
@@ -3957,6 +3971,8 @@ def _build_wallet_invoice_generated_pdf_url(user_id: int, request_id: int) -> st
 
 def _is_user_tokens_ttl_schema_error(exc: Exception) -> bool:
     msg = str(exc or "").lower()
+    if "no such table: user_tokens" in msg:
+        return True
     if "no such column" not in msg:
         return False
     return any(
@@ -3968,6 +3984,24 @@ def _is_user_tokens_ttl_schema_error(exc: Exception) -> bool:
             "last_seen_at",
             "revoked_at",
         )
+    )
+
+
+def _ensure_user_tokens_table(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_tokens (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          token TEXT NOT NULL UNIQUE,
+          login_email TEXT,
+          expires_at INTEGER,
+          absolute_expires_at INTEGER,
+          last_seen_at INTEGER,
+          revoked_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
     )
 
 
@@ -4017,6 +4051,10 @@ def _issue_user_token(conn, user_id: int, login_email: Optional[str] = None) -> 
         if not _is_user_tokens_ttl_schema_error(exc):
             raise
         logging.warning("user_tokens modern columns are missing; falling back to legacy token insert")
+        try:
+            _ensure_user_tokens_table(conn)
+        except Exception:
+            pass
         try:
             conn.execute(
                 "INSERT INTO user_tokens (user_id, token, login_email) VALUES (?, ?, ?)",
