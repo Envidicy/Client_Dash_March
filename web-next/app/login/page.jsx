@@ -3,7 +3,6 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { apiFetch } from '../../lib/api'
 import { setAuth } from '../../lib/auth'
 import { useI18n } from '../../lib/i18n/client'
 import styles from './login.module.css'
@@ -67,7 +66,7 @@ export default function LoginPage() {
     setPending(true)
     setStatus(t('login.signingIn'))
     try {
-      const res = await apiFetch('/auth/login', {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -109,7 +108,7 @@ export default function LoginPage() {
     setPending(true)
     setStatus(t('login.savingPassword'))
     try {
-      const res = await apiFetch('/auth/set-password', {
+      const res = await fetch('/api/auth/set-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, setup_token: setupToken, new_password: next }),
