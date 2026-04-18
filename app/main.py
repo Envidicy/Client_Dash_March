@@ -2576,9 +2576,7 @@ _default_origins = [
       "http://127.0.0.1:8000",
       "http://localhost:8000",
       "https://envidicydashclientv20.vercel.app",
-      "https://envidicydashclientv20develop.vercel.app",
       "https://envidicy-dash-client.onrender.com",
-      "https://client-dash-staging.onrender.com",
       "https://app.envidicy.kz",
       "https://www.envidicy.kz",
 ]
@@ -2598,14 +2596,30 @@ app.add_middleware(
 )
 
 # Log unhandled errors to Render runtime logs for debugging.
+_SECURITY_RESPONSE_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
+}
+_CSP_VALUE = "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+_CSP_SKIP_PATHS = {"/docs", "/redoc", "/docs/oauth2-redirect"}
+
+
 @app.middleware("http")
 async def log_exceptions(request: Request, call_next):
     try:
-        return await call_next(request)
+        response = await call_next(request)
     except Exception:
         logging.error("Unhandled error on %s %s", request.method, request.url.path)
         logging.error(traceback.format_exc())
         raise
+    for key, value in _SECURITY_RESPONSE_HEADERS.items():
+        response.headers.setdefault(key, value)
+    # Keep Swagger/ReDoc working by not forcing CSP on their HTML pages.
+    if request.url.path not in _CSP_SKIP_PATHS:
+        response.headers.setdefault("Content-Security-Policy", _CSP_VALUE)
+    return response
 try:
     from app.db import apply_schema
 
