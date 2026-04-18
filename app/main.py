@@ -3911,6 +3911,7 @@ def _is_user_tokens_ttl_schema_error(exc: Exception) -> bool:
     return any(
         key in msg
         for key in (
+            "login_email",
             "expires_at",
             "absolute_expires_at",
             "last_seen_at",
@@ -3964,11 +3965,16 @@ def _issue_user_token(conn, user_id: int, login_email: Optional[str] = None) -> 
     except Exception as exc:
         if not _is_user_tokens_ttl_schema_error(exc):
             raise
-        logging.warning("user_tokens TTL columns are missing; falling back to legacy token insert")
-        conn.execute(
-            "INSERT INTO user_tokens (user_id, token, login_email) VALUES (?, ?, ?)",
-            (user_id, token, _normalize_email(login_email) or None),
-        )
+        logging.warning("user_tokens modern columns are missing; falling back to legacy token insert")
+        try:
+            conn.execute(
+                "INSERT INTO user_tokens (user_id, token, login_email) VALUES (?, ?, ?)",
+                (user_id, token, _normalize_email(login_email) or None),
+            )
+        except Exception as inner_exc:
+            if not _is_user_tokens_ttl_schema_error(inner_exc):
+                raise
+            conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (user_id, token))
     return token
 
 
@@ -4213,22 +4219,39 @@ def _load_token_user_row(conn, token: str) -> Optional[Dict[str, object]]:
     except Exception as exc:
         if not _is_user_tokens_ttl_schema_error(exc):
             raise
-        row = conn.execute(
-            """
-            SELECT
-              u.*,
-              ut.id AS token_id,
-              ut.login_email
-            FROM user_tokens ut
-            JOIN users u ON u.id = ut.user_id
-            WHERE ut.token=?
-            LIMIT 1
-            """,
-            (token,),
-        ).fetchone()
+        try:
+            row = conn.execute(
+                """
+                SELECT
+                  u.*,
+                  ut.id AS token_id,
+                  ut.login_email
+                FROM user_tokens ut
+                JOIN users u ON u.id = ut.user_id
+                WHERE ut.token=?
+                LIMIT 1
+                """,
+                (token,),
+            ).fetchone()
+        except Exception as inner_exc:
+            if not _is_user_tokens_ttl_schema_error(inner_exc):
+                raise
+            row = conn.execute(
+                """
+                SELECT
+                  u.*,
+                  ut.id AS token_id
+                FROM user_tokens ut
+                JOIN users u ON u.id = ut.user_id
+                WHERE ut.token=?
+                LIMIT 1
+                """,
+                (token,),
+            ).fetchone()
         if not row:
             return None
         out = dict(row)
+        out["login_email"] = out.get("login_email")
         out["expires_at"] = None
         out["absolute_expires_at"] = None
         out["last_seen_at"] = None
