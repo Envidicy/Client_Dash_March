@@ -40,6 +40,8 @@ export default function SettingsPage() {
   const [accessEmail, setAccessEmail] = useState('')
   const [accessStatus, setAccessStatus] = useState('')
   const [accesses, setAccesses] = useState([])
+  const [accessSetupUrl, setAccessSetupUrl] = useState('')
+  const [accessSetupEmail, setAccessSetupEmail] = useState('')
 
   const [fees, setFees] = useState(null)
   const [documents, setDocuments] = useState([])
@@ -119,7 +121,14 @@ export default function SettingsPage() {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.detail || 'create access failed')
       setAccessEmail('')
-      setAccessStatus(tr('Access added. Secondary email can set a password on the login page.', 'Доступ добавлен. Дополнительный email может задать пароль на странице входа.'))
+      const setupUrl = String(data?.setup_url || '').trim()
+      setAccessSetupUrl(setupUrl)
+      setAccessSetupEmail(String(data?.email || email || '').trim())
+      if (setupUrl) {
+        setAccessStatus(tr('Access added. Share the setup link below with the invited email.', 'Access added. Share the setup link below with the invited email.'))
+      } else {
+        setAccessStatus(tr('Access added. Secondary email can set a password on the login page.', 'Access added. Secondary email can set a password on the login page.'))
+      }
       await loadAccesses()
     } catch (e) {
       setAccessStatus(e?.message || tr('Failed to add access.', 'Не удалось добавить доступ.'))
@@ -134,10 +143,23 @@ export default function SettingsPage() {
       const res = await safeFetch(`/profile/accesses/${id}`, { method: 'DELETE' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.detail || 'delete access failed')
-      setAccessStatus(tr('Access removed.', 'Доступ удалён.'))
+      setAccessStatus(tr('Access removed.', 'Access removed.'))
+      setAccessSetupUrl('')
+      setAccessSetupEmail('')
       await loadAccesses()
     } catch (e) {
       setAccessStatus(e?.message || tr('Failed to remove access.', 'Не удалось удалить доступ.'))
+    }
+  }
+
+
+  async function copyAccessSetupUrl() {
+    if (!accessSetupUrl) return
+    try {
+      await navigator.clipboard.writeText(accessSetupUrl)
+      setAccessStatus(tr('Setup link copied.', 'Setup link copied.'))
+    } catch {
+      setAccessStatus(tr('Failed to copy setup link.', 'Failed to copy setup link.'))
     }
   }
 
@@ -431,6 +453,20 @@ export default function SettingsPage() {
                 )}
               </p>
               <p className={styles.settingsMuted}>{accessStatus}</p>
+              {accessSetupUrl ? (
+                <div className={styles.settingsNotice}>
+                  <p>
+                    {tr('Share this one-time setup link with invited email:', 'Share this one-time setup link with invited email:')}{' '}
+                    {accessSetupEmail || '-'}
+                  </p>
+                  <p>
+                    <a href={accessSetupUrl} rel="noreferrer" target="_blank">{accessSetupUrl}</a>
+                  </p>
+                  <button className={styles.settingsGhostButton} onClick={copyAccessSetupUrl} type="button">
+                    {tr('Copy setup link', 'Copy setup link')}
+                  </button>
+                </div>
+              ) : null}
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
                   <thead>
@@ -455,7 +491,7 @@ export default function SettingsPage() {
                           <tr key={row.id}>
                             <td>{row.email || '?'}</td>
                             <td>{isOwner ? tr('Owner', 'Владелец') : tr('Secondary', 'Дополнительный')}</td>
-                            <td>{row.status === 'active' ? tr('Active', 'Активен') : row.status || '?'}</td>
+                            <td>{row.needs_password ? tr('Awaiting password', 'Awaiting password') : row.status === 'active' ? tr('Active', 'Active') : row.status || '?'}</td>
                             <td style={{ textAlign: 'right' }}>
                               {isOwner ? (
                                 <span className={styles.tableSubtle}>{tr('Cannot delete', 'Нельзя удалить')}</span>

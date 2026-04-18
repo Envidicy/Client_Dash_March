@@ -23,6 +23,7 @@ import json
 import html
 import os
 import shutil
+from urllib.parse import urlencode
 import httpx
 import boto3
 from botocore.config import Config as BotoConfig
@@ -43,6 +44,17 @@ _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
 _ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
 _ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC = int(os.getenv("ASSISTANT_GLOBAL_CACHE_TTL_SEC", "3600") or 3600)
+_PUBLIC_URL_TOKEN_SECRET_FALLBACK = secrets.token_hex(32)
+_PASSWORD_HASH_SCHEME = "pbkdf2_sha256"
+_PASSWORD_HASH_ITERATIONS = max(120000, int(os.getenv("PASSWORD_HASH_ITERATIONS", "390000") or 390000))
+_LOGIN_RATE_LIMIT_MAX_FAILURES = max(3, int(os.getenv("LOGIN_RATE_LIMIT_MAX_FAILURES", "8") or 8))
+_LOGIN_RATE_LIMIT_WINDOW_SEC = max(60, int(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SEC", "300") or 300))
+_LOGIN_RATE_LIMIT_BLOCK_SEC = max(60, int(os.getenv("LOGIN_RATE_LIMIT_BLOCK_SEC", "900") or 900))
+_ADMIN_KEY_RATE_LIMIT_MAX_FAILURES = max(3, int(os.getenv("ADMIN_KEY_RATE_LIMIT_MAX_FAILURES", "5") or 5))
+_ADMIN_KEY_RATE_LIMIT_WINDOW_SEC = max(60, int(os.getenv("ADMIN_KEY_RATE_LIMIT_WINDOW_SEC", "600") or 600))
+_ADMIN_KEY_RATE_LIMIT_BLOCK_SEC = max(60, int(os.getenv("ADMIN_KEY_RATE_LIMIT_BLOCK_SEC", "1800") or 1800))
+_SECURITY_FAILURE_LOG: Dict[str, List[float]] = {}
+_SECURITY_BLOCKED_UNTIL: Dict[str, float] = {}
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -607,8 +619,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "google_display_cpm": RateCard(
         key="google_display_cpm",
-        name="Google Display В· CPM",
-        tagline="Баннерная сеть (показы)",
+        name="Google Display Р В РІР‚в„ўР вЂ™Р’В· CPM",
+        tagline="Р В РІР‚ВР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р В Р’ВµР РЋР вЂљР В Р вЂ¦Р В Р’В°Р РЋР РЏ Р РЋР С“Р В Р’ВµР РЋРІР‚С™Р РЋР Р‰ (Р В РЎвЂ”Р В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚в„–)",
         cpm=2.8,
         cpc=0.45,
         cpv=0.03,
@@ -621,8 +633,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "google_display_cpc": RateCard(
         key="google_display_cpc",
-        name="Google Display В· CPC",
-        tagline="Баннерная сеть (клики)",
+        name="Google Display Р В РІР‚в„ўР вЂ™Р’В· CPC",
+        tagline="Р В РІР‚ВР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р В Р’ВµР РЋР вЂљР В Р вЂ¦Р В Р’В°Р РЋР РЏ Р РЋР С“Р В Р’ВµР РЋРІР‚С™Р РЋР Р‰ (Р В РЎвЂќР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ)",
         cpm=3.1,
         cpc=0.28,
         cpv=0.03,
@@ -635,8 +647,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "google_search": RateCard(
         key="google_search",
-        name="Google Search · Контекст",
-        tagline="Поиск с намерением",
+        name="Google Search Р вЂ™Р’В· Р В РЎв„ўР В РЎвЂўР В Р вЂ¦Р РЋРІР‚С™Р В Р’ВµР В РЎвЂќР РЋР С“Р РЋРІР‚С™",
+        tagline="Р В РЎСџР В РЎвЂўР В РЎвЂР РЋР С“Р В РЎвЂќ Р РЋР С“ Р В Р вЂ¦Р В Р’В°Р В РЎВР В Р’ВµР РЋР вЂљР В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’ВµР В РЎВ",
         cpm=4.2,
         cpc=0.55,
         cpv=0.04,
@@ -650,7 +662,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "google_shopping": RateCard(
         key="google_shopping",
         name="Google Shopping",
-        tagline="Товарные кампании",
+        tagline="Р В РЎС›Р В РЎвЂўР В Р вЂ Р В Р’В°Р РЋР вЂљР В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ Р В РЎвЂќР В Р’В°Р В РЎВР В РЎвЂ”Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В РЎвЂ",
         cpm=3.6,
         cpc=0.42,
         cpv=0.04,
@@ -664,7 +676,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "youtube": RateCard(
         key="youtube",
         name="YouTube (Generic)",
-        tagline="Видео и бренд",
+        tagline="Р В РІР‚в„ўР В РЎвЂР В РўвЂР В Р’ВµР В РЎвЂў Р В РЎвЂ Р В Р’В±Р РЋР вЂљР В Р’ВµР В Р вЂ¦Р В РўвЂ",
         cpm=2.4,
         cpc=0.48,
         cpv=0.015,
@@ -678,7 +690,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "youtube_6s": RateCard(
         key="youtube_6s",
         name="YouTube 6s Bumper",
-        tagline="Короткое видео (6s)",
+        tagline="Р В РЎв„ўР В РЎвЂўР РЋР вЂљР В РЎвЂўР РЋРІР‚С™Р В РЎвЂќР В РЎвЂўР В Р’Вµ Р В Р вЂ Р В РЎвЂР В РўвЂР В Р’ВµР В РЎвЂў (6s)",
         cpm=2.0,
         cpc=0.52,
         cpv=0.011,
@@ -692,7 +704,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "youtube_15s": RateCard(
         key="youtube_15s",
         name="YouTube 15s",
-        tagline="Средняя длительность (15s)",
+        tagline="Р В Р Р‹Р РЋР вЂљР В Р’ВµР В РўвЂР В Р вЂ¦Р РЋР РЏР РЋР РЏ Р В РўвЂР В Р’В»Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰Р В Р вЂ¦Р В РЎвЂўР РЋР С“Р РЋРІР‚С™Р РЋР Р‰ (15s)",
         cpm=2.3,
         cpc=0.5,
         cpv=0.013,
@@ -706,7 +718,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "youtube_30s": RateCard(
         key="youtube_30s",
         name="YouTube 30s",
-        tagline="Длинное видео (30s)",
+        tagline="Р В РІР‚СњР В Р’В»Р В РЎвЂР В Р вЂ¦Р В Р вЂ¦Р В РЎвЂўР В Р’Вµ Р В Р вЂ Р В РЎвЂР В РўвЂР В Р’ВµР В РЎвЂў (30s)",
         cpm=2.6,
         cpc=0.46,
         cpv=0.017,
@@ -720,7 +732,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "tiktok": RateCard(
         key="tiktok",
         name="TikTok",
-        tagline="UGC и вовлечение",
+        tagline="UGC Р В РЎвЂ Р В Р вЂ Р В РЎвЂўР В Р вЂ Р В Р’В»Р В Р’ВµР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ",
         cpm=1.9,
         cpc=0.3,
         cpv=0.01,
@@ -733,8 +745,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "telegrad_channels": RateCard(
         key="telegrad_channels",
-        name="Telegrad В· Channels",
-        tagline="Реклама в каналах",
+        name="Telegrad Р В РІР‚в„ўР вЂ™Р’В· Channels",
+        tagline="Р В Р’В Р В Р’ВµР В РЎвЂќР В Р’В»Р В Р’В°Р В РЎВР В Р’В° Р В Р вЂ  Р В РЎвЂќР В Р’В°Р В Р вЂ¦Р В Р’В°Р В Р’В»Р В Р’В°Р РЋРІР‚В¦",
         cpm=0.12,
         cpc=0.32,
         cpv=0.0,
@@ -747,8 +759,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "telegrad_users": RateCard(
         key="telegrad_users",
-        name="Telegrad В· Users",
-        tagline="Реклама на пользователя",
+        name="Telegrad Р В РІР‚в„ўР вЂ™Р’В· Users",
+        tagline="Р В Р’В Р В Р’ВµР В РЎвЂќР В Р’В»Р В Р’В°Р В РЎВР В Р’В° Р В Р вЂ¦Р В Р’В° Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р РЋР Р‰Р В Р’В·Р В РЎвЂўР В Р вЂ Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР РЏ",
         cpm=0.12,
         cpc=0.32,
         cpv=0.0,
@@ -761,8 +773,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "telegrad_bots": RateCard(
         key="telegrad_bots",
-        name="Telegrad В· Bots",
-        tagline="Боты / CPA-like",
+        name="Telegrad Р В РІР‚в„ўР вЂ™Р’В· Bots",
+        tagline="Р В РІР‚ВР В РЎвЂўР РЋРІР‚С™Р РЋРІР‚в„– / CPA-like",
         cpm=0.10,
         cpc=0.3,
         cpv=0.0,
@@ -775,8 +787,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "telegrad_search": RateCard(
         key="telegrad_search",
-        name="Telegrad В· Search",
-        tagline="Поиск в мессенджере",
+        name="Telegrad Р В РІР‚в„ўР вЂ™Р’В· Search",
+        tagline="Р В РЎСџР В РЎвЂўР В РЎвЂР РЋР С“Р В РЎвЂќ Р В Р вЂ  Р В РЎВР В Р’ВµР РЋР С“Р РЋР С“Р В Р’ВµР В Р вЂ¦Р В РўвЂР В Р’В¶Р В Р’ВµР РЋР вЂљР В Р’Вµ",
         cpm=0.08,
         cpc=0.28,
         cpv=0.0,
@@ -789,8 +801,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "yandex_search": RateCard(
         key="yandex_search",
-        name="Яндекс Поиск",
-        tagline="Контекст, РСЯ/Поиск",
+        name="Р В Р вЂЎР В Р вЂ¦Р В РўвЂР В Р’ВµР В РЎвЂќР РЋР С“ Р В РЎСџР В РЎвЂўР В РЎвЂР РЋР С“Р В РЎвЂќ",
+        tagline="Р В РЎв„ўР В РЎвЂўР В Р вЂ¦Р РЋРІР‚С™Р В Р’ВµР В РЎвЂќР РЋР С“Р РЋРІР‚С™, Р В Р’В Р В Р Р‹Р В Р вЂЎ/Р В РЎСџР В РЎвЂўР В РЎвЂР РЋР С“Р В РЎвЂќ",
         cpm=3.9,
         cpc=0.5,
         cpv=0.0,
@@ -803,8 +815,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "yandex_display": RateCard(
         key="yandex_display",
-        name="Яндекс Директ · РСЯ",
-        tagline="Баннеры/смарт-баннеры",
+        name="Р В Р вЂЎР В Р вЂ¦Р В РўвЂР В Р’ВµР В РЎвЂќР РЋР С“ Р В РІР‚СњР В РЎвЂР РЋР вЂљР В Р’ВµР В РЎвЂќР РЋРІР‚С™ Р вЂ™Р’В· Р В Р’В Р В Р Р‹Р В Р вЂЎ",
+        tagline="Р В РІР‚ВР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р В Р’ВµР РЋР вЂљР РЋРІР‚в„–/Р РЋР С“Р В РЎВР В Р’В°Р РЋР вЂљР РЋРІР‚С™-Р В Р’В±Р В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р В Р’ВµР РЋР вЂљР РЋРІР‚в„–",
         cpm=2.6,
         cpc=0.36,
         cpv=0.0,
@@ -920,30 +932,30 @@ def smart_media_mix(goal: Goal, business_type: Optional[BusinessType]) -> Tuple[
             platforms = ["meta", "google_search", "google_display_cpc"]
             split = {"meta": 0.5, "google_search": 0.3, "google_display_cpc": 0.2}
             rationale = {
-                "meta": "Трафик + догрев",
-                "google_search": "Перехват горячего спроса",
-                "google_display_cpc": "Ремаркетинг и добор",
+                "meta": "Р В РЎС›Р РЋР вЂљР В Р’В°Р РЋРІР‚С›Р В РЎвЂР В РЎвЂќ + Р В РўвЂР В РЎвЂўР В РЎвЂ“Р РЋР вЂљР В Р’ВµР В Р вЂ ",
+                "google_search": "Р В РЎСџР В Р’ВµР РЋР вЂљР В Р’ВµР РЋРІР‚В¦Р В Р вЂ Р В Р’В°Р РЋРІР‚С™ Р В РЎвЂ“Р В РЎвЂўР РЋР вЂљР РЋР РЏР РЋРІР‚РЋР В Р’ВµР В РЎвЂ“Р В РЎвЂў Р РЋР С“Р В РЎвЂ”Р РЋР вЂљР В РЎвЂўР РЋР С“Р В Р’В°",
+                "google_display_cpc": "Р В Р’В Р В Р’ВµР В РЎВР В Р’В°Р РЋР вЂљР В РЎвЂќР В Р’ВµР РЋРІР‚С™Р В РЎвЂР В Р вЂ¦Р В РЎвЂ“ Р В РЎвЂ Р В РўвЂР В РЎвЂўР В Р’В±Р В РЎвЂўР РЋР вЂљ",
             }
             return platforms, split, rationale
         platforms = ["meta", "google_search"]
         split = {"meta": 0.6, "google_search": 0.4}
-        rationale = {"meta": "Генерация спроса", "google_search": "Перехват спроса"}
+        rationale = {"meta": "Р В РІР‚СљР В Р’ВµР В Р вЂ¦Р В Р’ВµР РЋР вЂљР В Р’В°Р РЋРІР‚В Р В РЎвЂР РЋР РЏ Р РЋР С“Р В РЎвЂ”Р РЋР вЂљР В РЎвЂўР РЋР С“Р В Р’В°", "google_search": "Р В РЎСџР В Р’ВµР РЋР вЂљР В Р’ВµР РЋРІР‚В¦Р В Р вЂ Р В Р’В°Р РЋРІР‚С™ Р РЋР С“Р В РЎвЂ”Р РЋР вЂљР В РЎвЂўР РЋР С“Р В Р’В°"}
         return platforms, split, rationale
     if goal == "traffic":
         platforms = ["meta", "telegrad_channels"]
         split = {"meta": 0.6, "telegrad_channels": 0.4}
-        rationale = {"meta": "Дешевый охват и клики", "telegrad_channels": "Доп. трафик и клики"}
+        rationale = {"meta": "Р В РІР‚СњР В Р’ВµР РЋРІвЂљВ¬Р В Р’ВµР В Р вЂ Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р В РЎвЂўР РЋРІР‚В¦Р В Р вЂ Р В Р’В°Р РЋРІР‚С™ Р В РЎвЂ Р В РЎвЂќР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ", "telegrad_channels": "Р В РІР‚СњР В РЎвЂўР В РЎвЂ”. Р РЋРІР‚С™Р РЋР вЂљР В Р’В°Р РЋРІР‚С›Р В РЎвЂР В РЎвЂќ Р В РЎвЂ Р В РЎвЂќР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ"}
         return platforms, split, rationale
     # leads / default
     platforms = ["meta", "google_search"]
     split = {"meta": 0.6, "google_search": 0.4}
-    rationale = {"meta": "Генерация спроса", "google_search": "Перехват спроса"}
+    rationale = {"meta": "Р В РІР‚СљР В Р’ВµР В Р вЂ¦Р В Р’ВµР РЋР вЂљР В Р’В°Р РЋРІР‚В Р В РЎвЂР РЋР РЏ Р РЋР С“Р В РЎвЂ”Р РЋР вЂљР В РЎвЂўР РЋР С“Р В Р’В°", "google_search": "Р В РЎСџР В Р’ВµР РЋР вЂљР В Р’ВµР РЋРІР‚В¦Р В Р вЂ Р В Р’В°Р РЋРІР‚С™ Р РЋР С“Р В РЎвЂ”Р РЋР вЂљР В РЎвЂўР РЋР С“Р В Р’В°"}
     if bt in {"local", "services"}:
-        rationale["meta"] = "Генерация заявок"
-        rationale["google_search"] = "Горячий спрос"
+        rationale["meta"] = "Р В РІР‚СљР В Р’ВµР В Р вЂ¦Р В Р’ВµР РЋР вЂљР В Р’В°Р РЋРІР‚В Р В РЎвЂР РЋР РЏ Р В Р’В·Р В Р’В°Р РЋР РЏР В Р вЂ Р В РЎвЂўР В РЎвЂќ"
+        rationale["google_search"] = "Р В РІР‚СљР В РЎвЂўР РЋР вЂљР РЋР РЏР РЋРІР‚РЋР В РЎвЂР В РІвЂћвЂ“ Р РЋР С“Р В РЎвЂ”Р РЋР вЂљР В РЎвЂўР РЋР С“"
     if bt == "b2b":
-        rationale["meta"] = "Узкая аудитория + вовлечение"
-        rationale["google_search"] = "Спрос по запросам"
+        rationale["meta"] = "Р В Р в‚¬Р В Р’В·Р В РЎвЂќР В Р’В°Р РЋР РЏ Р В Р’В°Р РЋРЎвЂњР В РўвЂР В РЎвЂР РЋРІР‚С™Р В РЎвЂўР РЋР вЂљР В РЎвЂР РЋР РЏ + Р В Р вЂ Р В РЎвЂўР В Р вЂ Р В Р’В»Р В Р’ВµР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ"
+        rationale["google_search"] = "Р В Р Р‹Р В РЎвЂ”Р РЋР вЂљР В РЎвЂўР РЋР С“ Р В РЎвЂ”Р В РЎвЂў Р В Р’В·Р В Р’В°Р В РЎвЂ”Р РЋР вЂљР В РЎвЂўР РЋР С“Р В Р’В°Р В РЎВ"
     return platforms, split, rationale
 
 
@@ -1047,14 +1059,14 @@ def aggregate_weekly(plan: PlanResponse, facts: List[FactRow], strategy: str = "
 
 
 def estimate_audience_size(req: PlanRequest, platform: PlatformKey) -> Optional[float]:
-    """Fallback оценка объёма ЦА (reach cap) в условиях отсутствия API."""
+    """Fallback Р В РЎвЂўР РЋРІР‚В Р В Р’ВµР В Р вЂ¦Р В РЎвЂќР В Р’В° Р В РЎвЂўР В Р’В±Р РЋР вЂ°Р РЋРІР‚ВР В РЎВР В Р’В° Р В Р’В¦Р В РЎвЂ™ (reach cap) Р В Р вЂ  Р РЋРЎвЂњР РЋР С“Р В Р’В»Р В РЎвЂўР В Р вЂ Р В РЎвЂР РЋР РЏР РЋРІР‚В¦ Р В РЎвЂўР РЋРІР‚С™Р РЋР С“Р РЋРЎвЂњР РЋРІР‚С™Р РЋР С“Р РЋРІР‚С™Р В Р вЂ Р В РЎвЂР РЋР РЏ API."""
     if req.country == "kz":
         base_population = 10_000_000
     elif req.country == "uz":
         base_population = 18_000_000
     else:
         base_population = 35_000_000
-    age_span = 52  # 65-13 базовый диапазон
+    age_span = 52  # 65-13 Р В Р’В±Р В Р’В°Р В Р’В·Р В РЎвЂўР В Р вЂ Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р В РўвЂР В РЎвЂР В Р’В°Р В РЎвЂ”Р В Р’В°Р В Р’В·Р В РЎвЂўР В Р вЂ¦
     age_min = req.age_min or 18
     age_max = req.age_max or 55
     age_factor = max(0.1, min(1.0, (age_max - age_min) / age_span))
@@ -1155,18 +1167,18 @@ def build_plan(req: PlanRequest) -> PlanResponse:
         effective_period = (req.date_end - req.date_start).days or req.period_days
 
     meta_placement_labels = {
-        "fb_feed": "Meta В· Feed",
-        "fb_video_feeds": "Meta В· Video Feeds",
-        "fb_instream": "Meta В· In-Stream",
-        "fb_reels": "Meta В· Reels",
-        "fb_stories": "Meta В· Stories",
-        "fb_search": "Meta В· Search",
-        "ig_feed": "Meta В· IG Feed",
-        "ig_profile_feed": "Meta В· Profile",
-        "ig_reels": "Meta В· IG Reels",
-        "ig_explore": "Meta В· Explore",
-        "ig_explore_home": "Meta В· Explore Home",
-        "ig_stories": "Meta В· IG Stories",
+        "fb_feed": "Meta Р В РІР‚в„ўР вЂ™Р’В· Feed",
+        "fb_video_feeds": "Meta Р В РІР‚в„ўР вЂ™Р’В· Video Feeds",
+        "fb_instream": "Meta Р В РІР‚в„ўР вЂ™Р’В· In-Stream",
+        "fb_reels": "Meta Р В РІР‚в„ўР вЂ™Р’В· Reels",
+        "fb_stories": "Meta Р В РІР‚в„ўР вЂ™Р’В· Stories",
+        "fb_search": "Meta Р В РІР‚в„ўР вЂ™Р’В· Search",
+        "ig_feed": "Meta Р В РІР‚в„ўР вЂ™Р’В· IG Feed",
+        "ig_profile_feed": "Meta Р В РІР‚в„ўР вЂ™Р’В· Profile",
+        "ig_reels": "Meta Р В РІР‚в„ўР вЂ™Р’В· IG Reels",
+        "ig_explore": "Meta Р В РІР‚в„ўР вЂ™Р’В· Explore",
+        "ig_explore_home": "Meta Р В РІР‚в„ўР вЂ™Р’В· Explore Home",
+        "ig_stories": "Meta Р В РІР‚в„ўР вЂ™Р’В· IG Stories",
     }
     meta_specific = [p for p in (req.placements or []) if p in meta_placement_labels]
 
@@ -1382,7 +1394,7 @@ def _extract_platform_facts(context: Optional[Dict[str, object]]) -> Tuple[Dict[
         date_from = context.get("date_from")
         date_to = context.get("date_to")
         if date_from and date_to:
-            facts_period = f"{date_from} — {date_to}"
+            facts_period = f"{date_from} Р Р†Р вЂљРІР‚Сњ {date_to}"
     return facts_totals, facts_period, facts_used
 
 
@@ -1952,7 +1964,7 @@ def _build_assistant_response(
             source = "llm"
         else:
             recommendations.append(
-                f"Ответ LLM отклонен: confidence {round(confidence, 2)} ниже порога {round(confidence_min, 2)}."
+                f"Р В РЎвЂєР РЋРІР‚С™Р В Р вЂ Р В Р’ВµР РЋРІР‚С™ LLM Р В РЎвЂўР РЋРІР‚С™Р В РЎвЂќР В Р’В»Р В РЎвЂўР В Р вЂ¦Р В Р’ВµР В Р вЂ¦: confidence {round(confidence, 2)} Р В Р вЂ¦Р В РЎвЂР В Р’В¶Р В Р’Вµ Р В РЎвЂ”Р В РЎвЂўР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р’В° {round(confidence_min, 2)}."
             )
 
     req_for_preview = req.model_copy(deep=True)
@@ -2017,24 +2029,24 @@ def _build_assistant_response(
             if source == "llm":
                 recommendations.insert(
                     0,
-                    "Сплит LLM нормализован и дополнительно скорректирован по blended-истории (client + global).",
+                    "Р В Р Р‹Р В РЎвЂ”Р В Р’В»Р В РЎвЂР РЋРІР‚С™ LLM Р В Р вЂ¦Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°Р В Р’В»Р В РЎвЂР В Р’В·Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦ Р В РЎвЂ Р В РўвЂР В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰Р В Р вЂ¦Р В РЎвЂў Р РЋР С“Р В РЎвЂќР В РЎвЂўР РЋР вЂљР РЋР вЂљР В Р’ВµР В РЎвЂќР РЋРІР‚С™Р В РЎвЂР РЋР вЂљР В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦ Р В РЎвЂ”Р В РЎвЂў blended-Р В РЎвЂР РЋР С“Р РЋРІР‚С™Р В РЎвЂўР РЋР вЂљР В РЎвЂР В РЎвЂ (client + global).",
                 )
             else:
                 recommendations.insert(
                     0,
-                    "Бюджетный сплит скорректирован по blended-истории: клиент + обезличенный global pool.",
+                    "Р В РІР‚ВР РЋР вЂ№Р В РўвЂР В Р’В¶Р В Р’ВµР РЋРІР‚С™Р В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р РЋР С“Р В РЎвЂ”Р В Р’В»Р В РЎвЂР РЋРІР‚С™ Р РЋР С“Р В РЎвЂќР В РЎвЂўР РЋР вЂљР РЋР вЂљР В Р’ВµР В РЎвЂќР РЋРІР‚С™Р В РЎвЂР РЋР вЂљР В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦ Р В РЎвЂ”Р В РЎвЂў blended-Р В РЎвЂР РЋР С“Р РЋРІР‚С™Р В РЎвЂўР РЋР вЂљР В РЎвЂР В РЎвЂ: Р В РЎвЂќР В Р’В»Р В РЎвЂР В Р’ВµР В Р вЂ¦Р РЋРІР‚С™ + Р В РЎвЂўР В Р’В±Р В Р’ВµР В Р’В·Р В Р’В»Р В РЎвЂР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ global pool.",
                 )
 
     if not recommendations:
         top = sorted(preview.lines, key=lambda x: x.share, reverse=True)[:3]
         if top:
             joined = ", ".join(f"{line.name} ({round(line.share * 100, 1)}%)" for line in top)
-            recommendations.append(f"Фокус по бюджету: {joined}.")
+            recommendations.append(f"Р В Р’В¤Р В РЎвЂўР В РЎвЂќР РЋРЎвЂњР РЋР С“ Р В РЎвЂ”Р В РЎвЂў Р В Р’В±Р РЋР вЂ№Р В РўвЂР В Р’В¶Р В Р’ВµР РЋРІР‚С™Р РЋРЎвЂњ: {joined}.")
         if facts_used:
-            recommendations.append("Рекомендации скорректированы с учетом фактических данных подключенных аккаунтов.")
+            recommendations.append("Р В Р’В Р В Р’ВµР В РЎвЂќР В РЎвЂўР В РЎВР В Р’ВµР В Р вЂ¦Р В РўвЂР В Р’В°Р РЋРІР‚В Р В РЎвЂР В РЎвЂ Р РЋР С“Р В РЎвЂќР В РЎвЂўР РЋР вЂљР РЋР вЂљР В Р’ВµР В РЎвЂќР РЋРІР‚С™Р В РЎвЂР РЋР вЂљР В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р РЋРІР‚в„– Р РЋР С“ Р РЋРЎвЂњР РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™Р В РЎвЂўР В РЎВ Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™Р В РЎвЂР РЋРІР‚РЋР В Р’ВµР РЋР С“Р В РЎвЂќР В РЎвЂР РЋРІР‚В¦ Р В РўвЂР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р РЋРІР‚В¦ Р В РЎвЂ”Р В РЎвЂўР В РўвЂР В РЎвЂќР В Р’В»Р РЋР вЂ№Р РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р РЋРІР‚В¦ Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р В РЎвЂўР В Р вЂ .")
         if global_facts_used:
-            recommendations.append("Для новых/пустых аккаунтов использован обезличенный global pool по всем активным кабинетам.")
-        recommendations.append("Через 7 дней загрузите фактические данные и пересчитайте план.")
+            recommendations.append("Р В РІР‚СњР В Р’В»Р РЋР РЏ Р В Р вЂ¦Р В РЎвЂўР В Р вЂ Р РЋРІР‚в„–Р РЋРІР‚В¦/Р В РЎвЂ”Р РЋРЎвЂњР РЋР С“Р РЋРІР‚С™Р РЋРІР‚в„–Р РЋРІР‚В¦ Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р В РЎвЂўР В Р вЂ  Р В РЎвЂР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р РЋР Р‰Р В Р’В·Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦ Р В РЎвЂўР В Р’В±Р В Р’ВµР В Р’В·Р В Р’В»Р В РЎвЂР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ global pool Р В РЎвЂ”Р В РЎвЂў Р В Р вЂ Р РЋР С“Р В Р’ВµР В РЎВ Р В Р’В°Р В РЎвЂќР РЋРІР‚С™Р В РЎвЂР В Р вЂ Р В Р вЂ¦Р РЋРІР‚в„–Р В РЎВ Р В РЎвЂќР В Р’В°Р В Р’В±Р В РЎвЂР В Р вЂ¦Р В Р’ВµР РЋРІР‚С™Р В Р’В°Р В РЎВ.")
+        recommendations.append("Р В Р’В§Р В Р’ВµР РЋР вЂљР В Р’ВµР В Р’В· 7 Р В РўвЂР В Р вЂ¦Р В Р’ВµР В РІвЂћвЂ“ Р В Р’В·Р В Р’В°Р В РЎвЂ“Р РЋР вЂљР РЋРЎвЂњР В Р’В·Р В РЎвЂР РЋРІР‚С™Р В Р’Вµ Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™Р В РЎвЂР РЋРІР‚РЋР В Р’ВµР РЋР С“Р В РЎвЂќР В РЎвЂР В Р’Вµ Р В РўвЂР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ Р В РЎвЂ Р В РЎвЂ”Р В Р’ВµР РЋР вЂљР В Р’ВµР РЋР С“Р РЋРІР‚РЋР В РЎвЂР РЋРІР‚С™Р В Р’В°Р В РІвЂћвЂ“Р РЋРІР‚С™Р В Р’Вµ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦.")
     if source == "llm" and rationale:
         if not any(str(r).strip() == rationale for r in recommendations):
             recommendations.insert(0, rationale)
@@ -2147,7 +2159,7 @@ def plan_to_workbook(
         ["Objective", req.goal if req else ""],
         ["Budget (net)", req.budget if req else ""],
         ["Currency", req.currency if req else ""],
-        ["FX rate (KZTв†’USD)", fx],
+        ["FX rate (KZTР В Р вЂ Р Р†Р вЂљР’В Р Р†Р вЂљРІвЂћСћUSD)", fx],
         ["Flight start", req.date_start.isoformat() if req and req.date_start else ""],
         ["Flight end", req.date_end.isoformat() if req and req.date_end else ""],
         ["Period (days)", period_days],
@@ -2160,7 +2172,7 @@ def plan_to_workbook(
         ["KPI type", req.kpi_type if req else ""],
         ["KPI target", req.kpi_target if req and req.kpi_target else ""],
         ["UTM template", req.utm_template if req and req.utm_template else ""],
-        ["Pixels configured", "Да" if req and req.pixels_configured else "Нет"],
+        ["Pixels configured", "Р В РІР‚СњР В Р’В°" if req and req.pixels_configured else "Р В РЎСљР В Р’ВµР РЋРІР‚С™"],
         ["Channel overrides", json.dumps(req.channel_inputs, ensure_ascii=False) if req and req.channel_inputs else ""],
         ["Prepared by", author],
     ]
@@ -2175,42 +2187,42 @@ def plan_to_workbook(
     vat = (req.vat_percent or 0) / 100 if req else 0
 
     headers = [
-        "Платформа",
-        "Доля, %",
-        "Бюджет план, $",
-        "Бюджет факт, $",
-        "Охват план",
-        "Охват факт",
-        "Показы план",
-        "Показы факт",
-        "Клики план",
-        "Клики факт",
-        "Лиды план",
-        "Лиды факт",
-        "Конверсии план",
-        "Конверсии факт",
-        "Просмотры план",
-        "Просмотры факт",
-        "Viewable план",
-        "Viewable факт",
-        "CPM план, $",
-        "CPM факт, $",
-        "CPC план, $",
-        "CPC факт, $",
-        "CPV план, $",
-        "CPV факт, $",
-        "CTR план",
-        "CTR факт",
-        "CVR план",
-        "CVR факт",
-        "Post-click план",
-        "Post-click факт",
-        "VTR план",
-        "VTR факт",
-        "LTV план",
-        "LTV факт",
-        "Дней открутки",
-        "Пополнение (gross), $",
+        "Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°",
+        "Р В РІР‚СњР В РЎвЂўР В Р’В»Р РЋР РЏ, %",
+        "Р В РІР‚ВР РЋР вЂ№Р В РўвЂР В Р’В¶Р В Р’ВµР РЋРІР‚С™ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦, $",
+        "Р В РІР‚ВР РЋР вЂ№Р В РўвЂР В Р’В¶Р В Р’ВµР РЋРІР‚С™ Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™, $",
+        "Р В РЎвЂєР РЋРІР‚В¦Р В Р вЂ Р В Р’В°Р РЋРІР‚С™ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "Р В РЎвЂєР РЋРІР‚В¦Р В Р вЂ Р В Р’В°Р РЋРІР‚С™ Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "Р В РЎСџР В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚в„– Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "Р В РЎСџР В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚в„– Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "Р В РЎв„ўР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "Р В РЎв„ўР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "Р В РІР‚С”Р В РЎвЂР В РўвЂР РЋРІР‚в„– Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "Р В РІР‚С”Р В РЎвЂР В РўвЂР РЋРІР‚в„– Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "Р В РЎв„ўР В РЎвЂўР В Р вЂ¦Р В Р вЂ Р В Р’ВµР РЋР вЂљР РЋР С“Р В РЎвЂР В РЎвЂ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "Р В РЎв„ўР В РЎвЂўР В Р вЂ¦Р В Р вЂ Р В Р’ВµР РЋР вЂљР РЋР С“Р В РЎвЂР В РЎвЂ Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "Р В РЎСџР РЋР вЂљР В РЎвЂўР РЋР С“Р В РЎВР В РЎвЂўР РЋРІР‚С™Р РЋР вЂљР РЋРІР‚в„– Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "Р В РЎСџР РЋР вЂљР В РЎвЂўР РЋР С“Р В РЎВР В РЎвЂўР РЋРІР‚С™Р РЋР вЂљР РЋРІР‚в„– Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "Viewable Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "Viewable Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "CPM Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦, $",
+        "CPM Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™, $",
+        "CPC Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦, $",
+        "CPC Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™, $",
+        "CPV Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦, $",
+        "CPV Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™, $",
+        "CTR Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "CTR Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "CVR Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "CVR Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "Post-click Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "Post-click Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "VTR Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "VTR Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "LTV Р В РЎвЂ”Р В Р’В»Р В Р’В°Р В Р вЂ¦",
+        "LTV Р РЋРІР‚С›Р В Р’В°Р В РЎвЂќР РЋРІР‚С™",
+        "Р В РІР‚СњР В Р вЂ¦Р В Р’ВµР В РІвЂћвЂ“ Р В РЎвЂўР РЋРІР‚С™Р В РЎвЂќР РЋР вЂљР РЋРЎвЂњР РЋРІР‚С™Р В РЎвЂќР В РЎвЂ",
+        "Р В РЎСџР В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ (gross), $",
     ]
     totals = plan.totals
     total_overhead = totals.budget * (fee + vat)
@@ -2222,24 +2234,24 @@ def plan_to_workbook(
     freq = (totals.impressions / totals.reach) if totals.reach else None
     flight = ""
     if req and req.date_start and req.date_end:
-        flight = f"{req.date_start.isoformat()} в†’ {req.date_end.isoformat()}"
+        flight = f"{req.date_start.isoformat()} Р В Р вЂ Р Р†Р вЂљР’В Р Р†Р вЂљРІвЂћСћ {req.date_end.isoformat()}"
     elif req:
         flight = f"{req.period_days} days"
     summary_rows = [
-        ["Budget (net/client)", totals.budget, "Гарантия"],
-        ["Комиссия/VAT", total_overhead, "Гарантия"],
-        ["Budget (gross)", total_gross, "Гарантия"],
-        ["CPM", cpm, "Прогноз"],
-        ["CPC", cpc, "Прогноз"],
-        ["CPL", cpl, "Прогноз"],
-        ["CPA", cpa, "Прогноз"],
-        ["Impressions", totals.impressions, "Прогноз"],
-        ["Reach", totals.reach, "Прогноз"],
-        ["Clicks", totals.clicks, "Прогноз"],
-        ["Leads", totals.leads, "Прогноз"],
-        ["Purchases", totals.conversions, "Прогноз"],
-        ["Frequency", round(freq, 2) if freq else None, "Прогноз"],
-        ["Flight", flight, "Прогноз"],
+        ["Budget (net/client)", totals.budget, "Р В РІР‚СљР В Р’В°Р РЋР вЂљР В Р’В°Р В Р вЂ¦Р РЋРІР‚С™Р В РЎвЂР РЋР РЏ"],
+        ["Р В РЎв„ўР В РЎвЂўР В РЎВР В РЎвЂР РЋР С“Р РЋР С“Р В РЎвЂР РЋР РЏ/VAT", total_overhead, "Р В РІР‚СљР В Р’В°Р РЋР вЂљР В Р’В°Р В Р вЂ¦Р РЋРІР‚С™Р В РЎвЂР РЋР РЏ"],
+        ["Budget (gross)", total_gross, "Р В РІР‚СљР В Р’В°Р РЋР вЂљР В Р’В°Р В Р вЂ¦Р РЋРІР‚С™Р В РЎвЂР РЋР РЏ"],
+        ["CPM", cpm, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
+        ["CPC", cpc, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
+        ["CPL", cpl, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
+        ["CPA", cpa, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
+        ["Impressions", totals.impressions, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
+        ["Reach", totals.reach, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
+        ["Clicks", totals.clicks, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
+        ["Leads", totals.leads, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
+        ["Purchases", totals.conversions, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
+        ["Frequency", round(freq, 2) if freq else None, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
+        ["Flight", flight, "Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р В Р вЂ¦Р В РЎвЂўР В Р’В·"],
     ]
     outputs.append(["Outputs (standard)", "Value", "Type"])
     for row in summary_rows:
@@ -2295,7 +2307,7 @@ def plan_to_workbook(
                 round(line.budget * (1 + fee + vat), 2),  # Top-up with fee/VAT
             ]
         )
-        # Excel formulas so values обновляются цепочкой внутри файла
+        # Excel formulas so values Р В РЎвЂўР В Р’В±Р В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В Р’В»Р РЋР РЏР РЋР вЂ№Р РЋРІР‚С™Р РЋР С“Р РЋР РЏ Р РЋРІР‚В Р В Р’ВµР В РЎвЂ”Р В РЎвЂўР РЋРІР‚РЋР В РЎвЂќР В РЎвЂўР В РІвЂћвЂ“ Р В Р вЂ Р В Р вЂ¦Р РЋРЎвЂњР РЋРІР‚С™Р РЋР вЂљР В РЎвЂ Р РЋРІР‚С›Р В Р’В°Р В РІвЂћвЂ“Р В Р’В»Р В Р’В°
         # Column mapping for readability:
         # C budget plan, D budget fact, E reach plan, F reach fact, G impr plan, H impr fact,
         # I clicks plan, J clicks fact, K leads plan, L leads fact, M conv plan, N conv fact,
@@ -2322,7 +2334,7 @@ def plan_to_workbook(
         last_data_row = start_row + len(plan.lines) - 1
         outputs.append(
             [
-                "Итого",
+                "Р В Р’ВР РЋРІР‚С™Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў",
                 "",
                 f"=SUM(C{start_row}:C{last_data_row})",
                 f"=SUM(D{start_row}:D{last_data_row})",
@@ -2358,15 +2370,15 @@ def plan_to_workbook(
     # KPI block
     current_row = start_row + len(plan.lines) + 3
     if req and req.kpi_type and req.kpi_target:
-        outputs.cell(row=current_row, column=1, value="KPI контроль")
+        outputs.cell(row=current_row, column=1, value="KPI Р В РЎвЂќР В РЎвЂўР В Р вЂ¦Р РЋРІР‚С™Р РЋР вЂљР В РЎвЂўР В Р’В»Р РЋР Р‰")
         kpi_label = req.kpi_type.upper()
-        outputs.cell(row=current_row, column=2, value="Тип")
+        outputs.cell(row=current_row, column=2, value="Р В РЎС›Р В РЎвЂР В РЎвЂ”")
         outputs.cell(row=current_row, column=3, value=kpi_label)
-        outputs.cell(row=current_row + 1, column=2, value="План")
+        outputs.cell(row=current_row + 1, column=2, value="Р В РЎСџР В Р’В»Р В Р’В°Р В Р вЂ¦")
         outputs.cell(row=current_row + 1, column=3, value=plan.planned_kpi)
-        outputs.cell(row=current_row + 2, column=2, value="Цель")
+        outputs.cell(row=current_row + 2, column=2, value="Р В Р’В¦Р В Р’ВµР В Р’В»Р РЋР Р‰")
         outputs.cell(row=current_row + 2, column=3, value=req.kpi_target)
-        outputs.cell(row=current_row + 3, column=2, value="Отклонение")
+        outputs.cell(row=current_row + 3, column=2, value="Р В РЎвЂєР РЋРІР‚С™Р В РЎвЂќР В Р’В»Р В РЎвЂўР В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ")
         if plan.planned_kpi:
             outputs.cell(row=current_row + 3, column=3, value=plan.planned_kpi - req.kpi_target)
         current_row += 5
@@ -2399,9 +2411,9 @@ def plan_to_workbook(
         week_to_month.append(m_idx)
         weeks_in_month[m_idx] += 1
 
-    flight.append(["Месячный сплит по платформам"])
+    flight.append(["Р В РЎС™Р В Р’ВµР РЋР С“Р РЋР РЏР РЋРІР‚РЋР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р РЋР С“Р В РЎвЂ”Р В Р’В»Р В РЎвЂР РЋРІР‚С™ Р В РЎвЂ”Р В РЎвЂў Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°Р В РЎВ"])
     flight.append([])
-    monthly_header = ["Платформа"] + [f"M{i+1}" for i in range(months)]
+    monthly_header = ["Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°"] + [f"M{i+1}" for i in range(months)]
     flight.append(monthly_header)
     for line in plan.lines:
         weights = month_weights(line.key)
@@ -2409,8 +2421,8 @@ def plan_to_workbook(
         flight.append(row)
 
     flight.append([])
-    flight.append(["Недельный сплит по платформам"])
-    weekly_header = ["Платформа"] + [f"W{i+1}" for i in range(weeks)]
+    flight.append(["Р В РЎСљР В Р’ВµР В РўвЂР В Р’ВµР В Р’В»Р РЋР Р‰Р В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р РЋР С“Р В РЎвЂ”Р В Р’В»Р В РЎвЂР РЋРІР‚С™ Р В РЎвЂ”Р В РЎвЂў Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°Р В РЎВ"])
+    weekly_header = ["Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°"] + [f"W{i+1}" for i in range(weeks)]
     flight.append(weekly_header)
     for line in plan.lines:
         weights = month_weights(line.key)
@@ -2425,18 +2437,18 @@ def plan_to_workbook(
 
     total_gross = sum(l.budget * (1 + fee + vat) for l in plan.lines)
     flight.append([])
-    flight.append(["Итого к оплате (с НДС/ком.)", round(total_gross, 2), f"{total_days} дней"])
+    flight.append(["Р В Р’ВР РЋРІР‚С™Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂќ Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’Вµ (Р РЋР С“ Р В РЎСљР В РІР‚СњР В Р Р‹/Р В РЎвЂќР В РЎвЂўР В РЎВ.)", round(total_gross, 2), f"{total_days} Р В РўвЂР В Р вЂ¦Р В Р’ВµР В РІвЂћвЂ“"])
 
     # Creatives sheet
     creatives = wb.create_sheet("Creatives")
-    creatives.append(["Платформа", "Форматы / размеры", "Текст", "Файлы / примечания"])
-    creatives.append(["Meta (FB/IG) Feed", "1080x1080 (1:1), 1080x1350 (4:5), 1200x628 (1.91:1)", "Заголовок 25–40 знаков, текст до 125", "PNG/JPG; текст на изображении <=20%"])
-    creatives.append(["Meta (FB/IG) Reels/Stories", "1080x1920 (9:16)", "Короткий текст", "Видео 9:16 или 4:5, MP4/MOV, до 4 ГБ"])
-    creatives.append(["Google Ads КМС", "1200x628, 1200x1200, 300x250, 728x90", "Заголовок до 30, описание до 90", "PNG/JPG; высокое разрешение"])
-    creatives.append(["Google Ads YouTube", "16:9", "Короткий заголовок", "Видео MP4, 16:9"])
-    creatives.append(["Яндекс Директ (РСЯ)", "16:9 от 450x257 до 1080x607; 1:1 от 450x450 до 1080x1080; 2:3", "Заголовок до 56, текст до 81", "PNG/JPG"])
-    creatives.append(["TikTok Ads", "9:16 (720x1280 или 1080x1920), 1:1, 16:9", "Заголовок до 100", "Видео MP4/MOV; рекоменд. 9:16"])
-    creatives.append(["Telegram Ads", "Только текст + ссылка", "Заголовок до 160, текст до 160", "Без баннеров"])
+    creatives.append(["Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°", "Р В Р’В¤Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°Р РЋРІР‚С™Р РЋРІР‚в„– / Р РЋР вЂљР В Р’В°Р В Р’В·Р В РЎВР В Р’ВµР РЋР вЂљР РЋРІР‚в„–", "Р В РЎС›Р В Р’ВµР В РЎвЂќР РЋР С“Р РЋРІР‚С™", "Р В Р’В¤Р В Р’В°Р В РІвЂћвЂ“Р В Р’В»Р РЋРІР‚в„– / Р В РЎвЂ”Р РЋР вЂљР В РЎвЂР В РЎВР В Р’ВµР РЋРІР‚РЋР В Р’В°Р В Р вЂ¦Р В РЎвЂР РЋР РЏ"])
+    creatives.append(["Meta (FB/IG) Feed", "1080x1080 (1:1), 1080x1350 (4:5), 1200x628 (1.91:1)", "Р В РІР‚вЂќР В Р’В°Р В РЎвЂ“Р В РЎвЂўР В Р’В»Р В РЎвЂўР В Р вЂ Р В РЎвЂўР В РЎвЂќ 25Р Р†Р вЂљРІР‚Сљ40 Р В Р’В·Р В Р вЂ¦Р В Р’В°Р В РЎвЂќР В РЎвЂўР В Р вЂ , Р РЋРІР‚С™Р В Р’ВµР В РЎвЂќР РЋР С“Р РЋРІР‚С™ Р В РўвЂР В РЎвЂў 125", "PNG/JPG; Р РЋРІР‚С™Р В Р’ВµР В РЎвЂќР РЋР С“Р РЋРІР‚С™ Р В Р вЂ¦Р В Р’В° Р В РЎвЂР В Р’В·Р В РЎвЂўР В Р’В±Р РЋР вЂљР В Р’В°Р В Р’В¶Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В РЎвЂ <=20%"])
+    creatives.append(["Meta (FB/IG) Reels/Stories", "1080x1920 (9:16)", "Р В РЎв„ўР В РЎвЂўР РЋР вЂљР В РЎвЂўР РЋРІР‚С™Р В РЎвЂќР В РЎвЂР В РІвЂћвЂ“ Р РЋРІР‚С™Р В Р’ВµР В РЎвЂќР РЋР С“Р РЋРІР‚С™", "Р В РІР‚в„ўР В РЎвЂР В РўвЂР В Р’ВµР В РЎвЂў 9:16 Р В РЎвЂР В Р’В»Р В РЎвЂ 4:5, MP4/MOV, Р В РўвЂР В РЎвЂў 4 Р В РІР‚СљР В РІР‚В"])
+    creatives.append(["Google Ads Р В РЎв„ўР В РЎС™Р В Р Р‹", "1200x628, 1200x1200, 300x250, 728x90", "Р В РІР‚вЂќР В Р’В°Р В РЎвЂ“Р В РЎвЂўР В Р’В»Р В РЎвЂўР В Р вЂ Р В РЎвЂўР В РЎвЂќ Р В РўвЂР В РЎвЂў 30, Р В РЎвЂўР В РЎвЂ”Р В РЎвЂР РЋР С“Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В Р’Вµ Р В РўвЂР В РЎвЂў 90", "PNG/JPG; Р В Р вЂ Р РЋРІР‚в„–Р РЋР С“Р В РЎвЂўР В РЎвЂќР В РЎвЂўР В Р’Вµ Р РЋР вЂљР В Р’В°Р В Р’В·Р РЋР вЂљР В Р’ВµР РЋРІвЂљВ¬Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ"])
+    creatives.append(["Google Ads YouTube", "16:9", "Р В РЎв„ўР В РЎвЂўР РЋР вЂљР В РЎвЂўР РЋРІР‚С™Р В РЎвЂќР В РЎвЂР В РІвЂћвЂ“ Р В Р’В·Р В Р’В°Р В РЎвЂ“Р В РЎвЂўР В Р’В»Р В РЎвЂўР В Р вЂ Р В РЎвЂўР В РЎвЂќ", "Р В РІР‚в„ўР В РЎвЂР В РўвЂР В Р’ВµР В РЎвЂў MP4, 16:9"])
+    creatives.append(["Р В Р вЂЎР В Р вЂ¦Р В РўвЂР В Р’ВµР В РЎвЂќР РЋР С“ Р В РІР‚СњР В РЎвЂР РЋР вЂљР В Р’ВµР В РЎвЂќР РЋРІР‚С™ (Р В Р’В Р В Р Р‹Р В Р вЂЎ)", "16:9 Р В РЎвЂўР РЋРІР‚С™ 450x257 Р В РўвЂР В РЎвЂў 1080x607; 1:1 Р В РЎвЂўР РЋРІР‚С™ 450x450 Р В РўвЂР В РЎвЂў 1080x1080; 2:3", "Р В РІР‚вЂќР В Р’В°Р В РЎвЂ“Р В РЎвЂўР В Р’В»Р В РЎвЂўР В Р вЂ Р В РЎвЂўР В РЎвЂќ Р В РўвЂР В РЎвЂў 56, Р РЋРІР‚С™Р В Р’ВµР В РЎвЂќР РЋР С“Р РЋРІР‚С™ Р В РўвЂР В РЎвЂў 81", "PNG/JPG"])
+    creatives.append(["TikTok Ads", "9:16 (720x1280 Р В РЎвЂР В Р’В»Р В РЎвЂ 1080x1920), 1:1, 16:9", "Р В РІР‚вЂќР В Р’В°Р В РЎвЂ“Р В РЎвЂўР В Р’В»Р В РЎвЂўР В Р вЂ Р В РЎвЂўР В РЎвЂќ Р В РўвЂР В РЎвЂў 100", "Р В РІР‚в„ўР В РЎвЂР В РўвЂР В Р’ВµР В РЎвЂў MP4/MOV; Р РЋР вЂљР В Р’ВµР В РЎвЂќР В РЎвЂўР В РЎВР В Р’ВµР В Р вЂ¦Р В РўвЂ. 9:16"])
+    creatives.append(["Telegram Ads", "Р В РЎС›Р В РЎвЂўР В Р’В»Р РЋР Р‰Р В РЎвЂќР В РЎвЂў Р РЋРІР‚С™Р В Р’ВµР В РЎвЂќР РЋР С“Р РЋРІР‚С™ + Р РЋР С“Р РЋР С“Р РЋРІР‚в„–Р В Р’В»Р В РЎвЂќР В Р’В°", "Р В РІР‚вЂќР В Р’В°Р В РЎвЂ“Р В РЎвЂўР В Р’В»Р В РЎвЂўР В Р вЂ Р В РЎвЂўР В РЎвЂќ Р В РўвЂР В РЎвЂў 160, Р РЋРІР‚С™Р В Р’ВµР В РЎвЂќР РЋР С“Р РЋРІР‚С™ Р В РўвЂР В РЎвЂў 160", "Р В РІР‚ВР В Р’ВµР В Р’В· Р В Р’В±Р В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р В Р’ВµР РЋР вЂљР В РЎвЂўР В Р вЂ "])
 
     # Brand Metrics sheet removed
     # Scenarios sheet removed
@@ -2603,10 +2615,10 @@ except Exception:
 
 ADMIN_EMAILS = {"romant997@gmail.com", "kolyadov.denis@gmail.com"}
 BENEFICIARY = {
-    "name": "ИП Art Book Inc.",
+    "name": "Р В Р’ВР В РЎСџ Art Book Inc.",
     "bin": "960910300234",
     "iban": "KZ588562204108888284",
-    "bank": "АО Банк ЦентрКредит",
+    "bank": "Р В РЎвЂ™Р В РЎвЂє Р В РІР‚ВР В Р’В°Р В Р вЂ¦Р В РЎвЂќ Р В Р’В¦Р В Р’ВµР В Р вЂ¦Р РЋРІР‚С™Р РЋР вЂљР В РЎв„ўР РЋР вЂљР В Р’ВµР В РўвЂР В РЎвЂР РЋРІР‚С™",
     "bic": "KCJBKZKX",
     "kbe": "19",
     "currency": "KZT",
@@ -2616,18 +2628,18 @@ BENEFICIARY = {
 def _format_date_ru(dt: datetime) -> str:
     return (
         dt.strftime("%d %B %Y")
-        .replace("January", "января")
-        .replace("February", "февраля")
-        .replace("March", "марта")
-        .replace("April", "апреля")
-        .replace("May", "мая")
-        .replace("June", "июня")
-        .replace("July", "июля")
-        .replace("August", "августа")
-        .replace("September", "сентября")
-        .replace("October", "октября")
-        .replace("November", "ноября")
-        .replace("December", "декабря")
+        .replace("January", "Р РЋР РЏР В Р вЂ¦Р В Р вЂ Р В Р’В°Р РЋР вЂљР РЋР РЏ")
+        .replace("February", "Р РЋРІР‚С›Р В Р’ВµР В Р вЂ Р РЋР вЂљР В Р’В°Р В Р’В»Р РЋР РЏ")
+        .replace("March", "Р В РЎВР В Р’В°Р РЋР вЂљР РЋРІР‚С™Р В Р’В°")
+        .replace("April", "Р В Р’В°Р В РЎвЂ”Р РЋР вЂљР В Р’ВµР В Р’В»Р РЋР РЏ")
+        .replace("May", "Р В РЎВР В Р’В°Р РЋР РЏ")
+        .replace("June", "Р В РЎвЂР РЋР вЂ№Р В Р вЂ¦Р РЋР РЏ")
+        .replace("July", "Р В РЎвЂР РЋР вЂ№Р В Р’В»Р РЋР РЏ")
+        .replace("August", "Р В Р’В°Р В Р вЂ Р В РЎвЂ“Р РЋРЎвЂњР РЋР С“Р РЋРІР‚С™Р В Р’В°")
+        .replace("September", "Р РЋР С“Р В Р’ВµР В Р вЂ¦Р РЋРІР‚С™Р РЋР РЏР В Р’В±Р РЋР вЂљР РЋР РЏ")
+        .replace("October", "Р В РЎвЂўР В РЎвЂќР РЋРІР‚С™Р РЋР РЏР В Р’В±Р РЋР вЂљР РЋР РЏ")
+        .replace("November", "Р В Р вЂ¦Р В РЎвЂўР РЋР РЏР В Р’В±Р РЋР вЂљР РЋР РЏ")
+        .replace("December", "Р В РўвЂР В Р’ВµР В РЎвЂќР В Р’В°Р В Р’В±Р РЋР вЂљР РЋР РЏ")
     )
 
 
@@ -2649,30 +2661,30 @@ def _repair_mojibake_text(value: object) -> object:
 
 _CYR_TO_LAT_MAP = str.maketrans(
     {
-        "А": "A",
-        "В": "B",
-        "С": "C",
-        "Е": "E",
-        "Н": "H",
-        "К": "K",
-        "М": "M",
-        "О": "O",
-        "Р": "P",
-        "Т": "T",
-        "Х": "X",
-        "У": "Y",
-        "а": "A",
-        "в": "B",
-        "с": "C",
-        "е": "E",
-        "н": "H",
-        "к": "K",
-        "м": "M",
-        "о": "O",
-        "р": "P",
-        "т": "T",
-        "х": "X",
-        "у": "Y",
+        "Р В РЎвЂ™": "A",
+        "Р В РІР‚в„ў": "B",
+        "Р В Р Р‹": "C",
+        "Р В РІР‚Сћ": "E",
+        "Р В РЎСљ": "H",
+        "Р В РЎв„ў": "K",
+        "Р В РЎС™": "M",
+        "Р В РЎвЂє": "O",
+        "Р В Р’В ": "P",
+        "Р В РЎС›": "T",
+        "Р В РўС’": "X",
+        "Р В Р в‚¬": "Y",
+        "Р В Р’В°": "A",
+        "Р В Р вЂ ": "B",
+        "Р РЋР С“": "C",
+        "Р В Р’Вµ": "E",
+        "Р В Р вЂ¦": "H",
+        "Р В РЎвЂќ": "K",
+        "Р В РЎВ": "M",
+        "Р В РЎвЂў": "O",
+        "Р РЋР вЂљ": "P",
+        "Р РЋРІР‚С™": "T",
+        "Р РЋРІР‚В¦": "X",
+        "Р РЋРЎвЂњ": "Y",
     }
 )
 
@@ -2715,9 +2727,9 @@ def _get_company_profile(conn) -> Dict[str, object]:
 
 def _normalize_issuer_type(value: object, default: str = "too") -> str:
     raw = str(value or "").strip().lower()
-    if raw in {"too", "тоо", "llp"}:
+    if raw in {"too", "Р РЋРІР‚С™Р В РЎвЂўР В РЎвЂў", "llp"}:
         return "too"
-    if raw in {"ip", "ип", "sp"}:
+    if raw in {"ip", "Р В РЎвЂР В РЎвЂ”", "sp"}:
         return "ip"
     return default
 
@@ -2783,11 +2795,120 @@ def _format_legal_entity_name(entity: Dict[str, object]) -> Optional[str]:
     return full or short or None
 
 
+def _normalize_legal_entity_text(value: Optional[object]) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _resolve_wallet_request_legal_entity(
+    conn,
+    user_id: int,
+    legal_entity_id: Optional[int],
+    client_name: Optional[str],
+    client_bin: Optional[str],
+    client_address: Optional[str],
+    client_email: Optional[str],
+) -> Optional[Dict[str, object]]:
+    if legal_entity_id:
+        row = conn.execute(
+            """
+            SELECT le.*
+            FROM legal_entities le
+            JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
+            WHERE le.id=? AND ule.user_id=?
+            """,
+            (legal_entity_id, user_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Legal entity not found")
+        return dict(row)
+
+    name = _normalize_legal_entity_text(client_name)
+    entity_bin = _normalize_legal_entity_text(client_bin)
+    address = _normalize_legal_entity_text(client_address)
+    email = _normalize_email(client_email)
+    if not name and not entity_bin:
+        return None
+
+    row = None
+    if entity_bin:
+        row = conn.execute(
+            """
+            SELECT le.*
+            FROM legal_entities le
+            JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
+            WHERE ule.user_id=? AND le.bin=?
+            ORDER BY le.id DESC
+            LIMIT 1
+            """,
+            (user_id, entity_bin),
+        ).fetchone()
+    if not row and name:
+        row = conn.execute(
+            """
+            SELECT le.*
+            FROM legal_entities le
+            JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
+            WHERE ule.user_id=? AND LOWER(le.name)=LOWER(?)
+            ORDER BY le.id DESC
+            LIMIT 1
+            """,
+            (user_id, name),
+        ).fetchone()
+
+    if row:
+        entity_id = row["id"]
+        conn.execute(
+            """
+            UPDATE legal_entities
+            SET name=?, short_name=?, full_name=?, bin=?, address=?, legal_address=?, email=?
+            WHERE id=?
+            """,
+            (
+                name or row.get("name"),
+                name or row.get("short_name") or row.get("name"),
+                name or row.get("full_name") or row.get("name"),
+                entity_bin or row.get("bin"),
+                address or row.get("address"),
+                address or row.get("legal_address") or row.get("address"),
+                email or row.get("email"),
+                entity_id,
+            ),
+        )
+    else:
+        cur = conn.execute(
+            """
+            INSERT INTO legal_entities (name, short_name, full_name, bin, address, legal_address, email)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name or entity_bin or "Legal entity",
+                name or entity_bin or "Legal entity",
+                name or entity_bin or "Legal entity",
+                entity_bin,
+                address,
+                address,
+                email or None,
+            ),
+        )
+        entity_id = cur.lastrowid
+
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO user_legal_entities (user_id, legal_entity_id, is_default)
+        VALUES (?, ?, 0)
+        """,
+        (user_id, entity_id),
+    )
+    row = conn.execute("SELECT * FROM legal_entities WHERE id=?", (entity_id,)).fetchone()
+    return dict(row) if row else None
 def _normalize_tax_mode(value: object, default: str = "without_vat") -> str:
     raw = str(value or "").strip().lower()
-    if raw in {"with_vat", "vat", "with-nds", "nds", "с_ндс", "сндс"}:
+    if raw in {"with_vat", "vat", "with-nds", "nds", "Р РЋР С“_Р В Р вЂ¦Р В РўвЂР РЋР С“", "Р РЋР С“Р В Р вЂ¦Р В РўвЂР РЋР С“"}:
         return "with_vat"
-    if raw in {"without_vat", "no_vat", "without-nds", "no_nds", "без_ндс", "безндс"}:
+    if raw in {"without_vat", "no_vat", "without-nds", "no_nds", "Р В Р’В±Р В Р’ВµР В Р’В·_Р В Р вЂ¦Р В РўвЂР РЋР С“", "Р В Р’В±Р В Р’ВµР В Р’В·Р В Р вЂ¦Р В РўвЂР РЋР С“"}:
         return "without_vat"
     return default
 
@@ -2813,7 +2934,7 @@ def _invoice_tax_breakdown(amount: float, tax_mode: str, vat_rate: float) -> Dic
             "net_amount": total,
             "vat_amount": 0.0,
             "total_amount": total,
-            "vat_note": "Услуги Исполнителя НДС не облагаются (п.п. 46 ст.394 Налогового кодекса Казахстана).",
+            "vat_note": "Р В Р в‚¬Р РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“Р В РЎвЂ Р В Р’ВР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР РЏ Р В РЎСљР В РІР‚СњР В Р Р‹ Р В Р вЂ¦Р В Р’Вµ Р В РЎвЂўР В Р’В±Р В Р’В»Р В Р’В°Р В РЎвЂ“Р В Р’В°Р РЋР вЂ№Р РЋРІР‚С™Р РЋР С“Р РЋР РЏ (Р В РЎвЂ”.Р В РЎвЂ”. 46 Р РЋР С“Р РЋРІР‚С™.394 Р В РЎСљР В Р’В°Р В Р’В»Р В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂќР В РЎвЂўР В РўвЂР В Р’ВµР В РЎвЂќР РЋР С“Р В Р’В° Р В РЎв„ўР В Р’В°Р В Р’В·Р В Р’В°Р РЋРІР‚В¦Р РЋР С“Р РЋРІР‚С™Р В Р’В°Р В Р вЂ¦Р В Р’В°).",
         }
     denom = 1.0 + (vat_rate / 100.0)
     net = round(total / denom, 2) if denom > 0 else total
@@ -2824,7 +2945,7 @@ def _invoice_tax_breakdown(amount: float, tax_mode: str, vat_rate: float) -> Dic
         "net_amount": net,
         "vat_amount": vat_amount,
         "total_amount": total,
-        "vat_note": f"В том числе НДС {vat_rate:g}%: {_format_amount(vat_amount)}.",
+        "vat_note": f"Р В РІР‚в„ў Р РЋРІР‚С™Р В РЎвЂўР В РЎВ Р РЋРІР‚РЋР В РЎвЂР РЋР С“Р В Р’В»Р В Р’Вµ Р В РЎСљР В РІР‚СњР В Р Р‹ {vat_rate:g}%: {_format_amount(vat_amount)}.",
     }
 
 
@@ -2845,22 +2966,22 @@ def _format_amount(amount: float) -> str:
 
 def _amount_to_words_ru(amount: float) -> str:
     def _triad_to_words(n: int, feminine: bool = False) -> str:
-        units_m = ["", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"]
-        units_f = ["", "одна", "две", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"]
+        units_m = ["", "Р В РЎвЂўР В РўвЂР В РЎвЂР В Р вЂ¦", "Р В РўвЂР В Р вЂ Р В Р’В°", "Р РЋРІР‚С™Р РЋР вЂљР В РЎвЂ", "Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™Р РЋРІР‚в„–Р РЋР вЂљР В Р’Вµ", "Р В РЎвЂ”Р РЋР РЏР РЋРІР‚С™Р РЋР Р‰", "Р РЋРІвЂљВ¬Р В Р’ВµР РЋР С“Р РЋРІР‚С™Р РЋР Р‰", "Р РЋР С“Р В Р’ВµР В РЎВР РЋР Р‰", "Р В Р вЂ Р В РЎвЂўР РЋР С“Р В Р’ВµР В РЎВР РЋР Р‰", "Р В РўвЂР В Р’ВµР В Р вЂ Р РЋР РЏР РЋРІР‚С™Р РЋР Р‰"]
+        units_f = ["", "Р В РЎвЂўР В РўвЂР В Р вЂ¦Р В Р’В°", "Р В РўвЂР В Р вЂ Р В Р’Вµ", "Р РЋРІР‚С™Р РЋР вЂљР В РЎвЂ", "Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™Р РЋРІР‚в„–Р РЋР вЂљР В Р’Вµ", "Р В РЎвЂ”Р РЋР РЏР РЋРІР‚С™Р РЋР Р‰", "Р РЋРІвЂљВ¬Р В Р’ВµР РЋР С“Р РЋРІР‚С™Р РЋР Р‰", "Р РЋР С“Р В Р’ВµР В РЎВР РЋР Р‰", "Р В Р вЂ Р В РЎвЂўР РЋР С“Р В Р’ВµР В РЎВР РЋР Р‰", "Р В РўвЂР В Р’ВµР В Р вЂ Р РЋР РЏР РЋРІР‚С™Р РЋР Р‰"]
         teens = [
-            "десять",
-            "одиннадцать",
-            "двенадцать",
-            "тринадцать",
-            "четырнадцать",
-            "пятнадцать",
-            "шестнадцать",
-            "семнадцать",
-            "восемнадцать",
-            "девятнадцать",
+            "Р В РўвЂР В Р’ВµР РЋР С“Р РЋР РЏР РЋРІР‚С™Р РЋР Р‰",
+            "Р В РЎвЂўР В РўвЂР В РЎвЂР В Р вЂ¦Р В Р вЂ¦Р В Р’В°Р В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰",
+            "Р В РўвЂР В Р вЂ Р В Р’ВµР В Р вЂ¦Р В Р’В°Р В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰",
+            "Р РЋРІР‚С™Р РЋР вЂљР В РЎвЂР В Р вЂ¦Р В Р’В°Р В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰",
+            "Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™Р РЋРІР‚в„–Р РЋР вЂљР В Р вЂ¦Р В Р’В°Р В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰",
+            "Р В РЎвЂ”Р РЋР РЏР РЋРІР‚С™Р В Р вЂ¦Р В Р’В°Р В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰",
+            "Р РЋРІвЂљВ¬Р В Р’ВµР РЋР С“Р РЋРІР‚С™Р В Р вЂ¦Р В Р’В°Р В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰",
+            "Р РЋР С“Р В Р’ВµР В РЎВР В Р вЂ¦Р В Р’В°Р В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰",
+            "Р В Р вЂ Р В РЎвЂўР РЋР С“Р В Р’ВµР В РЎВР В Р вЂ¦Р В Р’В°Р В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰",
+            "Р В РўвЂР В Р’ВµР В Р вЂ Р РЋР РЏР РЋРІР‚С™Р В Р вЂ¦Р В Р’В°Р В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰",
         ]
-        tens = ["", "", "двадцать", "тридцать", "сорок", "пятьдесят", "шестьдесят", "семьдесят", "восемьдесят", "девяносто"]
-        hundreds = ["", "сто", "двести", "триста", "четыреста", "пятьсот", "шестьсот", "семьсот", "восемьсот", "девятьсот"]
+        tens = ["", "", "Р В РўвЂР В Р вЂ Р В Р’В°Р В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰", "Р РЋРІР‚С™Р РЋР вЂљР В РЎвЂР В РўвЂР РЋРІР‚В Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰", "Р РЋР С“Р В РЎвЂўР РЋР вЂљР В РЎвЂўР В РЎвЂќ", "Р В РЎвЂ”Р РЋР РЏР РЋРІР‚С™Р РЋР Р‰Р В РўвЂР В Р’ВµР РЋР С“Р РЋР РЏР РЋРІР‚С™", "Р РЋРІвЂљВ¬Р В Р’ВµР РЋР С“Р РЋРІР‚С™Р РЋР Р‰Р В РўвЂР В Р’ВµР РЋР С“Р РЋР РЏР РЋРІР‚С™", "Р РЋР С“Р В Р’ВµР В РЎВР РЋР Р‰Р В РўвЂР В Р’ВµР РЋР С“Р РЋР РЏР РЋРІР‚С™", "Р В Р вЂ Р В РЎвЂўР РЋР С“Р В Р’ВµР В РЎВР РЋР Р‰Р В РўвЂР В Р’ВµР РЋР С“Р РЋР РЏР РЋРІР‚С™", "Р В РўвЂР В Р’ВµР В Р вЂ Р РЋР РЏР В Р вЂ¦Р В РЎвЂўР РЋР С“Р РЋРІР‚С™Р В РЎвЂў"]
+        hundreds = ["", "Р РЋР С“Р РЋРІР‚С™Р В РЎвЂў", "Р В РўвЂР В Р вЂ Р В Р’ВµР РЋР С“Р РЋРІР‚С™Р В РЎвЂ", "Р РЋРІР‚С™Р РЋР вЂљР В РЎвЂР РЋР С“Р РЋРІР‚С™Р В Р’В°", "Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™Р РЋРІР‚в„–Р РЋР вЂљР В Р’ВµР РЋР С“Р РЋРІР‚С™Р В Р’В°", "Р В РЎвЂ”Р РЋР РЏР РЋРІР‚С™Р РЋР Р‰Р РЋР С“Р В РЎвЂўР РЋРІР‚С™", "Р РЋРІвЂљВ¬Р В Р’ВµР РЋР С“Р РЋРІР‚С™Р РЋР Р‰Р РЋР С“Р В РЎвЂўР РЋРІР‚С™", "Р РЋР С“Р В Р’ВµР В РЎВР РЋР Р‰Р РЋР С“Р В РЎвЂўР РЋРІР‚С™", "Р В Р вЂ Р В РЎвЂўР РЋР С“Р В Р’ВµР В РЎВР РЋР Р‰Р РЋР С“Р В РЎвЂўР РЋРІР‚С™", "Р В РўвЂР В Р’ВµР В Р вЂ Р РЋР РЏР РЋРІР‚С™Р РЋР Р‰Р РЋР С“Р В РЎвЂўР РЋРІР‚С™"]
         words = []
         words.append(hundreds[n // 100])
         n = n % 100
@@ -2892,23 +3013,23 @@ def _amount_to_words_ru(amount: float) -> str:
     remainder = rub % 1_000
     if millions:
         parts.append(_triad_to_words(millions))
-        parts.append(_group_word(millions, ("миллион", "миллиона", "миллионов")))
+        parts.append(_group_word(millions, ("Р В РЎВР В РЎвЂР В Р’В»Р В Р’В»Р В РЎвЂР В РЎвЂўР В Р вЂ¦", "Р В РЎВР В РЎвЂР В Р’В»Р В Р’В»Р В РЎвЂР В РЎвЂўР В Р вЂ¦Р В Р’В°", "Р В РЎВР В РЎвЂР В Р’В»Р В Р’В»Р В РЎвЂР В РЎвЂўР В Р вЂ¦Р В РЎвЂўР В Р вЂ ")))
     if thousands:
         parts.append(_triad_to_words(thousands, feminine=True))
-        parts.append(_group_word(thousands, ("тысяча", "тысячи", "тысяч")))
+        parts.append(_group_word(thousands, ("Р РЋРІР‚С™Р РЋРІР‚в„–Р РЋР С“Р РЋР РЏР РЋРІР‚РЋР В Р’В°", "Р РЋРІР‚С™Р РЋРІР‚в„–Р РЋР С“Р РЋР РЏР РЋРІР‚РЋР В РЎвЂ", "Р РЋРІР‚С™Р РЋРІР‚в„–Р РЋР С“Р РЋР РЏР РЋРІР‚РЋ")))
     if remainder or not parts:
         parts.append(_triad_to_words(remainder))
     words = " ".join(p for p in parts if p).strip()
     if words:
         words = words[0].upper() + words[1:]
-    return f"{words} тенге {kop:02d} тиын"
+    return f"{words} Р РЋРІР‚С™Р В Р’ВµР В Р вЂ¦Р В РЎвЂ“Р В Р’Вµ {kop:02d} Р РЋРІР‚С™Р В РЎвЂР РЋРІР‚в„–Р В Р вЂ¦"
 
 
 def _invoice_1c_html(payload: Dict[str, object]) -> str:
     amount = payload.get("amount", "0.00")
     currency = payload.get("currency", "KZT")
-    number = payload.get("number", "—")
-    date = payload.get("date", "—")
+    number = payload.get("number", "Р Р†Р вЂљРІР‚Сњ")
+    date = payload.get("date", "Р Р†Р вЂљРІР‚Сњ")
     beneficiary_name = payload.get("beneficiary_name", "")
     beneficiary_bin = payload.get("beneficiary_bin", "")
     beneficiary_bank = payload.get("beneficiary_bank", "")
@@ -2930,8 +3051,8 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
     vat_amount = payload.get("vat_amount", "0.00")
     vat_note = payload.get("vat_note", "")
     request_id = payload.get("request_id", "")
-    token = payload.get("token", "")
-    token_query = f"?token={token}" if token else ""
+    pdf_token = payload.get("pdf_token", "")
+    token_query = f"?token={pdf_token}" if pdf_token else ""
     pdf_url = f"/wallet/topup-requests/{request_id}/pdf-generated{token_query}"
     return f"""
 <!doctype html>
@@ -2939,7 +3060,7 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Счет на оплату</title>
+    <title>Р В Р Р‹Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™ Р В Р вЂ¦Р В Р’В° Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРЎвЂњ</title>
     <style>
       @page {{
         size: A4;
@@ -3030,81 +3151,81 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
   </head>
   <body>
     <div class="wrap">
-      <a class="print-btn" href="{pdf_url}">Скачать PDF</a>
+      <a class="print-btn" href="{pdf_url}">Р В Р Р‹Р В РЎвЂќР В Р’В°Р РЋРІР‚РЋР В Р’В°Р РЋРІР‚С™Р РЋР Р‰ PDF</a>
       <table class="bank-table">
         <tr>
           <td>
-            <strong>Образец платежного поручения</strong><br />
-            Бенефициар: {beneficiary_name}<br />
-            БИН/ИИН: {beneficiary_bin}
+            <strong>Р В РЎвЂєР В Р’В±Р РЋР вЂљР В Р’В°Р В Р’В·Р В Р’ВµР РЋРІР‚В  Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В¶Р В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂ”Р В РЎвЂўР РЋР вЂљР РЋРЎвЂњР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ</strong><br />
+            Р В РІР‚ВР В Р’ВµР В Р вЂ¦Р В Р’ВµР РЋРІР‚С›Р В РЎвЂР РЋРІР‚В Р В РЎвЂР В Р’В°Р РЋР вЂљ: {beneficiary_name}<br />
+            Р В РІР‚ВР В Р’ВР В РЎСљ/Р В Р’ВР В Р’ВР В РЎСљ: {beneficiary_bin}
           </td>
           <td>
-            ИИК<br />
+            Р В Р’ВР В Р’ВР В РЎв„ў<br />
             <strong>{beneficiary_iban}</strong>
           </td>
           <td class="center">
-            КБе<br />
+            Р В РЎв„ўР В РІР‚ВР В Р’Вµ<br />
             <strong>{beneficiary_kbe}</strong>
           </td>
         </tr>
         <tr>
-          <td>Банк бенефициара:<br />{beneficiary_bank}</td>
+          <td>Р В РІР‚ВР В Р’В°Р В Р вЂ¦Р В РЎвЂќ Р В Р’В±Р В Р’ВµР В Р вЂ¦Р В Р’ВµР РЋРІР‚С›Р В РЎвЂР РЋРІР‚В Р В РЎвЂР В Р’В°Р РЋР вЂљР В Р’В°:<br />{beneficiary_bank}</td>
           <td>
-            БИК<br />
+            Р В РІР‚ВР В Р’ВР В РЎв„ў<br />
             <strong>{beneficiary_bic}</strong>
           </td>
           <td class="center">
-            Код назначения платежа<br />
+            Р В РЎв„ўР В РЎвЂўР В РўвЂ Р В Р вЂ¦Р В Р’В°Р В Р’В·Р В Р вЂ¦Р В Р’В°Р РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В¶Р В Р’В°<br />
             <strong>{payment_code}</strong>
           </td>
         </tr>
       </table>
 
-      <p class="note">Счет действителен в течение 5 рабочих дней</p>
+      <p class="note">Р В Р Р‹Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™ Р В РўвЂР В Р’ВµР В РІвЂћвЂ“Р РЋР С“Р РЋРІР‚С™Р В Р вЂ Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р В Р’ВµР В Р вЂ¦ Р В Р вЂ  Р РЋРІР‚С™Р В Р’ВµР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ 5 Р РЋР вЂљР В Р’В°Р В Р’В±Р В РЎвЂўР РЋРІР‚РЋР В РЎвЂР РЋРІР‚В¦ Р В РўвЂР В Р вЂ¦Р В Р’ВµР В РІвЂћвЂ“</p>
 
-      <h1>Счет на оплату № {number} от {date}</h1>
+      <h1>Р В Р Р‹Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™ Р В Р вЂ¦Р В Р’В° Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРЎвЂњ Р Р†РІР‚С›РІР‚вЂњ {number} Р В РЎвЂўР РЋРІР‚С™ {date}</h1>
       <div class="title-line"></div>
 
       <table class="no-border">
         <tr>
-          <td>Исполнитель</td>
+          <td>Р В Р’ВР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰</td>
           <td><strong>
-            БИН/ИИН {beneficiary_bin}, {beneficiary_name}
-            {f", {beneficiary_address}" if beneficiary_address else ""}{f", тел.: {beneficiary_phone}" if beneficiary_phone else ""}
+            Р В РІР‚ВР В Р’ВР В РЎСљ/Р В Р’ВР В Р’ВР В РЎСљ {beneficiary_bin}, {beneficiary_name}
+            {f", {beneficiary_address}" if beneficiary_address else ""}{f", Р РЋРІР‚С™Р В Р’ВµР В Р’В».: {beneficiary_phone}" if beneficiary_phone else ""}
           </strong></td>
         </tr>
         <tr>
-          <td>Заказчик</td>
-          <td><strong>БИН/ИИН {payer_bin}, {payer_name}, {payer_address}</strong></td>
+          <td>Р В РІР‚вЂќР В Р’В°Р В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚РЋР В РЎвЂР В РЎвЂќ</td>
+          <td><strong>Р В РІР‚ВР В Р’ВР В РЎСљ/Р В Р’ВР В Р’ВР В РЎСљ {payer_bin}, {payer_name}, {payer_address}</strong></td>
         </tr>
         <tr>
-          <td>Договор</td>
+          <td>Р В РІР‚СњР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ</td>
           <td><strong>{contract_note}</strong></td>
         </tr>
       </table>
 
-      <div class="alert-line">Внимание! В назначение платежа скопируйте данные, указанные ниже.</div>
+      <div class="alert-line">Р В РІР‚в„ўР В Р вЂ¦Р В РЎвЂР В РЎВР В Р’В°Р В Р вЂ¦Р В РЎвЂР В Р’Вµ! Р В РІР‚в„ў Р В Р вЂ¦Р В Р’В°Р В Р’В·Р В Р вЂ¦Р В Р’В°Р РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В¶Р В Р’В° Р РЋР С“Р В РЎвЂќР В РЎвЂўР В РЎвЂ”Р В РЎвЂР РЋР вЂљР РЋРЎвЂњР В РІвЂћвЂ“Р РЋРІР‚С™Р В Р’Вµ Р В РўвЂР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ, Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ Р В Р вЂ¦Р В РЎвЂР В Р’В¶Р В Р’Вµ.</div>
       <div class="warning">{description}</div>
       <div class="alert-line">
-        Если назначение платежа будет указано некорректно, платеж может быть возвращен как ошибочный либо время поступления денег на счет может занять до 3-х рабочих дней
+        Р В РІР‚СћР РЋР С“Р В Р’В»Р В РЎвЂ Р В Р вЂ¦Р В Р’В°Р В Р’В·Р В Р вЂ¦Р В Р’В°Р РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В¶Р В Р’В° Р В Р’В±Р РЋРЎвЂњР В РўвЂР В Р’ВµР РЋРІР‚С™ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦Р В РЎвЂў Р В Р вЂ¦Р В Р’ВµР В РЎвЂќР В РЎвЂўР РЋР вЂљР РЋР вЂљР В Р’ВµР В РЎвЂќР РЋРІР‚С™Р В Р вЂ¦Р В РЎвЂў, Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В¶ Р В РЎВР В РЎвЂўР В Р’В¶Р В Р’ВµР РЋРІР‚С™ Р В Р’В±Р РЋРІР‚в„–Р РЋРІР‚С™Р РЋР Р‰ Р В Р вЂ Р В РЎвЂўР В Р’В·Р В Р вЂ Р РЋР вЂљР В Р’В°Р РЋРІР‚В°Р В Р’ВµР В Р вЂ¦ Р В РЎвЂќР В Р’В°Р В РЎвЂќ Р В РЎвЂўР РЋРІвЂљВ¬Р В РЎвЂР В Р’В±Р В РЎвЂўР РЋРІР‚РЋР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р В Р’В»Р В РЎвЂР В Р’В±Р В РЎвЂў Р В Р вЂ Р РЋР вЂљР В Р’ВµР В РЎВР РЋР РЏ Р В РЎвЂ”Р В РЎвЂўР РЋР С“Р РЋРІР‚С™Р РЋРЎвЂњР В РЎвЂ”Р В Р’В»Р В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ Р В РўвЂР В Р’ВµР В Р вЂ¦Р В Р’ВµР В РЎвЂ“ Р В Р вЂ¦Р В Р’В° Р РЋР С“Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™ Р В РЎВР В РЎвЂўР В Р’В¶Р В Р’ВµР РЋРІР‚С™ Р В Р’В·Р В Р’В°Р В Р вЂ¦Р РЋР РЏР РЋРІР‚С™Р РЋР Р‰ Р В РўвЂР В РЎвЂў 3-Р РЋРІР‚В¦ Р РЋР вЂљР В Р’В°Р В Р’В±Р В РЎвЂўР РЋРІР‚РЋР В РЎвЂР РЋРІР‚В¦ Р В РўвЂР В Р вЂ¦Р В Р’ВµР В РІвЂћвЂ“
       </div>
 
       <table>
         <thead>
           <tr>
-            <th class="center">№</th>
-            <th>Наименование</th>
-            <th class="center">Ед.</th>
-            <th class="center">Кол-во</th>
-            <th class="right nowrap">Цена</th>
-            <th class="right nowrap">Сумма</th>
+            <th class="center">Р Р†РІР‚С›РІР‚вЂњ</th>
+            <th>Р В РЎСљР В Р’В°Р В РЎвЂР В РЎВР В Р’ВµР В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В Р’Вµ</th>
+            <th class="center">Р В РІР‚СћР В РўвЂ.</th>
+            <th class="center">Р В РЎв„ўР В РЎвЂўР В Р’В»-Р В Р вЂ Р В РЎвЂў</th>
+            <th class="right nowrap">Р В Р’В¦Р В Р’ВµР В Р вЂ¦Р В Р’В°</th>
+            <th class="right nowrap">Р В Р Р‹Р РЋРЎвЂњР В РЎВР В РЎВР В Р’В°</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td class="center">1</td>
             <td>{description}</td>
-            <td class="center">услуга</td>
+            <td class="center">Р РЋРЎвЂњР РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“Р В Р’В°</td>
             <td class="center">1</td>
             <td class="right nowrap">{amount}</td>
             <td class="right nowrap">{amount}</td>
@@ -3115,22 +3236,22 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
       <table class="no-border">
         {f'''
         <tr>
-          <td class="right">Стоимость без НДС:</td>
+          <td class="right">Р В Р Р‹Р РЋРІР‚С™Р В РЎвЂўР В РЎвЂР В РЎВР В РЎвЂўР РЋР С“Р РЋРІР‚С™Р РЋР Р‰ Р В Р’В±Р В Р’ВµР В Р’В· Р В РЎСљР В РІР‚СњР В Р Р‹:</td>
           <td class="right nowrap" style="width:160px;">{amount_net}</td>
         </tr>
         <tr>
-          <td class="right">НДС {vat_rate:g}%:</td>
+          <td class="right">Р В РЎСљР В РІР‚СњР В Р Р‹ {vat_rate:g}%:</td>
           <td class="right nowrap" style="width:160px;">{vat_amount}</td>
         </tr>
         ''' if tax_mode == "with_vat" else ""}
         <tr>
-          <td class="right"><strong>Итого:</strong></td>
+          <td class="right"><strong>Р В Р’ВР РЋРІР‚С™Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў:</strong></td>
           <td class="right nowrap" style="width:160px;"><strong>{amount}</strong></td>
         </tr>
       </table>
 
-      <p class="small">Всего наименований 1, на сумму {amount} {currency}</p>
-      <p class="small"><strong>Всего к оплате:</strong> {amount_words}. {vat_note}</p>
+      <p class="small">Р В РІР‚в„ўР РЋР С“Р В Р’ВµР В РЎвЂ“Р В РЎвЂў Р В Р вЂ¦Р В Р’В°Р В РЎвЂР В РЎВР В Р’ВµР В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В РІвЂћвЂ“ 1, Р В Р вЂ¦Р В Р’В° Р РЋР С“Р РЋРЎвЂњР В РЎВР В РЎВР РЋРЎвЂњ {amount} {currency}</p>
+      <p class="small"><strong>Р В РІР‚в„ўР РЋР С“Р В Р’ВµР В РЎвЂ“Р В РЎвЂў Р В РЎвЂќ Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’Вµ:</strong> {amount_words}. {vat_note}</p>
     </div>
   </body>
 </html>
@@ -3157,7 +3278,7 @@ def _invoice_html(payload: Dict[str, object]) -> str:
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Счет на оплату {payload["number"]}</title>
+    <title>Р В Р Р‹Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™ Р В Р вЂ¦Р В Р’В° Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРЎвЂњ {payload["number"]}</title>
     <style>
       body {{
         font-family: "Times New Roman", serif;
@@ -3223,69 +3344,69 @@ def _invoice_html(payload: Dict[str, object]) -> str:
         <table class="bank-table">
           <tr>
             <td rowspan="2">
-              Банк получателя<br />
+              Р В РІР‚ВР В Р’В°Р В Р вЂ¦Р В РЎвЂќ Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р РЋРЎвЂњР РЋРІР‚РЋР В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР РЏ<br />
               {payload["beneficiary_bank"]}
             </td>
-            <td>БИК</td>
+            <td>Р В РІР‚ВР В Р’ВР В РЎв„ў</td>
             <td>{payload["beneficiary_bic"]}</td>
           </tr>
           <tr>
-            <td>ИИК</td>
+            <td>Р В Р’ВР В Р’ВР В РЎв„ў</td>
             <td>{payload["beneficiary_iban"]}</td>
           </tr>
           <tr>
             <td>
-              Бенефициар<br />
+              Р В РІР‚ВР В Р’ВµР В Р вЂ¦Р В Р’ВµР РЋРІР‚С›Р В РЎвЂР РЋРІР‚В Р В РЎвЂР В Р’В°Р РЋР вЂљ<br />
               {payload["beneficiary_name"]}
             </td>
-            <td>БИН</td>
+            <td>Р В РІР‚ВР В Р’ВР В РЎСљ</td>
             <td>{payload["beneficiary_bin"]}</td>
           </tr>
           <tr>
-            <td>КБе</td>
+            <td>Р В РЎв„ўР В РІР‚ВР В Р’Вµ</td>
             <td colspan="2">{payload["beneficiary_kbe"]}</td>
           </tr>
         </table>
 
-        <h1>Счет на оплату № {payload["number"]} от {payload["date"]}</h1>
+        <h1>Р В Р Р‹Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™ Р В Р вЂ¦Р В Р’В° Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРЎвЂњ Р Р†РІР‚С›РІР‚вЂњ {payload["number"]} Р В РЎвЂўР РЋРІР‚С™ {payload["date"]}</h1>
 
         <div class="section">
-          <strong>Поставщик:</strong> {payload["beneficiary_name"]}, ИИН/БИН {payload["beneficiary_bin"]}
+          <strong>Р В РЎСџР В РЎвЂўР РЋР С“Р РЋРІР‚С™Р В Р’В°Р В Р вЂ Р РЋРІР‚В°Р В РЎвЂР В РЎвЂќ:</strong> {payload["beneficiary_name"]}, Р В Р’ВР В Р’ВР В РЎСљ/Р В РІР‚ВР В Р’ВР В РЎСљ {payload["beneficiary_bin"]}
         </div>
         <div class="section">
-          <strong>Покупатель:</strong> {payload["payer_name"]}, {payload["payer_bin"]}, {payload["payer_address"]}
+          <strong>Р В РЎСџР В РЎвЂўР В РЎвЂќР РЋРЎвЂњР В РЎвЂ”Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰:</strong> {payload["payer_name"]}, {payload["payer_bin"]}, {payload["payer_address"]}
         </div>
 
         <table>
           <thead>
             <tr>
-              <th>№</th>
-              <th>Наименование</th>
-              <th>Кол-во</th>
-              <th>Ед.</th>
-              <th>Цена</th>
-              <th>Сумма</th>
+              <th>Р Р†РІР‚С›РІР‚вЂњ</th>
+              <th>Р В РЎСљР В Р’В°Р В РЎвЂР В РЎВР В Р’ВµР В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В Р’Вµ</th>
+              <th>Р В РЎв„ўР В РЎвЂўР В Р’В»-Р В Р вЂ Р В РЎвЂў</th>
+              <th>Р В РІР‚СћР В РўвЂ.</th>
+              <th>Р В Р’В¦Р В Р’ВµР В Р вЂ¦Р В Р’В°</th>
+              <th>Р В Р Р‹Р РЋРЎвЂњР В РЎВР В РЎВР В Р’В°</th>
             </tr>
           </thead>
           <tbody>
             {items_html}
             <tr>
-              <td colspan="5" class="right"><strong>Итого</strong></td>
+              <td colspan="5" class="right"><strong>Р В Р’ВР РЋРІР‚С™Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў</strong></td>
               <td class="right"><strong>{payload["amount"]} {payload["currency"]}</strong></td>
             </tr>
             <tr>
-              <td colspan="5" class="right">НДС</td>
-              <td class="right">Без НДС</td>
+              <td colspan="5" class="right">Р В РЎСљР В РІР‚СњР В Р Р‹</td>
+              <td class="right">Р В РІР‚ВР В Р’ВµР В Р’В· Р В РЎСљР В РІР‚СњР В Р Р‹</td>
             </tr>
             <tr>
-              <td colspan="5" class="right"><strong>Всего к оплате</strong></td>
+              <td colspan="5" class="right"><strong>Р В РІР‚в„ўР РЋР С“Р В Р’ВµР В РЎвЂ“Р В РЎвЂў Р В РЎвЂќ Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’Вµ</strong></td>
               <td class="right"><strong>{payload["amount"]} {payload["currency"]}</strong></td>
             </tr>
           </tbody>
         </table>
 
         <div class="section">
-          Всего наименований {payload["items_count"]}, на сумму {payload["amount"]} {payload["currency"]}.
+          Р В РІР‚в„ўР РЋР С“Р В Р’ВµР В РЎвЂ“Р В РЎвЂў Р В Р вЂ¦Р В Р’В°Р В РЎвЂР В РЎВР В Р’ВµР В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В РІвЂћвЂ“ {payload["items_count"]}, Р В Р вЂ¦Р В Р’В° Р РЋР С“Р РЋРЎвЂњР В РЎВР В РЎВР РЋРЎвЂњ {payload["amount"]} {payload["currency"]}.
         </div>
       </div>
     </body>
@@ -3605,12 +3726,139 @@ def _normalize_email(value: Optional[str]) -> str:
     return (value or "").strip().lower()
 
 
-def _hash_password(password: str, salt: str) -> str:
+def _issue_password_salt() -> str:
+    return secrets.token_hex(16)
+
+
+def _hash_password_legacy(password: str, salt: str) -> str:
     return hashlib.sha256(f"{salt}{password}".encode("utf-8")).hexdigest()
 
 
+def _hash_password(password: str, salt: str) -> str:
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        str(salt).encode("utf-8"),
+        _PASSWORD_HASH_ITERATIONS,
+    ).hex()
+    return f"{_PASSWORD_HASH_SCHEME}${_PASSWORD_HASH_ITERATIONS}${digest}"
+
+
 def _verify_password(password: str, salt: str, stored_hash: str) -> bool:
-    return hmac.compare_digest(_hash_password(password, salt), stored_hash)
+    raw = str(stored_hash or "")
+    if raw.startswith(f"{_PASSWORD_HASH_SCHEME}$"):
+        try:
+            _, iter_raw, digest = raw.split("$", 2)
+            iterations = int(iter_raw)
+        except Exception:
+            return False
+        check = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            str(salt).encode("utf-8"),
+            iterations,
+        ).hex()
+        return hmac.compare_digest(check, digest)
+    return hmac.compare_digest(_hash_password_legacy(password, salt), raw)
+
+
+def _password_hash_needs_upgrade(stored_hash: Optional[str], salt: Optional[str]) -> bool:
+    raw = str(stored_hash or "")
+    if not raw.startswith(f"{_PASSWORD_HASH_SCHEME}$"):
+        return True
+    return len(str(salt or "")) < 32
+
+
+def _upgrade_password_hash_if_needed(conn, access: Dict[str, object], plain_password: str) -> None:
+    if not _password_hash_needs_upgrade(access.get("password_hash"), access.get("salt")):
+        return
+    new_salt = _issue_password_salt()
+    new_hash = _hash_password(plain_password, new_salt)
+    conn.execute(
+        "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
+        (new_hash, new_salt, access["id"]),
+    )
+    if (access.get("role") or "member") == "owner":
+        conn.execute(
+            "UPDATE users SET password_hash=?, salt=? WHERE id=?",
+            (new_hash, new_salt, access["user_id"]),
+        )
+
+
+def _request_client_ip(request: Optional[Request]) -> str:
+    if not request:
+        return "unknown"
+    forwarded = str(request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip() or "unknown"
+    real_ip = str(request.headers.get("x-real-ip") or "").strip()
+    if real_ip:
+        return real_ip
+    try:
+        if request.client and request.client.host:
+            return str(request.client.host)
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _security_bucket_cleanup(bucket: str, window_sec: int) -> List[float]:
+    now = time.time()
+    attempts = [ts for ts in _SECURITY_FAILURE_LOG.get(bucket, []) if now - ts <= float(window_sec)]
+    _SECURITY_FAILURE_LOG[bucket] = attempts
+    return attempts
+
+
+def _security_assert_not_blocked(bucket: str) -> None:
+    now = time.time()
+    blocked_until = float(_SECURITY_BLOCKED_UNTIL.get(bucket, 0.0) or 0.0)
+    if blocked_until > now:
+        raise HTTPException(status_code=429, detail="Too many attempts. Please try again later")
+
+
+def _security_register_failure(bucket: str, max_failures: int, window_sec: int, block_sec: int) -> None:
+    attempts = _security_bucket_cleanup(bucket, window_sec)
+    attempts.append(time.time())
+    _SECURITY_FAILURE_LOG[bucket] = attempts
+    if len(attempts) >= int(max_failures):
+        _SECURITY_BLOCKED_UNTIL[bucket] = time.time() + float(block_sec)
+
+
+def _security_clear_failures(bucket: str) -> None:
+    _SECURITY_FAILURE_LOG.pop(bucket, None)
+    _SECURITY_BLOCKED_UNTIL.pop(bucket, None)
+
+
+def _sync_owner_user_from_access(conn, access: Dict[str, object]) -> None:
+    if not access or (access.get("role") or "member") != "owner" or not access.get("user_id"):
+        return
+    conn.execute(
+        "UPDATE users SET email=?, password_hash=?, salt=? WHERE id=?",
+        (
+            _normalize_email(access.get("email")),
+            access.get("password_hash"),
+            access.get("salt"),
+            access["user_id"],
+        ),
+    )
+
+
+def _set_access_password(conn, access: Dict[str, object], password: str, activate: bool = True) -> tuple[str, str]:
+    salt = _issue_password_salt()
+    password_hash = _hash_password(password, salt)
+    if activate:
+        conn.execute(
+            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
+            (password_hash, salt, access["id"]),
+        )
+    else:
+        conn.execute(
+            "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
+            (password_hash, salt, access["id"]),
+        )
+    refreshed = dict(conn.execute("SELECT * FROM user_accesses WHERE id=?", (access["id"],)).fetchone())
+    _sync_owner_user_from_access(conn, refreshed)
+    return password_hash, salt
 
 
 def _ensure_owner_access(conn, user_id: int):
@@ -3620,11 +3868,16 @@ def _ensure_owner_access(conn, user_id: int):
     owner_email = _normalize_email(user["email"])
     row = conn.execute("SELECT * FROM user_accesses WHERE user_id=? AND role='owner' ORDER BY id LIMIT 1", (user_id,)).fetchone()
     if row:
-        conn.execute(
-            "UPDATE user_accesses SET email=?, password_hash=?, salt=?, status='active' WHERE id=?",
-            (owner_email, user["password_hash"], user["salt"], row["id"]),
-        )
+        updates = ["email=?", "status='active'"]
+        params: List[object] = [owner_email]
+        if (not row.get("password_hash") or not row.get("salt")) and user.get("password_hash") and user.get("salt"):
+            updates.extend(["password_hash=?", "salt=?"])
+            params.extend([user["password_hash"], user["salt"]])
+        params.append(row["id"])
+        conn.execute(f"UPDATE user_accesses SET {', '.join(updates)} WHERE id=?", params)
         refreshed = conn.execute("SELECT * FROM user_accesses WHERE id=?", (row["id"],)).fetchone()
+        if refreshed:
+            _sync_owner_user_from_access(conn, dict(refreshed))
         return dict(refreshed) if refreshed else dict(row)
     conn.execute(
         """
@@ -3634,6 +3887,8 @@ def _ensure_owner_access(conn, user_id: int):
         (user_id, owner_email, user["password_hash"], user["salt"]),
     )
     row = conn.execute("SELECT * FROM user_accesses WHERE user_id=? AND role='owner' ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
+    if row:
+        _sync_owner_user_from_access(conn, dict(row))
     return dict(row) if row else None
 
 
@@ -3641,11 +3896,145 @@ def _get_access_by_email(conn, email: str):
     normalized = _normalize_email(email)
     row = conn.execute("SELECT * FROM user_accesses WHERE email=? AND status='active'", (normalized,)).fetchone()
     if row:
-        return dict(row)
+        payload = dict(row)
+        _sync_owner_user_from_access(conn, payload)
+        return payload
     legacy_user = conn.execute("SELECT id FROM users WHERE email=?", (normalized,)).fetchone()
     if legacy_user:
         return _ensure_owner_access(conn, legacy_user["id"])
     return None
+
+
+def _issue_access_setup_token() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def _public_app_base_url() -> str:
+    value = (
+        os.getenv("APP_PUBLIC_URL")
+        or os.getenv("FRONTEND_PUBLIC_URL")
+        or os.getenv("APP_BASE_URL")
+        or "https://app.envidicy.kz"
+    )
+    return str(value).strip().rstrip("/")
+
+
+def _build_access_setup_url(email: str, setup_token: str) -> str:
+    query = urlencode({"mode": "set-password", "email": email, "setup_token": setup_token})
+    return f"{_public_app_base_url()}/login?{query}"
+
+
+def _url_token_ttl_sec() -> int:
+    try:
+        return max(60, int(os.getenv("PUBLIC_URL_TOKEN_TTL_SEC", "1800") or 1800))
+    except Exception:
+        return 1800
+
+
+def _url_token_secret() -> bytes:
+    raw = (os.getenv("PUBLIC_URL_TOKEN_SECRET") or os.getenv("URL_TOKEN_SECRET") or "").strip()
+    if not raw:
+        raw = _PUBLIC_URL_TOKEN_SECRET_FALLBACK
+    return str(raw).encode("utf-8")
+
+
+def _urlsafe_b64encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _urlsafe_b64decode(raw: str) -> bytes:
+    padded = raw + ("=" * ((4 - (len(raw) % 4)) % 4))
+    return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+
+def _issue_scoped_url_token(user_id: int, scope: str, resource_id: Optional[int] = None, ttl_sec: Optional[int] = None) -> str:
+    expires_at = int(time.time()) + (int(ttl_sec) if ttl_sec is not None else _url_token_ttl_sec())
+    payload = {
+        "uid": int(user_id),
+        "scp": str(scope),
+        "exp": int(expires_at),
+        "rid": int(resource_id) if resource_id is not None else None,
+    }
+    payload_b64 = _urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signature = hmac.new(_url_token_secret(), payload_b64.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload_b64}.{signature}"
+
+
+def _verify_scoped_url_token(token: str, scope: str, resource_id: Optional[int] = None) -> Optional[int]:
+    raw = str(token or "").strip()
+    if not raw or "." not in raw:
+        return None
+    payload_b64, signature = raw.rsplit(".", 1)
+    expected_signature = hmac.new(_url_token_secret(), payload_b64.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected_signature, signature):
+        return None
+    try:
+        payload = json.loads(_urlsafe_b64decode(payload_b64).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        uid = int(payload.get("uid"))
+        exp = int(payload.get("exp"))
+    except Exception:
+        return None
+    if payload.get("scp") != scope:
+        return None
+    if exp < int(time.time()):
+        return None
+    rid = payload.get("rid")
+    if resource_id is None:
+        if rid not in (None, "", 0):
+            return None
+    else:
+        try:
+            if int(rid) != int(resource_id):
+                return None
+        except Exception:
+            return None
+    return uid
+
+
+def _resolve_scoped_download_user_id(token: Optional[str], current_user: Optional[Dict[str, object]], scope: str, resource_id: Optional[int] = None) -> int:
+    if token:
+        uid = _verify_scoped_url_token(token, scope=scope, resource_id=resource_id)
+        if uid is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        return uid
+    if current_user and current_user.get("id"):
+        return int(current_user["id"])
+    raise HTTPException(status_code=401, detail="Missing token")
+
+
+def _build_avatar_url(user_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="avatar")
+    return f"/profile/avatar?{urlencode({'token': token})}"
+
+
+def _build_document_download_url(user_id: int, doc_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="document_download", resource_id=doc_id)
+    return f"/documents/{doc_id}?{urlencode({'token': token})}"
+
+
+def _build_client_finance_document_download_url(user_id: int, doc_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="client_finance_document_download", resource_id=doc_id)
+    return f"/client-finance-documents/{doc_id}?{urlencode({'token': token})}"
+
+
+def _build_wallet_invoice_page_url(user_id: int, request_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="wallet_invoice_page", resource_id=request_id)
+    return f"/wallet/topup-requests/{request_id}/invoice?{urlencode({'token': token})}"
+
+
+def _build_wallet_invoice_pdf_url(user_id: int, request_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="wallet_invoice_pdf_uploaded", resource_id=request_id)
+    return f"/wallet/topup-requests/{request_id}/pdf?{urlencode({'token': token})}"
+
+
+def _build_wallet_invoice_generated_pdf_url(user_id: int, request_id: int) -> str:
+    token = _issue_scoped_url_token(user_id, scope="wallet_invoice_pdf_generated", resource_id=request_id)
+    return f"/wallet/topup-requests/{request_id}/pdf-generated?{urlencode({'token': token})}"
 
 
 def _issue_user_token(conn, user_id: int, login_email: Optional[str] = None) -> str:
@@ -3935,13 +4324,25 @@ def admin_impersonate_user(user_id: int, admin_user=Depends(get_admin_user)):
         return {"id": user_id, "email": user["email"], "token": token}
 
 
-@app.get("/admin/check-key")
-def admin_check_key(key: str):
-    admin_key = os.getenv("ADMIN_PORTAL_KEY")
+@app.post("/admin/check-key")
+def admin_check_key(payload: Dict[str, object], request: Request):
+    admin_key = str(os.getenv("ADMIN_PORTAL_KEY") or "").strip()
     if not admin_key:
         raise HTTPException(status_code=500, detail="Admin portal key not set")
-    if key != admin_key:
+    key = str((payload or {}).get("key") or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="key is required")
+    bucket = f"admin-key:{_request_client_ip(request)}"
+    _security_assert_not_blocked(bucket)
+    if not hmac.compare_digest(key, admin_key):
+        _security_register_failure(
+            bucket,
+            max_failures=_ADMIN_KEY_RATE_LIMIT_MAX_FAILURES,
+            window_sec=_ADMIN_KEY_RATE_LIMIT_WINDOW_SEC,
+            block_sec=_ADMIN_KEY_RATE_LIMIT_BLOCK_SEC,
+        )
         raise HTTPException(status_code=403, detail="Invalid key")
+    _security_clear_failures(bucket)
     return {"status": "ok"}
 
 
@@ -3997,6 +4398,7 @@ class PasswordReset(BaseModel):
 class SetPasswordPayload(BaseModel):
     email: str
     new_password: str
+    setup_token: str
 
 
 class AccessCreatePayload(BaseModel):
@@ -4135,7 +4537,7 @@ def register(payload: AuthPayload):
         existing = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         if existing or _get_access_by_email(conn, email):
             raise HTTPException(status_code=400, detail="User already exists")
-        salt = secrets.token_hex(8)
+        salt = _issue_password_salt()
         password_hash = _hash_password(password, salt)
         cur = conn.execute(
             "INSERT INTO users (email, password_hash, salt) VALUES (?, ?, ?)",
@@ -4159,24 +4561,46 @@ def register(payload: AuthPayload):
 
 
 @app.post("/auth/login")
-def login(payload: AuthPayload):
+def login(payload: AuthPayload, request: Request):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     email = _normalize_email(payload.email)
     password = payload.password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
+    bucket = f"login:{_request_client_ip(request)}:{email}"
+    _security_assert_not_blocked(bucket)
     with get_conn() as conn:
         access = _get_access_by_email(conn, email)
         if not access or not access.get("password_hash") or not access.get("salt"):
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
             raise HTTPException(status_code=401, detail="Invalid credentials")
         if not _verify_password(password, access["salt"], access["password_hash"]):
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
             raise HTTPException(status_code=401, detail="Invalid credentials")
         user = conn.execute("SELECT * FROM users WHERE id=?", (access["user_id"],)).fetchone()
         if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        _upgrade_password_hash_if_needed(conn, access, password)
         token = _issue_user_token(conn, user["id"], access["email"])
         conn.commit()
+        _security_clear_failures(bucket)
         return {
             "id": user["id"],
             "email": access["email"],
@@ -4186,7 +4610,8 @@ def login(payload: AuthPayload):
 
 
 @app.get("/auth/access-status")
-def auth_access_status(email: str):
+def auth_access_status(email: str, current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     normalized = _normalize_email(email)
@@ -4194,9 +4619,9 @@ def auth_access_status(email: str):
         raise HTTPException(status_code=400, detail="Email is required")
     with get_conn() as conn:
         access = _get_access_by_email(conn, normalized)
-        if not access:
+        if not access or int(access.get("user_id") or 0) != int(current_user["id"]):
             return {"exists": False, "needs_password": False}
-        needs_password = not access.get("password_hash") or not access.get("salt")
+        needs_password = ((access.get("role") or "member") != "owner") and not bool(access.get("password_hash"))
         return {
             "exists": True,
             "needs_password": needs_password,
@@ -4205,30 +4630,62 @@ def auth_access_status(email: str):
 
 
 @app.post("/auth/set-password")
-def set_password(payload: SetPasswordPayload):
+def set_password(payload: SetPasswordPayload, request: Request):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     email = _normalize_email(payload.email)
     password = payload.new_password.strip()
-    if not email or not password:
-        raise HTTPException(status_code=400, detail="email and new_password are required")
+    setup_token = str(payload.setup_token or "").strip()
+    if not email or not password or not setup_token:
+        raise HTTPException(status_code=400, detail="email, setup_token and new_password are required")
+    bucket = f"set-password:{_request_client_ip(request)}:{email}"
+    _security_assert_not_blocked(bucket)
     with get_conn() as conn:
         access = _get_access_by_email(conn, email)
+        generic_error = HTTPException(status_code=400, detail="Password setup is unavailable for this invite")
         if not access:
-            raise HTTPException(status_code=404, detail="Email is not linked to any account")
-        salt = secrets.token_hex(8)
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
+            raise generic_error
+        if (access.get("role") or "member") == "owner":
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
+            raise generic_error
+        if access.get("password_hash"):
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
+            raise generic_error
+        expected_token = str(access.get("salt") or "").strip()
+        if not expected_token or not hmac.compare_digest(expected_token, setup_token):
+            _security_register_failure(
+                bucket,
+                max_failures=_LOGIN_RATE_LIMIT_MAX_FAILURES,
+                window_sec=_LOGIN_RATE_LIMIT_WINDOW_SEC,
+                block_sec=_LOGIN_RATE_LIMIT_BLOCK_SEC,
+            )
+            raise generic_error
+
+        salt = _issue_password_salt()
         password_hash = _hash_password(password, salt)
         conn.execute(
             "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
             (password_hash, salt, access["id"]),
         )
-        if (access.get("role") or "member") == "owner":
-            conn.execute(
-                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                (password_hash, salt, access["user_id"]),
-            )
-        conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
+        conn.execute("DELETE FROM user_tokens WHERE user_id=? AND login_email=?", (access["user_id"], access["email"]))
         conn.commit()
+        _security_clear_failures(bucket)
         return {"status": "ok"}
 
 
@@ -4240,21 +4697,11 @@ def admin_reset_password(payload: PasswordReset, admin_user=Depends(get_admin_us
     password = payload.new_password.strip()
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and new_password are required")
-    salt = secrets.token_hex(8)
-    password_hash = _hash_password(password, salt)
     with get_conn() as conn:
         access = _get_access_by_email(conn, email)
         if not access:
             raise HTTPException(status_code=404, detail="User not found")
-        conn.execute(
-            "UPDATE user_accesses SET password_hash=?, salt=?, status='active' WHERE id=?",
-            (password_hash, salt, access["id"]),
-        )
-        if (access.get("role") or "member") == "owner":
-            conn.execute(
-                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                (password_hash, salt, access["user_id"]),
-            )
+        _set_access_password(conn, access, password, activate=True)
         conn.execute("DELETE FROM user_tokens WHERE user_id=?", (access["user_id"],))
         conn.commit()
         return {"status": "ok"}
@@ -4450,20 +4897,11 @@ def _meta_fetch_account_billing(account_external_id: str, force_refresh: bool = 
     data = resp.json()
     currency = data.get("currency") or "USD"
 
-    def _meta_money_from_minor(value: object) -> float:
-        try:
-            raw = float(value or 0)
-        except (TypeError, ValueError):
-            return 0.0
-        zero_decimal = {"JPY", "KRW", "VND", "CLP", "PYG", "UGX", "XAF", "XOF", "XPF"}
-        divisor = 1 if currency in zero_decimal else 100
-        return raw / divisor
-
-    spend = _meta_money_from_minor(data.get("amount_spent"))
+    spend = _meta_money_from_minor(currency, data.get("amount_spent"))
     spend_cap_raw = data.get("spend_cap")
     spend_cap = None
     try:
-        spend_cap_value = _meta_money_from_minor(spend_cap_raw) if spend_cap_raw not in (None, "") else None
+        spend_cap_value = _meta_money_from_minor(currency, spend_cap_raw) if spend_cap_raw not in (None, "") else None
         if spend_cap_value and spend_cap_value > 0:
             spend_cap = spend_cap_value
     except (TypeError, ValueError):
@@ -4479,6 +4917,59 @@ def _meta_fetch_account_billing(account_external_id: str, force_refresh: bool = 
         "updated_at": datetime.utcnow().isoformat() + "Z",
     }
     return _live_billing_cache_set(cache_key, payload)
+
+
+def _meta_money_from_minor(currency: str, value: object) -> float:
+    try:
+        raw = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    zero_decimal = {"JPY", "KRW", "VND", "CLP", "PYG", "UGX", "XAF", "XOF", "XPF"}
+    divisor = 1 if str(currency or "").upper() in zero_decimal else 100
+    return raw / divisor
+
+
+def _meta_money_to_minor(currency: str, value: object) -> int:
+    try:
+        raw = float(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    zero_decimal = {"JPY", "KRW", "VND", "CLP", "PYG", "UGX", "XAF", "XOF", "XPF"}
+    multiplier = 1 if str(currency or "").upper() in zero_decimal else 100
+    return int(round(raw * multiplier))
+
+
+def _meta_update_account_spend_cap(account_external_id: str, target_spend_cap: float) -> Dict[str, object]:
+    token = os.getenv("META_ACCESS_TOKEN")
+    if not token:
+        raise HTTPException(status_code=500, detail="META_ACCESS_TOKEN is not set")
+
+    billing = _meta_fetch_account_billing(account_external_id, force_refresh=True)
+    currency = str(billing.get("currency") or "USD").upper()
+    spend = float(billing.get("spend") or 0)
+    normalized_target = max(float(target_spend_cap or 0), spend)
+
+    url = f"https://graph.facebook.com/v20.0/act_{account_external_id}"
+    payload = {
+        "access_token": token,
+        "spend_cap": str(_meta_money_to_minor(currency, normalized_target)),
+    }
+    resp = httpx.post(url, data=payload, timeout=20)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Meta spend cap update error: {resp.text}")
+
+    cache_key = f"meta:{account_external_id}"
+    _LIVE_BILLING_CACHE.pop(cache_key, None)
+    return _meta_fetch_account_billing(account_external_id, force_refresh=True)
+
+
+def _meta_increment_account_spend_cap(account_external_id: str, amount_delta: float) -> Dict[str, object]:
+    billing = _meta_fetch_account_billing(account_external_id, force_refresh=True)
+    current_limit = billing.get("limit")
+    current_spend = float(billing.get("spend") or 0)
+    base_limit = float(current_limit) if current_limit is not None else current_spend
+    target_spend_cap = max(base_limit, current_spend) + max(float(amount_delta or 0), 0.0)
+    return _meta_update_account_spend_cap(account_external_id, target_spend_cap)
 
 
 def _google_ads_client() -> GoogleAdsClient:
@@ -4574,7 +5065,7 @@ def _google_fetch_account_billing(customer_id: str, force_refresh: bool = False)
             "spend": None,
             "limit": None,
             "balance": None,
-            "error": "Google customer ID не задан или указан неверно",
+            "error": "Google customer ID Р В Р вЂ¦Р В Р’Вµ Р В Р’В·Р В Р’В°Р В РўвЂР В Р’В°Р В Р вЂ¦ Р В РЎвЂР В Р’В»Р В РЎвЂ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦ Р В Р вЂ¦Р В Р’ВµР В Р вЂ Р В Р’ВµР РЋР вЂљР В Р вЂ¦Р В РЎвЂў",
             "source": "google_ads_api",
             "updated_at": datetime.utcnow().isoformat() + "Z",
         }
@@ -4667,7 +5158,7 @@ def _tiktok_fetch_account_billing(advertiser_id: str, force_refresh: bool = Fals
             "spend": None,
             "limit": None,
             "balance": None,
-            "error": "TikTok advertiser_id не задан или указан неверно",
+            "error": "TikTok advertiser_id Р В Р вЂ¦Р В Р’Вµ Р В Р’В·Р В Р’В°Р В РўвЂР В Р’В°Р В Р вЂ¦ Р В РЎвЂР В Р’В»Р В РЎвЂ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦ Р В Р вЂ¦Р В Р’ВµР В Р вЂ Р В Р’ВµР РЋР вЂљР В Р вЂ¦Р В РЎвЂў",
             "source": "tiktok_api",
             "updated_at": datetime.utcnow().isoformat() + "Z",
         }
@@ -5360,12 +5851,12 @@ def _google_fetch_audience_age_gender(customer_id: str, date_from: str, date_to:
         503004: "45-54",
         503005: "55-64",
         503006: "65+",
-        503999: "Не определен",
+        503999: "Р В РЎСљР В Р’Вµ Р В РЎвЂўР В РЎвЂ”Р РЋР вЂљР В Р’ВµР В РўвЂР В Р’ВµР В Р’В»Р В Р’ВµР В Р вЂ¦",
     }
     gender_labels = {
-        10: "Мужчины",
-        11: "Женщины",
-        20: "Не определен",
+        10: "Р В РЎС™Р РЋРЎвЂњР В Р’В¶Р РЋРІР‚РЋР В РЎвЂР В Р вЂ¦Р РЋРІР‚в„–",
+        11: "Р В РІР‚вЂњР В Р’ВµР В Р вЂ¦Р РЋРІР‚В°Р В РЎвЂР В Р вЂ¦Р РЋРІР‚в„–",
+        20: "Р В РЎСљР В Р’Вµ Р В РЎвЂўР В РЎвЂ”Р РЋР вЂљР В Р’ВµР В РўвЂР В Р’ВµР В Р’В»Р В Р’ВµР В Р вЂ¦",
     }
 
     age_query = f"""
@@ -5428,11 +5919,11 @@ def _google_fetch_audience_device(customer_id: str, date_from: str, date_to: str
     client = _google_ads_client()
     ga_service = client.get_service("GoogleAdsService")
     device_labels = {
-        2: "Мобильные",
-        3: "Планшеты",
-        4: "Компьютеры",
+        2: "Р В РЎС™Р В РЎвЂўР В Р’В±Р В РЎвЂР В Р’В»Р РЋР Р‰Р В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ",
+        3: "Р В РЎСџР В Р’В»Р В Р’В°Р В Р вЂ¦Р РЋРІвЂљВ¬Р В Р’ВµР РЋРІР‚С™Р РЋРІР‚в„–",
+        4: "Р В РЎв„ўР В РЎвЂўР В РЎВР В РЎвЂ”Р РЋР Р‰Р РЋР вЂ№Р РЋРІР‚С™Р В Р’ВµР РЋР вЂљР РЋРІР‚в„–",
         5: "Connected TV",
-        6: "Прочие",
+        6: "Р В РЎСџР РЋР вЂљР В РЎвЂўР РЋРІР‚РЋР В РЎвЂР В Р’Вµ",
     }
     query = f"""
         SELECT
@@ -5694,20 +6185,20 @@ def _format_ru_date(date_str: str) -> str:
     except Exception:
         return date_str
     months = [
-        "января",
-        "февраля",
-        "марта",
-        "апреля",
-        "мая",
-        "июня",
-        "июля",
-        "августа",
-        "сентября",
-        "октября",
-        "ноября",
-        "декабря",
+        "Р РЋР РЏР В Р вЂ¦Р В Р вЂ Р В Р’В°Р РЋР вЂљР РЋР РЏ",
+        "Р РЋРІР‚С›Р В Р’ВµР В Р вЂ Р РЋР вЂљР В Р’В°Р В Р’В»Р РЋР РЏ",
+        "Р В РЎВР В Р’В°Р РЋР вЂљР РЋРІР‚С™Р В Р’В°",
+        "Р В Р’В°Р В РЎвЂ”Р РЋР вЂљР В Р’ВµР В Р’В»Р РЋР РЏ",
+        "Р В РЎВР В Р’В°Р РЋР РЏ",
+        "Р В РЎвЂР РЋР вЂ№Р В Р вЂ¦Р РЋР РЏ",
+        "Р В РЎвЂР РЋР вЂ№Р В Р’В»Р РЋР РЏ",
+        "Р В Р’В°Р В Р вЂ Р В РЎвЂ“Р РЋРЎвЂњР РЋР С“Р РЋРІР‚С™Р В Р’В°",
+        "Р РЋР С“Р В Р’ВµР В Р вЂ¦Р РЋРІР‚С™Р РЋР РЏР В Р’В±Р РЋР вЂљР РЋР РЏ",
+        "Р В РЎвЂўР В РЎвЂќР РЋРІР‚С™Р РЋР РЏР В Р’В±Р РЋР вЂљР РЋР РЏ",
+        "Р В Р вЂ¦Р В РЎвЂўР РЋР РЏР В Р’В±Р РЋР вЂљР РЋР РЏ",
+        "Р В РўвЂР В Р’ВµР В РЎвЂќР В Р’В°Р В Р’В±Р РЋР вЂљР РЋР РЏ",
     ]
-    return f"{dt.day} {months[dt.month - 1]} {dt.year} г."
+    return f"{dt.day} {months[dt.month - 1]} {dt.year} Р В РЎвЂ“."
 
 
 def _wallet_invoice_page_html(
@@ -5722,22 +6213,22 @@ def _wallet_invoice_page_html(
     currency = request_row.get("currency") or "KZT"
     amount_words = _amount_to_words_ru(amount_val)
     date_ru = _format_ru_date(invoice_date)
-    company_name = company.get("name") or "—"
-    company_bin = company.get("bin") or "—"
+    company_name = company.get("name") or "Р Р†Р вЂљРІР‚Сњ"
+    company_bin = company.get("bin") or "Р Р†Р вЂљРІР‚Сњ"
     company_iin = company.get("iin") or ""
     company_address = company.get("legal_address") or company.get("factual_address") or ""
-    company_bank = company.get("bank") or "—"
-    company_iban = company.get("iban") or "—"
-    company_bic = company.get("bic") or "—"
-    company_kbe = company.get("kbe") or "—"
+    company_bank = company.get("bank") or "Р Р†Р вЂљРІР‚Сњ"
+    company_iban = company.get("iban") or "Р Р†Р вЂљРІР‚Сњ"
+    company_bic = company.get("bic") or "Р Р†Р вЂљРІР‚Сњ"
+    company_kbe = company.get("kbe") or "Р Р†Р вЂљРІР‚Сњ"
 
-    customer_name = customer.get("name") or "—"
-    customer_bin = customer.get("bin") or "—"
-    customer_address = customer.get("address") or "—"
+    customer_name = customer.get("name") or "Р Р†Р вЂљРІР‚Сњ"
+    customer_bin = customer.get("bin") or "Р Р†Р вЂљРІР‚Сњ"
+    customer_address = customer.get("address") or "Р Р†Р вЂљРІР‚Сњ"
 
     purpose = (
-        f"За услуги по использованию Программного обеспечения Исполнителя \"{company_name}\" "
-        f"по счету {invoice_number} от {date_ru}, согласно Публичному договору возмездного оказания услуг от 22.04.2025 г."
+        f"Р В РІР‚вЂќР В Р’В° Р РЋРЎвЂњР РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“Р В РЎвЂ Р В РЎвЂ”Р В РЎвЂў Р В РЎвЂР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р РЋР Р‰Р В Р’В·Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР РЋР вЂ№ Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р РЋР вЂљР В Р’В°Р В РЎВР В РЎВР В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂўР В Р’В±Р В Р’ВµР РЋР С“Р В РЎвЂ”Р В Р’ВµР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ Р В Р’ВР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР РЏ \"{company_name}\" "
+        f"Р В РЎвЂ”Р В РЎвЂў Р РЋР С“Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™Р РЋРЎвЂњ {invoice_number} Р В РЎвЂўР РЋРІР‚С™ {date_ru}, Р РЋР С“Р В РЎвЂўР В РЎвЂ“Р В Р’В»Р В Р’В°Р РЋР С“Р В Р вЂ¦Р В РЎвЂў Р В РЎСџР РЋРЎвЂњР В Р’В±Р В Р’В»Р В РЎвЂР РЋРІР‚РЋР В Р вЂ¦Р В РЎвЂўР В РЎВР РЋРЎвЂњ Р В РўвЂР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљР РЋРЎвЂњ Р В Р вЂ Р В РЎвЂўР В Р’В·Р В РЎВР В Р’ВµР В Р’В·Р В РўвЂР В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦Р В РЎвЂР РЋР РЏ Р РЋРЎвЂњР РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“ Р В РЎвЂўР РЋРІР‚С™ 22.04.2025 Р В РЎвЂ“."
     )
 
     return f"""
@@ -5746,7 +6237,7 @@ def _wallet_invoice_page_html(
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Счет на оплату</title>
+    <title>Р В Р Р‹Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™ Р В Р вЂ¦Р В Р’В° Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРЎвЂњ</title>
     <style>
       body {{
         font-family: "Arial", sans-serif;
@@ -5830,57 +6321,57 @@ def _wallet_invoice_page_html(
   </head>
   <body>
     <div class="page">
-      <div class="header">Образец платежного поручения</div>
+      <div class="header">Р В РЎвЂєР В Р’В±Р РЋР вЂљР В Р’В°Р В Р’В·Р В Р’ВµР РЋРІР‚В  Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В¶Р В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂ”Р В РЎвЂўР РЋР вЂљР РЋРЎвЂњР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ</div>
       <table class="bank-table">
         <tr>
           <td rowspan="2">
-            Бенефициар:<br />
+            Р В РІР‚ВР В Р’ВµР В Р вЂ¦Р В Р’ВµР РЋРІР‚С›Р В РЎвЂР РЋРІР‚В Р В РЎвЂР В Р’В°Р РЋР вЂљ:<br />
             {company_name}<br />
-            БИН: {company_bin}
+            Р В РІР‚ВР В Р’ВР В РЎСљ: {company_bin}
           </td>
-          <td>ИИК<br />{company_iban}</td>
-          <td>КБе<br />{company_kbe}</td>
+          <td>Р В Р’ВР В Р’ВР В РЎв„ў<br />{company_iban}</td>
+          <td>Р В РЎв„ўР В РІР‚ВР В Р’Вµ<br />{company_kbe}</td>
         </tr>
         <tr>
-          <td>БИК<br />{company_bic}</td>
-          <td>Код назначения платежа<br />853</td>
+          <td>Р В РІР‚ВР В Р’ВР В РЎв„ў<br />{company_bic}</td>
+          <td>Р В РЎв„ўР В РЎвЂўР В РўвЂ Р В Р вЂ¦Р В Р’В°Р В Р’В·Р В Р вЂ¦Р В Р’В°Р РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В¶Р В Р’В°<br />853</td>
         </tr>
         <tr>
-          <td colspan="3">Банк бенефициара: {company_bank}</td>
+          <td colspan="3">Р В РІР‚ВР В Р’В°Р В Р вЂ¦Р В РЎвЂќ Р В Р’В±Р В Р’ВµР В Р вЂ¦Р В Р’ВµР РЋРІР‚С›Р В РЎвЂР РЋРІР‚В Р В РЎвЂР В Р’В°Р РЋР вЂљР В Р’В°: {company_bank}</td>
         </tr>
       </table>
 
-      <div class="subline">Счет действителен в течение 5 рабочих дней</div>
+      <div class="subline">Р В Р Р‹Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™ Р В РўвЂР В Р’ВµР В РІвЂћвЂ“Р РЋР С“Р РЋРІР‚С™Р В Р вЂ Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р В Р’ВµР В Р вЂ¦ Р В Р вЂ  Р РЋРІР‚С™Р В Р’ВµР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ 5 Р РЋР вЂљР В Р’В°Р В Р’В±Р В РЎвЂўР РЋРІР‚РЋР В РЎвЂР РЋРІР‚В¦ Р В РўвЂР В Р вЂ¦Р В Р’ВµР В РІвЂћвЂ“</div>
 
-      <div class="section-title">Счет на оплату № {invoice_number} от {date_ru}</div>
+      <div class="section-title">Р В Р Р‹Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™ Р В Р вЂ¦Р В Р’В° Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРЎвЂњ Р Р†РІР‚С›РІР‚вЂњ {invoice_number} Р В РЎвЂўР РЋРІР‚С™ {date_ru}</div>
 
       <div class="subline">
-        Исполнитель: БИН / ИИН {company_bin}{f", {company_iin}" if company_iin else ""}, {company_name}, {company_address}
+        Р В Р’ВР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰: Р В РІР‚ВР В Р’ВР В РЎСљ / Р В Р’ВР В Р’ВР В РЎСљ {company_bin}{f", {company_iin}" if company_iin else ""}, {company_name}, {company_address}
       </div>
       <div class="subline">
-        Заказчик: БИН / ИИН {customer_bin}, {customer_name}, {customer_address}
+        Р В РІР‚вЂќР В Р’В°Р В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚РЋР В РЎвЂР В РЎвЂќ: Р В РІР‚ВР В Р’ВР В РЎСљ / Р В Р’ВР В Р’ВР В РЎСљ {customer_bin}, {customer_name}, {customer_address}
       </div>
-      <div class="subline">Договор: Публичный договор возмездного оказания услуг от 22.04.2025 г.</div>
+      <div class="subline">Р В РІР‚СњР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ: Р В РЎСџР РЋРЎвЂњР В Р’В±Р В Р’В»Р В РЎвЂР РЋРІР‚РЋР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р В РўвЂР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ Р В Р вЂ Р В РЎвЂўР В Р’В·Р В РЎВР В Р’ВµР В Р’В·Р В РўвЂР В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦Р В РЎвЂР РЋР РЏ Р РЋРЎвЂњР РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“ Р В РЎвЂўР РЋРІР‚С™ 22.04.2025 Р В РЎвЂ“.</div>
 
-      <div class="alert">Внимание! В назначение платежа скопируйте данные, указанные ниже.</div>
+      <div class="alert">Р В РІР‚в„ўР В Р вЂ¦Р В РЎвЂР В РЎВР В Р’В°Р В Р вЂ¦Р В РЎвЂР В Р’Вµ! Р В РІР‚в„ў Р В Р вЂ¦Р В Р’В°Р В Р’В·Р В Р вЂ¦Р В Р’В°Р РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В¶Р В Р’В° Р РЋР С“Р В РЎвЂќР В РЎвЂўР В РЎвЂ”Р В РЎвЂР РЋР вЂљР РЋРЎвЂњР В РІвЂћвЂ“Р РЋРІР‚С™Р В Р’Вµ Р В РўвЂР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ, Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ Р В Р вЂ¦Р В РЎвЂР В Р’В¶Р В Р’Вµ.</div>
       <div class="purpose">{purpose}</div>
 
       <table class="items">
         <thead>
           <tr>
-            <th>№</th>
-            <th>Наименование</th>
-            <th>Ед.</th>
-            <th>Кол-во</th>
-            <th>Цена</th>
-            <th>Сумма</th>
+            <th>Р Р†РІР‚С›РІР‚вЂњ</th>
+            <th>Р В РЎСљР В Р’В°Р В РЎвЂР В РЎВР В Р’ВµР В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В Р’Вµ</th>
+            <th>Р В РІР‚СћР В РўвЂ.</th>
+            <th>Р В РЎв„ўР В РЎвЂўР В Р’В»-Р В Р вЂ Р В РЎвЂў</th>
+            <th>Р В Р’В¦Р В Р’ВµР В Р вЂ¦Р В Р’В°</th>
+            <th>Р В Р Р‹Р РЋРЎвЂњР В РЎВР В РЎВР В Р’В°</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td>1</td>
-            <td>За услуги по использованию Программного обеспечения Исполнителя "{company_name}"</td>
-            <td>услуга</td>
+            <td>Р В РІР‚вЂќР В Р’В° Р РЋРЎвЂњР РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“Р В РЎвЂ Р В РЎвЂ”Р В РЎвЂў Р В РЎвЂР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р РЋР Р‰Р В Р’В·Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР РЋР вЂ№ Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р РЋР вЂљР В Р’В°Р В РЎВР В РЎВР В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂўР В Р’В±Р В Р’ВµР РЋР С“Р В РЎвЂ”Р В Р’ВµР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ Р В Р’ВР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР РЏ "{company_name}"</td>
+            <td>Р РЋРЎвЂњР РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“Р В Р’В°</td>
             <td>1</td>
             <td>{amount}</td>
             <td>{amount}</td>
@@ -5888,11 +6379,11 @@ def _wallet_invoice_page_html(
         </tbody>
       </table>
 
-      <div class="total">Итого: {amount} {currency}</div>
+      <div class="total">Р В Р’ВР РЋРІР‚С™Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў: {amount} {currency}</div>
 
       <div class="footnote">
-        Всего наименований 1, на сумму {amount} {currency}<br />
-        Всего к оплате: {amount_words} {currency}. Услуги Исполнителя НДС не облагаются (п.п. 46 ст. 394 Налогового кодекса Казахстана).
+        Р В РІР‚в„ўР РЋР С“Р В Р’ВµР В РЎвЂ“Р В РЎвЂў Р В Р вЂ¦Р В Р’В°Р В РЎвЂР В РЎВР В Р’ВµР В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В РІвЂћвЂ“ 1, Р В Р вЂ¦Р В Р’В° Р РЋР С“Р РЋРЎвЂњР В РЎВР В РЎВР РЋРЎвЂњ {amount} {currency}<br />
+        Р В РІР‚в„ўР РЋР С“Р В Р’ВµР В РЎвЂ“Р В РЎвЂў Р В РЎвЂќ Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’Вµ: {amount_words} {currency}. Р В Р в‚¬Р РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“Р В РЎвЂ Р В Р’ВР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР РЏ Р В РЎСљР В РІР‚СњР В Р Р‹ Р В Р вЂ¦Р В Р’Вµ Р В РЎвЂўР В Р’В±Р В Р’В»Р В Р’В°Р В РЎвЂ“Р В Р’В°Р РЋР вЂ№Р РЋРІР‚С™Р РЋР С“Р РЋР РЏ (Р В РЎвЂ”.Р В РЎвЂ”. 46 Р РЋР С“Р РЋРІР‚С™. 394 Р В РЎСљР В Р’В°Р В Р’В»Р В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂќР В РЎвЂўР В РўвЂР В Р’ВµР В РЎвЂќР РЋР С“Р В Р’В° Р В РЎв„ўР В Р’В°Р В Р’В·Р В Р’В°Р РЋРІР‚В¦Р РЋР С“Р РЋРІР‚С™Р В Р’В°Р В Р вЂ¦Р В Р’В°).
       </div>
 
       <div class="sign"></div>
@@ -6020,7 +6511,7 @@ def get_profile(current_user=Depends(get_current_user)):
         profile["primary_email"] = current_user.get("primary_email") or current_user["email"]
         profile["can_manage_accesses"] = bool(current_user.get("can_manage_accesses"))
         if profile.get("avatar_path"):
-            profile["avatar_url"] = f"/profile/avatar?token={_ensure_token(conn, current_user['id'])}"
+            profile["avatar_url"] = _build_avatar_url(current_user["id"])
         return profile
 
 
@@ -6052,7 +6543,7 @@ def update_profile(payload: ProfilePayload, current_user=Depends(get_current_use
         result["primary_email"] = current_user.get("primary_email") or current_user["email"]
         result["can_manage_accesses"] = bool(current_user.get("can_manage_accesses"))
         if result.get("avatar_path"):
-            result["avatar_url"] = f"/profile/avatar?token={_ensure_token(conn, current_user['id'])}"
+            result["avatar_url"] = _build_avatar_url(current_user["id"])
         return result
 
 
@@ -6065,14 +6556,22 @@ def list_profile_accesses(current_user=Depends(get_current_user)):
         _ensure_owner_access(conn, current_user["id"])
         rows = conn.execute(
             """
-            SELECT id, user_id, email, role, status, created_at
+            SELECT id, user_id, email, role, status, created_at, password_hash, salt
             FROM user_accesses
             WHERE user_id=?
             ORDER BY CASE WHEN role='owner' THEN 0 ELSE 1 END, created_at ASC
             """,
             (current_user["id"],),
         ).fetchall()
-        return {"can_manage_accesses": True, "items": [dict(row) for row in rows]}
+        items = []
+        for row in rows:
+            item = dict(row)
+            is_owner = (item.get("role") or "member") == "owner"
+            item["needs_password"] = (not is_owner) and (not bool(item.get("password_hash")))
+            item.pop("password_hash", None)
+            item.pop("salt", None)
+            items.append(item)
+        return {"can_manage_accesses": True, "items": items}
 
 
 @app.post("/profile/accesses")
@@ -6090,19 +6589,58 @@ def create_profile_access(payload: AccessCreatePayload, current_user=Depends(get
         existing = _get_access_by_email(conn, email)
         if existing:
             raise HTTPException(status_code=400, detail="Email is already linked to an account")
+        setup_token = _issue_access_setup_token()
         conn.execute(
             """
-            INSERT INTO user_accesses (user_id, email, role, status)
-            VALUES (?, ?, 'member', 'active')
+            INSERT INTO user_accesses (user_id, email, password_hash, salt, role, status)
+            VALUES (?, ?, NULL, ?, 'member', 'active')
             """,
-            (current_user["id"], email),
+            (current_user["id"], email, setup_token),
         )
         conn.commit()
         row = conn.execute(
             "SELECT id, user_id, email, role, status, created_at FROM user_accesses WHERE email=?",
             (email,),
         ).fetchone()
-        return dict(row) if row else {"status": "ok"}
+        data = dict(row) if row else {"status": "ok", "email": email}
+        data["needs_password"] = True
+        data["setup_token"] = setup_token
+        data["setup_url"] = _build_access_setup_url(email, setup_token)
+        return data
+
+
+@app.post("/profile/accesses/{access_id}/setup-token")
+def regenerate_profile_access_setup_token(access_id: int, current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_accesses WHERE id=? AND user_id=?",
+            (access_id, current_user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Access not found")
+        access = dict(row)
+        if (access.get("role") or "member") == "owner":
+            raise HTTPException(status_code=400, detail="Main email does not use setup token")
+        if access.get("password_hash"):
+            raise HTTPException(status_code=400, detail="Password is already set for this access")
+
+        setup_token = _issue_access_setup_token()
+        conn.execute(
+            "UPDATE user_accesses SET salt=?, status='active' WHERE id=?",
+            (setup_token, access_id),
+        )
+        conn.commit()
+        email = _normalize_email(access.get("email"))
+        return {
+            "id": access_id,
+            "email": email,
+            "needs_password": True,
+            "setup_token": setup_token,
+            "setup_url": _build_access_setup_url(email, setup_token),
+        }
 
 
 @app.delete("/profile/accesses/{access_id}")
@@ -6134,16 +6672,6 @@ def get_fees(current_user=Depends(get_current_user)):
         return _load_fee_config(profile.get("fee_config"))
 
 
-def _ensure_token(conn, user_id: int) -> str:
-    row = conn.execute("SELECT token FROM user_tokens WHERE user_id=? ORDER BY created_at DESC LIMIT 1", (user_id,)).fetchone()
-    if row and row["token"]:
-        return row["token"]
-    token = secrets.token_hex(32)
-    conn.execute("INSERT INTO user_tokens (user_id, token) VALUES (?, ?)", (user_id, token))
-    conn.commit()
-    return token
-
-
 @app.post("/profile/avatar")
 def upload_avatar(file: UploadFile = File(...), current_user=Depends(get_current_user)):
     if not get_conn:
@@ -6155,20 +6683,16 @@ def upload_avatar(file: UploadFile = File(...), current_user=Depends(get_current
         path = _save_avatar(file)
         conn.execute("UPDATE user_profiles SET avatar_path=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (path, current_user["id"]))
         conn.commit()
-        token = _ensure_token(conn, current_user["id"])
-        return {"status": "ok", "avatar_url": f"/profile/avatar?token={token}"}
+        return {"status": "ok", "avatar_url": _build_avatar_url(current_user["id"])}
 
 
 @app.get("/profile/avatar")
 def get_avatar(token: Optional[str] = None, current_user=Depends(get_optional_user)):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="avatar")
     with get_conn() as conn:
-        row = conn.execute("SELECT avatar_path FROM user_profiles WHERE user_id=?", (current_user["id"],)).fetchone()
+        row = conn.execute("SELECT avatar_path FROM user_profiles WHERE user_id=?", (user_id,)).fetchone()
         if not row or not row["avatar_path"]:
             raise HTTPException(status_code=404, detail="Avatar not found")
         return FileResponse(row["avatar_path"])
@@ -6231,7 +6755,7 @@ def list_notifications(current_user=Depends(get_current_user)):
                 "type": "topup",
                 "id": row["id"],
                 "created_at": row["created_at"],
-                "title": "Пополнение",
+                "title": "Р В РЎСџР В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ",
                 "status": row["status"],
                 "amount": row["amount_net"] or row["amount_input"],
                 "currency": row["currency"],
@@ -6243,7 +6767,7 @@ def list_notifications(current_user=Depends(get_current_user)):
                 "type": "account_request",
                 "id": row["id"],
                 "created_at": row["created_at"],
-                "title": "Аккаунт открыт",
+                "title": "Р В РЎвЂ™Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™ Р В РЎвЂўР РЋРІР‚С™Р В РЎвЂќР РЋР вЂљР РЋРІР‚в„–Р РЋРІР‚С™",
                 "status": row["status"],
                 "platform": row["platform"],
                 "name": row["name"],
@@ -6306,7 +6830,7 @@ def admin_notifications(admin_user=Depends(get_admin_user)):
                 "type": "account_request",
                 "id": row["id"],
                 "created_at": row["created_at"],
-                "title": "Новая заявка",
+                "title": "Р В РЎСљР В РЎвЂўР В Р вЂ Р В Р’В°Р РЋР РЏ Р В Р’В·Р В Р’В°Р РЋР РЏР В Р вЂ Р В РЎвЂќР В Р’В°",
                 "status": row["status"],
                 "platform": row["platform"],
                 "name": row["name"],
@@ -6319,7 +6843,7 @@ def admin_notifications(admin_user=Depends(get_admin_user)):
                 "type": "topup",
                 "id": row["id"],
                 "created_at": row["created_at"],
-                "title": "Новая заявка на пополнение",
+                "title": "Р В РЎСљР В РЎвЂўР В Р вЂ Р В Р’В°Р РЋР РЏ Р В Р’В·Р В Р’В°Р РЋР РЏР В Р вЂ Р В РЎвЂќР В Р’В° Р В Р вЂ¦Р В Р’В° Р В РЎвЂ”Р В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ",
                 "status": row["status"],
                 "amount": row["amount_net"] or row["amount_input"],
                 "currency": row["currency"],
@@ -6344,17 +6868,7 @@ def change_password(payload: ChangePasswordPayload, current_user=Depends(get_cur
             raise HTTPException(status_code=404, detail="Access not found")
         if not _verify_password(payload.current_password, access["salt"], access["password_hash"]):
             raise HTTPException(status_code=400, detail="Invalid current password")
-        salt = secrets.token_hex(8)
-        password_hash = _hash_password(payload.new_password, salt)
-        conn.execute(
-            "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
-            (password_hash, salt, access["id"]),
-        )
-        if (access.get("role") or "member") == "owner":
-            conn.execute(
-                "UPDATE users SET password_hash=?, salt=? WHERE id=?",
-                (password_hash, salt, current_user["id"]),
-            )
+        _set_access_password(conn, access, payload.new_password, activate=False)
         conn.execute("DELETE FROM user_tokens WHERE user_id=?", (current_user["id"],))
         new_token = _issue_user_token(conn, current_user["id"], current_user["email"])
         conn.commit()
@@ -6370,7 +6884,12 @@ def list_documents(current_user=Depends(get_current_user)):
             "SELECT id, title, created_at FROM user_documents WHERE user_id=? ORDER BY created_at DESC",
             (current_user["id"],),
         ).fetchall()
-        return [dict(row) for row in rows]
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["download_url"] = _build_document_download_url(current_user["id"], int(item["id"]))
+            items.append(item)
+        return items
 
 
 @app.get("/documents/{doc_id}")
@@ -6381,14 +6900,11 @@ def download_document(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="document_download", resource_id=doc_id)
     with get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM user_documents WHERE id=? AND user_id=?",
-            (doc_id, current_user["id"]),
+            (doc_id, user_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -6421,7 +6937,12 @@ def list_client_finance_documents(current_user=Depends(get_current_user)):
             """,
             (current_user["id"],),
         ).fetchall()
-        return [dict(row) for row in rows]
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["download_url"] = _build_client_finance_document_download_url(current_user["id"], int(item["id"]))
+            items.append(item)
+        return items
 
 
 @app.get("/client-finance-documents/{doc_id}")
@@ -6432,14 +6953,11 @@ def download_client_finance_document(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="client_finance_document_download", resource_id=doc_id)
     with get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM client_finance_documents WHERE id=? AND user_id=?",
-            (doc_id, current_user["id"]),
+            (doc_id, user_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -6715,11 +7233,11 @@ def meta_insights(
         "clicks": total_clicks,
         "currency": currency or "USD",
     }
-    status = "Данные обновлены."
+    status = "Р В РІР‚СњР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ Р В РЎвЂўР В Р’В±Р В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В Р’В»Р В Р’ВµР В Р вЂ¦Р РЋРІР‚в„–."
     if errors and not campaigns:
         status = "Meta token expired or Meta API is unavailable."
     elif errors:
-        status = f"Часть Meta аккаунтов недоступна: {len(errors)}"
+        status = f"Р В Р’В§Р В Р’В°Р РЋР С“Р РЋРІР‚С™Р РЋР Р‰ Meta Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р В РЎвЂўР В Р вЂ  Р В Р вЂ¦Р В Р’ВµР В РўвЂР В РЎвЂўР РЋР С“Р РЋРІР‚С™Р РЋРЎвЂњР В РЎвЂ”Р В Р вЂ¦Р В Р’В°: {len(errors)}"
     return {"summary": summary, "campaigns": campaigns, "status": status}
 
 
@@ -6790,11 +7308,11 @@ def google_insights(
         "conversions": total_conversions,
         "currency": currency or "USD",
     }
-    status = "Данные обновлены."
+    status = "Р В РІР‚СњР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ Р В РЎвЂўР В Р’В±Р В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В Р’В»Р В Р’ВµР В Р вЂ¦Р РЋРІР‚в„–."
     if errors and not campaigns:
         status = "Google token expired or Google Ads API is unavailable."
     elif errors:
-        status = f"Часть Google аккаунтов недоступна: {len(errors)}"
+        status = f"Р В Р’В§Р В Р’В°Р РЋР С“Р РЋРІР‚С™Р РЋР Р‰ Google Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р В РЎвЂўР В Р вЂ  Р В Р вЂ¦Р В Р’ВµР В РўвЂР В РЎвЂўР РЋР С“Р РЋРІР‚С™Р РЋРЎвЂњР В РЎвЂ”Р В Р вЂ¦Р В Р’В°: {len(errors)}"
     return {"summary": summary, "campaigns": campaigns, "status": status}
 
 
@@ -6848,7 +7366,7 @@ def tiktok_insights(
             if account_id:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Для аккаунта TikTok id={acc.get('id')} не указан advertiser id (external_id/account_code).",
+                    detail=f"Р В РІР‚СњР В Р’В»Р РЋР РЏ Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р В Р’В° TikTok id={acc.get('id')} Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦ advertiser id (external_id/account_code).",
                 )
             continue
         summary_currency = summary_currency or acc.get("currency")
@@ -7417,9 +7935,9 @@ def _dashboard_export_collect_audience_rows(payload: Dict[str, object], group: s
                 if not isinstance(row, dict):
                     continue
                 if platform == "meta":
-                    label = f"{row.get('age') or '—'} / {row.get('gender') or '—'}"
+                    label = f"{row.get('age') or 'Р Р†Р вЂљРІР‚Сњ'} / {row.get('gender') or 'Р Р†Р вЂљРІР‚Сњ'}"
                 else:
-                    label = f"{row.get('age_range') or '—'} / {row.get('gender') or '—'}"
+                    label = f"{row.get('age_range') or 'Р Р†Р вЂљРІР‚Сњ'} / {row.get('gender') or 'Р Р†Р вЂљРІР‚Сњ'}"
                 rows.append(
                     {
                         "platform": platform,
@@ -7433,20 +7951,20 @@ def _dashboard_export_collect_audience_rows(payload: Dict[str, object], group: s
             if platform == "meta":
                 for row in account.get("country") or []:
                     if isinstance(row, dict):
-                        rows.append({"platform": platform, "segment": f"Country: {row.get('country') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                        rows.append({"platform": platform, "segment": f"Country: {row.get('country') or 'Р Р†Р вЂљРІР‚Сњ'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
                 for row in account.get("region") or []:
                     if isinstance(row, dict):
-                        rows.append({"platform": platform, "segment": f"Region: {row.get('region') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                        rows.append({"platform": platform, "segment": f"Region: {row.get('region') or 'Р Р†Р вЂљРІР‚Сњ'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
             else:
                 for row in account.get("country") or []:
                     if isinstance(row, dict):
-                        rows.append({"platform": platform, "segment": f"Country: {row.get('geo') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                        rows.append({"platform": platform, "segment": f"Country: {row.get('geo') or 'Р Р†Р вЂљРІР‚Сњ'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
                 for row in account.get("region") or []:
                     if isinstance(row, dict):
-                        rows.append({"platform": platform, "segment": f"Region: {row.get('geo') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                        rows.append({"platform": platform, "segment": f"Region: {row.get('geo') or 'Р Р†Р вЂљРІР‚Сњ'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
                 for row in account.get("city") or []:
                     if isinstance(row, dict):
-                        rows.append({"platform": platform, "segment": f"City: {row.get('geo') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                        rows.append({"platform": platform, "segment": f"City: {row.get('geo') or 'Р Р†Р вЂљРІР‚Сњ'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
         elif group == "device":
             source_rows = []
             if platform == "meta":
@@ -7457,7 +7975,7 @@ def _dashboard_export_collect_audience_rows(payload: Dict[str, object], group: s
             for row in source_rows:
                 if not isinstance(row, dict):
                     continue
-                segment = row.get("impression_device") or row.get("device_platform") or row.get("device") or "—"
+                segment = row.get("impression_device") or row.get("device_platform") or row.get("device") or "Р Р†Р вЂљРІР‚Сњ"
                 rows.append(
                     {
                         "platform": platform,
@@ -7511,7 +8029,7 @@ def _dashboard_export_bar_rows(rows: List[Dict[str, object]], metric: str) -> Li
             value = float(row.get(metric) or 0)
         except Exception:
             value = 0.0
-        points.append({"date": row.get("date") or "—", "value": value})
+        points.append({"date": row.get("date") or "Р Р†Р вЂљРІР‚Сњ", "value": value})
     max_value = max([point["value"] for point in points], default=0.0) or 1.0
     for point in points:
         point["width"] = (point["value"] / max_value) * 100.0
@@ -7552,7 +8070,7 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
         for row in campaigns[:8]:
             rows_html += f"""
             <tr>
-              <td>{html.escape(str(row.get('campaign_name') or row.get('campaign_id') or '—'))}</td>
+              <td>{html.escape(str(row.get('campaign_name') or row.get('campaign_id') or 'Р Р†Р вЂљРІР‚Сњ'))}</td>
               <td>{html.escape(_dashboard_export_fmt_money(row.get('spend') or 0, row.get('currency') or row.get('account_currency') or summary.get('currency') or currency_default))}</td>
               <td>{html.escape(_dashboard_export_fmt_int(row.get('impressions') or 0))}</td>
               <td>{html.escape(_dashboard_export_fmt_int(row.get('clicks') or 0))}</td>
@@ -7560,26 +8078,26 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
             </tr>
             """
         if not rows_html:
-            rows_html = '<tr><td colspan="5">Нет данных</td></tr>'
+            rows_html = '<tr><td colspan="5">Р В РЎСљР В Р’ВµР РЋРІР‚С™ Р В РўвЂР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р РЋРІР‚В¦</td></tr>'
         return f"""
         <section class="section">
           <div class="section-head">
             <h2>{html.escape(title)}</h2>
-            <div class="section-note">{html.escape(str(error or 'Данные обновлены.'))}</div>
+            <div class="section-note">{html.escape(str(error or 'Р В РІР‚СњР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ Р В РЎвЂўР В Р’В±Р В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В Р’В»Р В Р’ВµР В Р вЂ¦Р РЋРІР‚в„–.'))}</div>
           </div>
           <div class="mini-kpis">
-            {summary_card('Расход', _dashboard_export_fmt_money(summary.get('spend') or 0, summary.get('currency') or currency_default), 'Итог по платформе')}
-            {summary_card('Показы', _dashboard_export_fmt_int(summary.get('impressions') or 0), 'За выбранный период')}
-            {summary_card('Клики', _dashboard_export_fmt_int(summary.get('clicks') or 0), 'Клики и переходы')}
-            {summary_card('CTR', _dashboard_export_fmt_pct(summary.get('ctr') or 0), 'Средний CTR')}
+            {summary_card('Р В Р’В Р В Р’В°Р РЋР С“Р РЋРІР‚В¦Р В РЎвЂўР В РўвЂ', _dashboard_export_fmt_money(summary.get('spend') or 0, summary.get('currency') or currency_default), 'Р В Р’ВР РЋРІР‚С™Р В РЎвЂўР В РЎвЂ“ Р В РЎвЂ”Р В РЎвЂў Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’Вµ')}
+            {summary_card('Р В РЎСџР В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚в„–', _dashboard_export_fmt_int(summary.get('impressions') or 0), 'Р В РІР‚вЂќР В Р’В° Р В Р вЂ Р РЋРІР‚в„–Р В Р’В±Р РЋР вЂљР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р В РЎвЂ”Р В Р’ВµР РЋР вЂљР В РЎвЂР В РЎвЂўР В РўвЂ')}
+            {summary_card('Р В РЎв„ўР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ', _dashboard_export_fmt_int(summary.get('clicks') or 0), 'Р В РЎв„ўР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ Р В РЎвЂ Р В РЎвЂ”Р В Р’ВµР РЋР вЂљР В Р’ВµР РЋРІР‚В¦Р В РЎвЂўР В РўвЂР РЋРІР‚в„–')}
+            {summary_card('CTR', _dashboard_export_fmt_pct(summary.get('ctr') or 0), 'Р В Р Р‹Р РЋР вЂљР В Р’ВµР В РўвЂР В Р вЂ¦Р В РЎвЂР В РІвЂћвЂ“ CTR')}
           </div>
           <table class="report-table">
             <thead>
               <tr>
-                <th>Кампания</th>
-                <th>Расход</th>
-                <th>Показы</th>
-                <th>Клики</th>
+                <th>Р В РЎв„ўР В Р’В°Р В РЎВР В РЎвЂ”Р В Р’В°Р В Р вЂ¦Р В РЎвЂР РЋР РЏ</th>
+                <th>Р В Р’В Р В Р’В°Р РЋР С“Р РЋРІР‚В¦Р В РЎвЂўР В РўвЂ</th>
+                <th>Р В РЎСџР В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚в„–</th>
+                <th>Р В РЎв„ўР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ</th>
                 <th>CTR</th>
               </tr>
             </thead>
@@ -7596,14 +8114,14 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
             content += f"""
             <div class="segment-row">
               <div class="segment-head">
-                <span>{html.escape(str(row.get('label') or '—'))}</span>
-                <strong>{html.escape(value_text)} · {html.escape(f"{float(row.get('share') or 0) * 100:.1f}%")}</strong>
+                <span>{html.escape(str(row.get('label') or 'Р Р†Р вЂљРІР‚Сњ'))}</span>
+                <strong>{html.escape(value_text)} Р вЂ™Р’В· {html.escape(f"{float(row.get('share') or 0) * 100:.1f}%")}</strong>
               </div>
               <div class="segment-bar"><span style="width:{width:.2f}%"></span></div>
             </div>
             """
         if not content:
-            content = '<div class="empty">Нет данных</div>'
+            content = '<div class="empty">Р В РЎСљР В Р’ВµР РЋРІР‚С™ Р В РўвЂР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р РЋРІР‚В¦</div>'
         return f"""
         <section class="section section-half">
           <div class="section-head">
@@ -7617,29 +8135,29 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
     for row in daily_points[:18]:
         daily_rows_html += f"""
         <tr>
-          <td>{html.escape(str(row.get('date') or '—'))}</td>
+          <td>{html.escape(str(row.get('date') or 'Р Р†Р вЂљРІР‚Сњ'))}</td>
           <td>{html.escape(_dashboard_export_fmt_money(row.get('spend') or 0, 'USD'))}</td>
           <td>{html.escape(_dashboard_export_fmt_int(row.get('impressions') or 0))}</td>
           <td>{html.escape(_dashboard_export_fmt_int(row.get('clicks') or 0))}</td>
         </tr>
         """
     if not daily_rows_html:
-        daily_rows_html = '<tr><td colspan="4">Нет данных</td></tr>'
+        daily_rows_html = '<tr><td colspan="4">Р В РЎСљР В Р’ВµР РЋРІР‚С™ Р В РўвЂР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р РЋРІР‚В¦</td></tr>'
 
-    trend_metric = str(account_trend.get("metric_label") or "Показы")
+    trend_metric = str(account_trend.get("metric_label") or "Р В РЎСџР В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚в„–")
     trend_rows_html = ""
     for row in account_trend.get("points") or []:
         value = row.get("value") or 0
         value_text = _dashboard_export_fmt_money(value, "USD") if account_trend.get("metric") == "spend" else _dashboard_export_fmt_int(value)
         trend_rows_html += f"""
         <div class="trend-row">
-          <span>{html.escape(str(row.get('date') or '—'))}</span>
+          <span>{html.escape(str(row.get('date') or 'Р Р†Р вЂљРІР‚Сњ'))}</span>
           <div class="trend-bar"><span style="width:{float(row.get('width') or 0):.2f}%"></span></div>
           <strong>{html.escape(value_text)}</strong>
         </div>
         """
     if not trend_rows_html:
-        trend_rows_html = '<div class="empty">Нет данных</div>'
+        trend_rows_html = '<div class="empty">Р В РЎСљР В Р’ВµР РЋРІР‚С™ Р В РўвЂР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р РЋРІР‚В¦</div>'
 
     return f"""
     <!doctype html>
@@ -7800,19 +8318,19 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
       <body>
         <div class="page">
           <section class="hero">
-            <div class="eyebrow">Envidicy · Dashboard Export</div>
-            <h1>Отчет по эффективности кампаний</h1>
+            <div class="eyebrow">Envidicy Р вЂ™Р’В· Dashboard Export</div>
+            <h1>Р В РЎвЂєР РЋРІР‚С™Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™ Р В РЎвЂ”Р В РЎвЂў Р РЋР РЉР РЋРІР‚С›Р РЋРІР‚С›Р В Р’ВµР В РЎвЂќР РЋРІР‚С™Р В РЎвЂР В Р вЂ Р В Р вЂ¦Р В РЎвЂўР РЋР С“Р РЋРІР‚С™Р В РЎвЂ Р В РЎвЂќР В Р’В°Р В РЎВР В РЎвЂ”Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В РІвЂћвЂ“</h1>
             <div class="hero-meta">
-              <span class="pill">Период: {html.escape(str(payload.get('date_from') or '—'))} — {html.escape(str(payload.get('date_to') or '—'))}</span>
-              <span class="pill">Сформирован: {html.escape(str(generated_at))}</span>
+              <span class="pill">Р В РЎСџР В Р’ВµР РЋР вЂљР В РЎвЂР В РЎвЂўР В РўвЂ: {html.escape(str(payload.get('date_from') or 'Р Р†Р вЂљРІР‚Сњ'))} Р Р†Р вЂљРІР‚Сњ {html.escape(str(payload.get('date_to') or 'Р Р†Р вЂљРІР‚Сњ'))}</span>
+              <span class="pill">Р В Р Р‹Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В РЎвЂР РЋР вЂљР В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦: {html.escape(str(generated_at))}</span>
             </div>
           </section>
 
           <div class="kpi-grid">
-            {summary_card('Расход', _dashboard_export_fmt_money(total_spend, 'USD'), 'По всем подключенным платформам')}
-            {summary_card('Показы', _dashboard_export_fmt_int(total_impressions), 'Суммарный delivery')}
-            {summary_card('Клики', _dashboard_export_fmt_int(total_clicks), 'Суммарный clickstream')}
-            {summary_card('Аккаунты', _dashboard_export_fmt_int(payload.get('account_count') or 0), 'Активные кабинеты в отчете')}
+            {summary_card('Р В Р’В Р В Р’В°Р РЋР С“Р РЋРІР‚В¦Р В РЎвЂўР В РўвЂ', _dashboard_export_fmt_money(total_spend, 'USD'), 'Р В РЎСџР В РЎвЂў Р В Р вЂ Р РЋР С“Р В Р’ВµР В РЎВ Р В РЎвЂ”Р В РЎвЂўР В РўвЂР В РЎвЂќР В Р’В»Р РЋР вЂ№Р РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В РЎВ Р В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°Р В РЎВ')}
+            {summary_card('Р В РЎСџР В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚в„–', _dashboard_export_fmt_int(total_impressions), 'Р В Р Р‹Р РЋРЎвЂњР В РЎВР В РЎВР В Р’В°Р РЋР вЂљР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ delivery')}
+            {summary_card('Р В РЎв„ўР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ', _dashboard_export_fmt_int(total_clicks), 'Р В Р Р‹Р РЋРЎвЂњР В РЎВР В РЎВР В Р’В°Р РЋР вЂљР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ clickstream')}
+            {summary_card('Р В РЎвЂ™Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р РЋРІР‚в„–', _dashboard_export_fmt_int(payload.get('account_count') or 0), 'Р В РЎвЂ™Р В РЎвЂќР РЋРІР‚С™Р В РЎвЂР В Р вЂ Р В Р вЂ¦Р РЋРІР‚в„–Р В Р’Вµ Р В РЎвЂќР В Р’В°Р В Р’В±Р В РЎвЂР В Р вЂ¦Р В Р’ВµР РЋРІР‚С™Р РЋРІР‚в„– Р В Р вЂ  Р В РЎвЂўР РЋРІР‚С™Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™Р В Р’Вµ')}
           </div>
 
           {platform_block('Meta Insights', meta, 'USD')}
@@ -7821,15 +8339,15 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
 
           <section class="section">
             <div class="section-head">
-              <h2>Динамика по дням</h2>
+              <h2>Р В РІР‚СњР В РЎвЂР В Р вЂ¦Р В Р’В°Р В РЎВР В РЎвЂР В РЎвЂќР В Р’В° Р В РЎвЂ”Р В РЎвЂў Р В РўвЂР В Р вЂ¦Р РЋР РЏР В РЎВ</h2>
             </div>
             <table class="report-table">
               <thead>
                 <tr>
-                  <th>Дата</th>
-                  <th>Расход</th>
-                  <th>Показы</th>
-                  <th>Клики</th>
+                  <th>Р В РІР‚СњР В Р’В°Р РЋРІР‚С™Р В Р’В°</th>
+                  <th>Р В Р’В Р В Р’В°Р РЋР С“Р РЋРІР‚В¦Р В РЎвЂўР В РўвЂ</th>
+                  <th>Р В РЎСџР В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚в„–</th>
+                  <th>Р В РЎв„ўР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ</th>
                 </tr>
               </thead>
               <tbody>{daily_rows_html}</tbody>
@@ -7838,17 +8356,17 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
 
           <section class="section">
             <div class="section-head">
-              <h2>Динамика по аккаунту</h2>
-              <div class="section-note">{html.escape(str(account_trend.get('title') or 'Выбранный аккаунт'))}</div>
+              <h2>Р В РІР‚СњР В РЎвЂР В Р вЂ¦Р В Р’В°Р В РЎВР В РЎвЂР В РЎвЂќР В Р’В° Р В РЎвЂ”Р В РЎвЂў Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р РЋРЎвЂњ</h2>
+              <div class="section-note">{html.escape(str(account_trend.get('title') or 'Р В РІР‚в„ўР РЋРІР‚в„–Р В Р’В±Р РЋР вЂљР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™'))}</div>
             </div>
-            <div class="section-note" style="margin-bottom:10px;">Метрика: {html.escape(trend_metric)}</div>
+            <div class="section-note" style="margin-bottom:10px;">Р В РЎС™Р В Р’ВµР РЋРІР‚С™Р РЋР вЂљР В РЎвЂР В РЎвЂќР В Р’В°: {html.escape(trend_metric)}</div>
             {trend_rows_html}
           </section>
 
           <div class="section-grid">
-            {segment_block('Аудитория · Возраст / Пол', age_items)}
-            {segment_block('Аудитория · Гео', geo_items)}
-            {segment_block('Аудитория · Девайсы', device_items)}
+            {segment_block('Р В РЎвЂ™Р РЋРЎвЂњР В РўвЂР В РЎвЂР РЋРІР‚С™Р В РЎвЂўР РЋР вЂљР В РЎвЂР РЋР РЏ Р вЂ™Р’В· Р В РІР‚в„ўР В РЎвЂўР В Р’В·Р РЋР вЂљР В Р’В°Р РЋР С“Р РЋРІР‚С™ / Р В РЎСџР В РЎвЂўР В Р’В»', age_items)}
+            {segment_block('Р В РЎвЂ™Р РЋРЎвЂњР В РўвЂР В РЎвЂР РЋРІР‚С™Р В РЎвЂўР РЋР вЂљР В РЎвЂР РЋР РЏ Р вЂ™Р’В· Р В РІР‚СљР В Р’ВµР В РЎвЂў', geo_items)}
+            {segment_block('Р В РЎвЂ™Р РЋРЎвЂњР В РўвЂР В РЎвЂР РЋРІР‚С™Р В РЎвЂўР РЋР вЂљР В РЎвЂР РЋР РЏ Р вЂ™Р’В· Р В РІР‚СњР В Р’ВµР В Р вЂ Р В Р’В°Р В РІвЂћвЂ“Р РЋР С“Р РЋРІР‚в„–', device_items)}
           </div>
         </div>
       </body>
@@ -7981,8 +8499,8 @@ def dashboard_export_pdf(
             "daily_points": daily_points,
             "account_trend": {
                 "metric": account_trend_metric,
-                "metric_label": "Клики" if account_trend_metric == "clicks" else "Расход" if account_trend_metric == "spend" else "Показы",
-                "title": selected_trend.get("name") if isinstance(selected_trend, dict) else "Нет данных",
+                "metric_label": "Р В РЎв„ўР В Р’В»Р В РЎвЂР В РЎвЂќР В РЎвЂ" if account_trend_metric == "clicks" else "Р В Р’В Р В Р’В°Р РЋР С“Р РЋРІР‚В¦Р В РЎвЂўР В РўвЂ" if account_trend_metric == "spend" else "Р В РЎСџР В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р РЋРІР‚в„–",
+                "title": selected_trend.get("name") if isinstance(selected_trend, dict) else "Р В РЎСљР В Р’ВµР РЋРІР‚С™ Р В РўвЂР В Р’В°Р В Р вЂ¦Р В Р вЂ¦Р РЋРІР‚в„–Р РЋРІР‚В¦",
                 "points": trend_points[:20],
             },
             "audience_age": _dashboard_export_aggregate_segments(age_rows, audience_age_platform),
@@ -8316,25 +8834,22 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
     if not payload.legal_entity_id:
         raise HTTPException(status_code=400, detail="legal_entity_id is required")
     with get_conn() as conn:
-        legal_entity = None
-        legal_entity = conn.execute(
-            """
-            SELECT le.*
-            FROM legal_entities le
-            JOIN user_legal_entities ule ON ule.legal_entity_id = le.id
-            WHERE le.id=? AND ule.user_id=?
-            """,
-            (payload.legal_entity_id, current_user["id"]),
-        ).fetchone()
-        if not legal_entity:
-            raise HTTPException(status_code=404, detail="Legal entity not found")
-        legal_entity = dict(legal_entity)
+        legal_entity = _resolve_wallet_request_legal_entity(
+            conn,
+            current_user["id"],
+            payload.legal_entity_id,
+            payload.client_name,
+            payload.client_bin,
+            payload.client_address,
+            payload.client_email,
+        )
         entity_name = _format_legal_entity_name(legal_entity) if legal_entity else None
         entity_address = (legal_entity.get("legal_address") or legal_entity.get("address")) if legal_entity else None
         client_name = payload.client_name or entity_name
         client_bin = payload.client_bin or (legal_entity.get("bin") if legal_entity else None)
         client_address = payload.client_address or entity_address
         client_email = payload.client_email or (legal_entity.get("email") if legal_entity else None)
+        resolved_legal_entity_id = legal_entity.get("id") if legal_entity else None
         issuer_type = _normalize_issuer_type((legal_entity or {}).get("issuer_type"), "too")
         amount_kind = "gross"
         tax_mode = _tax_mode_for_issuer(issuer_type)
@@ -8387,7 +8902,7 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
                 issuer_bic,
                 issuer_kbe,
                 issuer_currency,
-                payload.legal_entity_id,
+                resolved_legal_entity_id,
                 client_name,
                 client_bin,
                 client_address,
@@ -8412,7 +8927,7 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
                         "currency": payload.currency,
                         "note": payload.note,
                         "amount_kind": amount_kind,
-                        "legal_entity_id": payload.legal_entity_id,
+                        "legal_entity_id": resolved_legal_entity_id,
                         "client_name": client_name,
                         "client_bin": client_bin,
                         "client_address": client_address,
@@ -8443,13 +8958,13 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
         _send_telegram_alert(
             "\n".join(
                 [
-                    "🧾 <b>Запрос на пополнение кошелька</b>",
+                    "РЎР‚РЎСџР’В§РЎвЂў <b>Р В РІР‚вЂќР В Р’В°Р В РЎвЂ”Р РЋР вЂљР В РЎвЂўР РЋР С“ Р В Р вЂ¦Р В Р’В° Р В РЎвЂ”Р В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ Р В РЎвЂќР В РЎвЂўР РЋРІвЂљВ¬Р В Р’ВµР В Р’В»Р РЋР Р‰Р В РЎвЂќР В Р’В°</b>",
                     f"ID: <code>{request_id}</code>",
-                    f"Пользователь: <code>{current_user['email']}</code> (id={current_user['id']})",
-                    f"Сумма: <b>{payload.amount:.2f} {payload.currency}</b>",
-                    f"Контрагент: <b>{client_name or '—'}</b>",
-                    f"БИН/ИИН: <code>{client_bin or '—'}</code>",
-                    f"Order Ref: <code>{payload.order_ref or '—'}</code>",
+                    f"Р В РЎСџР В РЎвЂўР В Р’В»Р РЋР Р‰Р В Р’В·Р В РЎвЂўР В Р вЂ Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰: <code>{current_user['email']}</code> (id={current_user['id']})",
+                    f"Р В Р Р‹Р РЋРЎвЂњР В РЎВР В РЎВР В Р’В°: <b>{payload.amount:.2f} {payload.currency}</b>",
+                    f"Р В РЎв„ўР В РЎвЂўР В Р вЂ¦Р РЋРІР‚С™Р РЋР вЂљР В Р’В°Р В РЎвЂ“Р В Р’ВµР В Р вЂ¦Р РЋРІР‚С™: <b>{client_name or 'Р Р†Р вЂљРІР‚Сњ'}</b>",
+                    f"Р В РІР‚ВР В Р’ВР В РЎСљ/Р В Р’ВР В Р’ВР В РЎСљ: <code>{client_bin or 'Р Р†Р вЂљРІР‚Сњ'}</code>",
+                    f"Order Ref: <code>{payload.order_ref or 'Р Р†Р вЂљРІР‚Сњ'}</code>",
                 ]
             )
         )
@@ -8460,6 +8975,7 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
             "invoice_number": invoice_number,
             "invoice_date": invoice_date,
             "invoice_url": f"/wallet/topup-requests/{request_id}/invoice",
+            "invoice_public_url": _build_wallet_invoice_page_url(current_user["id"], request_id),
         }
 
 
@@ -8482,7 +8998,15 @@ def list_wallet_topup_requests(current_user=Depends(get_current_user)):
             """,
             (current_user["id"],),
         ).fetchall()
-        return [dict(row) for row in rows]
+        items = []
+        for row in rows:
+            item = dict(row)
+            request_id = int(item["id"])
+            item["invoice_public_url"] = _build_wallet_invoice_page_url(current_user["id"], request_id)
+            item["invoice_pdf_public_url"] = _build_wallet_invoice_pdf_url(current_user["id"], request_id)
+            item["invoice_generated_pdf_public_url"] = _build_wallet_invoice_generated_pdf_url(current_user["id"], request_id)
+            items.append(item)
+        return items
 
 
 @app.get("/wallet/topup-requests/{request_id}/invoice", response_class=HTMLResponse)
@@ -8493,14 +9017,11 @@ def wallet_topup_invoice_page(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="wallet_invoice_page", resource_id=request_id)
     with get_conn() as conn:
         request_row = conn.execute(
             "SELECT * FROM wallet_topup_requests WHERE id=? AND user_id=?",
-            (request_id, current_user["id"]),
+            (request_id, user_id),
         ).fetchone()
         if not request_row:
             raise HTTPException(status_code=404, detail="Request not found")
@@ -8530,7 +9051,7 @@ def wallet_topup_invoice_page(
         amount = _format_amount(amount_val)
         currency = req.get("currency") or "KZT"
         amount_words = _amount_to_words_ru(amount_val)
-        date_str = f"{date_str} г."
+        date_str = f"{date_str} Р В РЎвЂ“."
         tax_mode = _normalize_tax_mode(req.get("tax_mode"), "without_vat")
         vat_rate = _normalize_vat_rate_for_mode(tax_mode, req.get("vat_rate"))
         tax = _invoice_tax_breakdown(amount_val, tax_mode, vat_rate)
@@ -8539,18 +9060,18 @@ def wallet_topup_invoice_page(
         company = _request_issuer_snapshot(req, issuer_profile)
         company_name = company.get("name") or BENEFICIARY["name"]
         description = (
-            f"За услуги по использованию Программного обеспечения Исполнителя "
-            f"\"{company_name}\" по счету {number} от {dt.strftime('%d.%m.%Y')} г."
+            f"Р В РІР‚вЂќР В Р’В° Р РЋРЎвЂњР РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“Р В РЎвЂ Р В РЎвЂ”Р В РЎвЂў Р В РЎвЂР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р РЋР Р‰Р В Р’В·Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР РЋР вЂ№ Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р РЋР вЂљР В Р’В°Р В РЎВР В РЎВР В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂўР В Р’В±Р В Р’ВµР РЋР С“Р В РЎвЂ”Р В Р’ВµР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ Р В Р’ВР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР РЏ "
+            f"\"{company_name}\" Р В РЎвЂ”Р В РЎвЂў Р РЋР С“Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™Р РЋРЎвЂњ {number} Р В РЎвЂўР РЋРІР‚С™ {dt.strftime('%d.%m.%Y')} Р В РЎвЂ“."
         )
         contract_number = (req.get("contract_number") or "").strip()
         contract_date = (req.get("contract_date") or "").strip()
-        contract_note = "Публичный договор возмездного оказания услуг от 22.04.2025 г."
+        contract_note = "Р В РЎСџР РЋРЎвЂњР В Р’В±Р В Р’В»Р В РЎвЂР РЋРІР‚РЋР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р В РўвЂР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ Р В Р вЂ Р В РЎвЂўР В Р’В·Р В РЎВР В Р’ВµР В Р’В·Р В РўвЂР В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦Р В РЎвЂР РЋР РЏ Р РЋРЎвЂњР РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“ Р В РЎвЂўР РЋРІР‚С™ 22.04.2025 Р В РЎвЂ“."
         if contract_number and contract_date:
-            contract_note = f"Договор № {contract_number} от {contract_date}"
+            contract_note = f"Р В РІР‚СњР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ Р Р†РІР‚С›РІР‚вЂњ {contract_number} Р В РЎвЂўР РЋРІР‚С™ {contract_date}"
         elif contract_number:
-            contract_note = f"Договор № {contract_number}"
+            contract_note = f"Р В РІР‚СњР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ Р Р†РІР‚С›РІР‚вЂњ {contract_number}"
         elif contract_date:
-            contract_note = f"Договор от {contract_date}"
+            contract_note = f"Р В РІР‚СњР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ Р В РЎвЂўР РЋРІР‚С™ {contract_date}"
         beneficiary_bin = company.get("bin") or company.get("iin") or BENEFICIARY["bin"]
         payload = {
             "request_id": request_id,
@@ -8564,9 +9085,9 @@ def wallet_topup_invoice_page(
             "beneficiary_kbe": company.get("kbe") or BENEFICIARY["kbe"],
             "beneficiary_address": company.get("legal_address") or company.get("factual_address") or "",
             "payment_code": "853",
-            "payer_name": req.get("client_name") or "Плательщик не указан",
-            "payer_bin": req.get("client_bin") or "ИИН/БИН не указан",
-            "payer_address": req.get("client_address") or "Адрес не указан",
+            "payer_name": req.get("client_name") or "Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰Р РЋРІР‚В°Р В РЎвЂР В РЎвЂќ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
+            "payer_bin": req.get("client_bin") or "Р В Р’ВР В Р’ВР В РЎСљ/Р В РІР‚ВР В Р’ВР В РЎСљ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
+            "payer_address": req.get("client_address") or "Р В РЎвЂ™Р В РўвЂР РЋР вЂљР В Р’ВµР РЋР С“ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
             "description": description,
             "contract_note": contract_note,
             "amount": amount,
@@ -8577,7 +9098,7 @@ def wallet_topup_invoice_page(
             "amount_net": _format_amount(tax["net_amount"]),
             "vat_amount": _format_amount(tax["vat_amount"]),
             "vat_note": tax["vat_note"],
-            "token": token or "",
+            "pdf_token": _issue_scoped_url_token(user_id, scope="wallet_invoice_pdf_generated", resource_id=request_id),
         }
         return HTMLResponse(content=_invoice_1c_html(payload))
 
@@ -8590,14 +9111,11 @@ def wallet_topup_invoice_pdf(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="wallet_invoice_pdf_uploaded", resource_id=request_id)
     with get_conn() as conn:
         request_row = conn.execute(
             "SELECT id FROM wallet_topup_requests WHERE id=? AND user_id=?",
-            (request_id, current_user["id"]),
+            (request_id, user_id),
         ).fetchone()
         if not request_row:
             raise HTTPException(status_code=404, detail="Request not found")
@@ -8626,14 +9144,11 @@ def wallet_topup_invoice_generated_pdf(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="wallet_invoice_pdf_generated", resource_id=request_id)
     with get_conn() as conn:
         request_row = conn.execute(
             "SELECT * FROM wallet_topup_requests WHERE id=? AND user_id=?",
-            (request_id, current_user["id"]),
+            (request_id, user_id),
         ).fetchone()
         if not request_row:
             raise HTTPException(status_code=404, detail="Request not found")
@@ -8655,7 +9170,7 @@ def wallet_topup_invoice_generated_pdf(
                 dt = datetime.utcnow()
         else:
             dt = datetime.utcnow()
-        date_str = _format_ru_date(dt.isoformat()) + " г."
+        date_str = _format_ru_date(dt.isoformat()) + " Р В РЎвЂ“."
         amount_val = float(req.get("amount") or 0)
         amount = _format_amount(amount_val)
         currency = req.get("currency") or "KZT"
@@ -8668,18 +9183,18 @@ def wallet_topup_invoice_generated_pdf(
         company = _request_issuer_snapshot(req, issuer_profile)
         beneficiary_bin = company.get("bin") or company.get("iin") or BENEFICIARY["bin"]
         description = (
-            f"За услуги по использованию Программного обеспечения Исполнителя "
-            f"\"{company.get('name') or BENEFICIARY['name']}\" по счету {number} от {dt.strftime('%d.%m.%Y')} г."
+            f"Р В РІР‚вЂќР В Р’В° Р РЋРЎвЂњР РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“Р В РЎвЂ Р В РЎвЂ”Р В РЎвЂў Р В РЎвЂР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р РЋР Р‰Р В Р’В·Р В РЎвЂўР В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР РЋР вЂ№ Р В РЎСџР РЋР вЂљР В РЎвЂўР В РЎвЂ“Р РЋР вЂљР В Р’В°Р В РЎВР В РЎВР В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂўР В Р’В±Р В Р’ВµР РЋР С“Р В РЎвЂ”Р В Р’ВµР РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ Р В Р’ВР РЋР С“Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В РЎвЂР РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР РЏ "
+            f"\"{company.get('name') or BENEFICIARY['name']}\" Р В РЎвЂ”Р В РЎвЂў Р РЋР С“Р РЋРІР‚РЋР В Р’ВµР РЋРІР‚С™Р РЋРЎвЂњ {number} Р В РЎвЂўР РЋРІР‚С™ {dt.strftime('%d.%m.%Y')} Р В РЎвЂ“."
         )
         contract_number = (req.get("contract_number") or "").strip()
         contract_date = (req.get("contract_date") or "").strip()
-        contract_note = "Публичный договор возмездного оказания услуг от 22.04.2025 г."
+        contract_note = "Р В РЎСџР РЋРЎвЂњР В Р’В±Р В Р’В»Р В РЎвЂР РЋРІР‚РЋР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р В РўвЂР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ Р В Р вЂ Р В РЎвЂўР В Р’В·Р В РЎВР В Р’ВµР В Р’В·Р В РўвЂР В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В РЎвЂўР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦Р В РЎвЂР РЋР РЏ Р РЋРЎвЂњР РЋР С“Р В Р’В»Р РЋРЎвЂњР В РЎвЂ“ Р В РЎвЂўР РЋРІР‚С™ 22.04.2025 Р В РЎвЂ“."
         if contract_number and contract_date:
-            contract_note = f"Договор № {contract_number} от {contract_date}"
+            contract_note = f"Р В РІР‚СњР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ Р Р†РІР‚С›РІР‚вЂњ {contract_number} Р В РЎвЂўР РЋРІР‚С™ {contract_date}"
         elif contract_number:
-            contract_note = f"Договор № {contract_number}"
+            contract_note = f"Р В РІР‚СњР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ Р Р†РІР‚С›РІР‚вЂњ {contract_number}"
         elif contract_date:
-            contract_note = f"Договор от {contract_date}"
+            contract_note = f"Р В РІР‚СњР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ Р В РЎвЂўР РЋРІР‚С™ {contract_date}"
         payload = {
             "request_id": request_id,
             "number": number,
@@ -8692,9 +9207,9 @@ def wallet_topup_invoice_generated_pdf(
             "beneficiary_kbe": company.get("kbe") or BENEFICIARY["kbe"],
             "beneficiary_address": company.get("legal_address") or company.get("factual_address") or "",
             "payment_code": "853",
-            "payer_name": req.get("client_name") or "Плательщик не указан",
-            "payer_bin": req.get("client_bin") or "ИИН/БИН не указан",
-            "payer_address": req.get("client_address") or "Адрес не указан",
+            "payer_name": req.get("client_name") or "Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰Р РЋРІР‚В°Р В РЎвЂР В РЎвЂќ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
+            "payer_bin": req.get("client_bin") or "Р В Р’ВР В Р’ВР В РЎСљ/Р В РІР‚ВР В Р’ВР В РЎСљ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
+            "payer_address": req.get("client_address") or "Р В РЎвЂ™Р В РўвЂР РЋР вЂљР В Р’ВµР РЋР С“ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
             "description": description,
             "contract_note": contract_note,
             "amount": amount,
@@ -9036,11 +9551,11 @@ def create_account_request(payload: AccountRequestCreate, current_user=Depends(g
         _send_telegram_alert(
             "\n".join(
                 [
-                    "🆕 <b>Заявка на открытие аккаунта</b>",
+                    "РЎР‚РЎСџРІР‚В РІР‚Сћ <b>Р В РІР‚вЂќР В Р’В°Р РЋР РЏР В Р вЂ Р В РЎвЂќР В Р’В° Р В Р вЂ¦Р В Р’В° Р В РЎвЂўР РЋРІР‚С™Р В РЎвЂќР РЋР вЂљР РЋРІР‚в„–Р РЋРІР‚С™Р В РЎвЂР В Р’Вµ Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р В Р’В°</b>",
                     f"ID: <code>{request_id}</code>",
-                    f"Пользователь: <code>{current_user['email']}</code> (id={current_user['id']})",
-                    f"Платформа: <b>{payload.platform}</b>",
-                    f"Название: <b>{payload.name}</b>",
+                    f"Р В РЎСџР В РЎвЂўР В Р’В»Р РЋР Р‰Р В Р’В·Р В РЎвЂўР В Р вЂ Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰: <code>{current_user['email']}</code> (id={current_user['id']})",
+                    f"Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°: <b>{payload.platform}</b>",
+                    f"Р В РЎСљР В Р’В°Р В Р’В·Р В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В Р’Вµ: <b>{payload.name}</b>",
                 ]
             )
         )
@@ -9853,7 +10368,7 @@ def admin_export_requests(admin_user=Depends(get_admin_user)):
     wb = Workbook()
     ws = wb.active
     ws.title = "Account Requests"
-    ws.append(["Дата", "Клиент", "Платформа", "Название", "Статус", "Менеджер"])
+    ws.append(["Р В РІР‚СњР В Р’В°Р РЋРІР‚С™Р В Р’В°", "Р В РЎв„ўР В Р’В»Р В РЎвЂР В Р’ВµР В Р вЂ¦Р РЋРІР‚С™", "Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°", "Р В РЎСљР В Р’В°Р В Р’В·Р В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В Р’Вµ", "Р В Р Р‹Р РЋРІР‚С™Р В Р’В°Р РЋРІР‚С™Р РЋРЎвЂњР РЋР С“", "Р В РЎС™Р В Р’ВµР В Р вЂ¦Р В Р’ВµР В РўвЂР В Р’В¶Р В Р’ВµР РЋР вЂљ"])
     with get_conn() as conn:
         rows = conn.execute(
             """
@@ -9892,7 +10407,7 @@ def admin_export_accounts(admin_user=Depends(get_admin_user)):
     wb = Workbook()
     ws = wb.active
     ws.title = "Accounts"
-    ws.append(["Дата", "Клиент", "Платформа", "Название", "Договор/код", "External ID"])
+    ws.append(["Р В РІР‚СњР В Р’В°Р РЋРІР‚С™Р В Р’В°", "Р В РЎв„ўР В Р’В»Р В РЎвЂР В Р’ВµР В Р вЂ¦Р РЋРІР‚С™", "Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°", "Р В РЎСљР В Р’В°Р В Р’В·Р В Р вЂ Р В Р’В°Р В Р вЂ¦Р В РЎвЂР В Р’Вµ", "Р В РІР‚СњР В РЎвЂўР В РЎвЂ“Р В РЎвЂўР В Р вЂ Р В РЎвЂўР РЋР вЂљ/Р В РЎвЂќР В РЎвЂўР В РўвЂ", "External ID"])
     with get_conn() as conn:
         rows = conn.execute(
             """
@@ -9933,16 +10448,16 @@ def admin_export_topups(admin_user=Depends(get_admin_user)):
     ws.title = "Topups"
     ws.append(
         [
-            "Дата",
-            "Клиент",
-            "Платформа",
-            "Аккаунт",
-            "Сумма",
-            "Комиссия",
-            "НДС",
-            "К оплате",
-            "Валюта",
-            "Статус",
+            "Р В РІР‚СњР В Р’В°Р РЋРІР‚С™Р В Р’В°",
+            "Р В РЎв„ўР В Р’В»Р В РЎвЂР В Р’ВµР В Р вЂ¦Р РЋРІР‚С™",
+            "Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°",
+            "Р В РЎвЂ™Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™",
+            "Р В Р Р‹Р РЋРЎвЂњР В РЎВР В РЎВР В Р’В°",
+            "Р В РЎв„ўР В РЎвЂўР В РЎВР В РЎвЂР РЋР С“Р РЋР С“Р В РЎвЂР РЋР РЏ",
+            "Р В РЎСљР В РІР‚СњР В Р Р‹",
+            "Р В РЎв„ў Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’Вµ",
+            "Р В РІР‚в„ўР В Р’В°Р В Р’В»Р РЋР вЂ№Р РЋРІР‚С™Р В Р’В°",
+            "Р В Р Р‹Р РЋРІР‚С™Р В Р’В°Р РЋРІР‚С™Р РЋРЎвЂњР РЋР С“",
         ]
     )
     with get_conn() as conn:
@@ -10015,7 +10530,7 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
             else:
                 wallet = _get_or_create_wallet(conn, row["user_id"])
                 if float(wallet["balance"]) < gross_amount:
-                    raise HTTPException(status_code=400, detail="Недостаточно средств на кошельке для завершения пополнения")
+                    raise HTTPException(status_code=400, detail="Р В РЎСљР В Р’ВµР В РўвЂР В РЎвЂўР РЋР С“Р РЋРІР‚С™Р В Р’В°Р РЋРІР‚С™Р В РЎвЂўР РЋРІР‚РЋР В Р вЂ¦Р В РЎвЂў Р РЋР С“Р РЋР вЂљР В Р’ВµР В РўвЂР РЋР С“Р РЋРІР‚С™Р В Р вЂ  Р В Р вЂ¦Р В Р’В° Р В РЎвЂќР В РЎвЂўР РЋРІвЂљВ¬Р В Р’ВµР В Р’В»Р РЋР Р‰Р В РЎвЂќР В Р’Вµ Р В РўвЂР В Р’В»Р РЋР РЏ Р В Р’В·Р В Р’В°Р В Р вЂ Р В Р’ВµР РЋР вЂљР РЋРІвЂљВ¬Р В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ Р В РЎвЂ”Р В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ")
                 new_balance = float(wallet["balance"]) - gross_amount
                 conn.execute(
                     "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
@@ -10030,7 +10545,8 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                 )
                 conn.execute("UPDATE topups SET status=? WHERE id=?", (next_status, topup_id))
 
-            account_row = conn.execute("SELECT platform, name, currency FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
+            account_row = conn.execute("SELECT budget_total, platform, name, currency, external_id FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
+            base_amount = row["amount_net"] if row["amount_net"] else row["amount_input"]
             topup_payload = _attach_topup_account_amount(
                 [
                     {
@@ -10042,8 +10558,7 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
             )[0]
             budget_delta = float(topup_payload.get("amount_account") or 0)
             if budget_delta > 0:
-                acc = conn.execute("SELECT budget_total FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
-                current_total = float(acc["budget_total"] or 0) if acc else 0.0
+                current_total = float(account_row["budget_total"] or 0) if account_row else 0.0
                 conn.execute(
                     "UPDATE ad_accounts SET budget_total=? WHERE id=?",
                     (current_total + budget_delta, row["account_id"]),
@@ -10059,17 +10574,24 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                 source_id=topup_id,
                 note=f"Completed topup #{topup_id}",
             )
+            acc = account_row
+            if acc and str(acc["platform"] or "").lower() == "meta":
+                external_id = str(acc["external_id"] or "").strip()
+                if not external_id:
+                    raise HTTPException(status_code=400, detail="Meta account external_id is required to update spend cap")
+                _meta_increment_account_spend_cap(external_id, float(base_amount or 0))
             conn.execute("UPDATE users SET is_client=1 WHERE id=?", (row["user_id"],))
             user_row = conn.execute("SELECT email FROM users WHERE id=?", (row["user_id"],)).fetchone()
+            account_row = {"platform": acc["platform"], "name": acc["name"]} if acc else conn.execute("SELECT platform, name FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
             _send_telegram_alert(
                 "\n".join(
                     [
-                        "✅ <b>Пополнение оплачено/завершено</b>",
+                        "Р Р†РЎС™РІР‚В¦ <b>Р В РЎСџР В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ Р В РЎвЂўР В РЎвЂ”Р В Р’В»Р В Р’В°Р РЋРІР‚РЋР В Р’ВµР В Р вЂ¦Р В РЎвЂў/Р В Р’В·Р В Р’В°Р В Р вЂ Р В Р’ВµР РЋР вЂљР РЋРІвЂљВ¬Р В Р’ВµР В Р вЂ¦Р В РЎвЂў</b>",
                         f"Topup ID: <code>{topup_id}</code>",
-                        f"Пользователь: <code>{user_row['email'] if user_row else row['user_id']}</code>",
-                        f"Платформа: <b>{account_row['platform'] if account_row else '—'}</b>",
-                        f"Аккаунт: <b>{account_row['name'] if account_row else row['account_id']}</b>",
-                        f"Сумма: <b>{(row['amount_net'] or row['amount_input'] or 0):.2f} {row['currency']}</b>",
+                        f"Р В РЎСџР В РЎвЂўР В Р’В»Р РЋР Р‰Р В Р’В·Р В РЎвЂўР В Р вЂ Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰: <code>{user_row['email'] if user_row else row['user_id']}</code>",
+                        f"Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°: <b>{account_row['platform'] if account_row else 'Р Р†Р вЂљРІР‚Сњ'}</b>",
+                        f"Р В РЎвЂ™Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™: <b>{account_row['name'] if account_row else row['account_id']}</b>",
+                        f"Р В Р Р‹Р РЋРЎвЂњР В РЎВР В РЎВР В Р’В°: <b>{(row['amount_net'] or row['amount_input'] or 0):.2f} {row['currency']}</b>",
                     ]
                 )
             )
@@ -10395,17 +10917,17 @@ def invoice_preview():
         "beneficiary_iban": company.get("iban") or BENEFICIARY["iban"],
         "beneficiary_bic": company.get("bic") or BENEFICIARY["bic"],
         "beneficiary_kbe": company.get("kbe") or BENEFICIARY["kbe"],
-        "payer_name": "ООО Клиент",
-        "payer_bin": "ИИН/БИН не указан",
-        "payer_address": "Адрес не указан",
-        "description": "Пополнение рекламного аккаунта",
+        "payer_name": "Р В РЎвЂєР В РЎвЂєР В РЎвЂє Р В РЎв„ўР В Р’В»Р В РЎвЂР В Р’ВµР В Р вЂ¦Р РЋРІР‚С™",
+        "payer_bin": "Р В Р’ВР В Р’ВР В РЎСљ/Р В РІР‚ВР В Р’ВР В РЎСљ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
+        "payer_address": "Р В РЎвЂ™Р В РўвЂР РЋР вЂљР В Р’ВµР РЋР С“ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
+        "description": "Р В РЎСџР В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ Р РЋР вЂљР В Р’ВµР В РЎвЂќР В Р’В»Р В Р’В°Р В РЎВР В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р В Р’В°",
         "amount": _format_amount(150000),
         "currency": company.get("currency") or BENEFICIARY["currency"],
         "items": [
             {
-                "description": "Пополнение рекламного аккаунта",
+                "description": "Р В РЎСџР В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ Р РЋР вЂљР В Р’ВµР В РЎвЂќР В Р’В»Р В Р’В°Р В РЎВР В Р вЂ¦Р В РЎвЂўР В РЎвЂ“Р В РЎвЂў Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р В Р’В°",
                 "qty": "1",
-                "unit": "усл.",
+                "unit": "Р РЋРЎвЂњР РЋР С“Р В Р’В».",
                 "price": _format_amount(150000),
                 "amount": _format_amount(150000),
             }
@@ -11016,9 +11538,9 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"Недостаточно средств на кошельке: требуется {gross_amount:.2f} {currency}, "
-                    f"доступно {wallet_balance:.2f} {currency}. "
-                    f"Максимальная сумма пополнения при текущей комиссии: {max_input:.2f} {currency}."
+                    f"Р В РЎСљР В Р’ВµР В РўвЂР В РЎвЂўР РЋР С“Р РЋРІР‚С™Р В Р’В°Р РЋРІР‚С™Р В РЎвЂўР РЋРІР‚РЋР В Р вЂ¦Р В РЎвЂў Р РЋР С“Р РЋР вЂљР В Р’ВµР В РўвЂР РЋР С“Р РЋРІР‚С™Р В Р вЂ  Р В Р вЂ¦Р В Р’В° Р В РЎвЂќР В РЎвЂўР РЋРІвЂљВ¬Р В Р’ВµР В Р’В»Р РЋР Р‰Р В РЎвЂќР В Р’Вµ: Р РЋРІР‚С™Р РЋР вЂљР В Р’ВµР В Р’В±Р РЋРЎвЂњР В Р’ВµР РЋРІР‚С™Р РЋР С“Р РЋР РЏ {gross_amount:.2f} {currency}, "
+                    f"Р В РўвЂР В РЎвЂўР РЋР С“Р РЋРІР‚С™Р РЋРЎвЂњР В РЎвЂ”Р В Р вЂ¦Р В РЎвЂў {wallet_balance:.2f} {currency}. "
+                    f"Р В РЎС™Р В Р’В°Р В РЎвЂќР РЋР С“Р В РЎвЂР В РЎВР В Р’В°Р В Р’В»Р РЋР Р‰Р В Р вЂ¦Р В Р’В°Р РЋР РЏ Р РЋР С“Р РЋРЎвЂњР В РЎВР В РЎВР В Р’В° Р В РЎвЂ”Р В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР РЋР РЏ Р В РЎвЂ”Р РЋР вЂљР В РЎвЂ Р РЋРІР‚С™Р В Р’ВµР В РЎвЂќР РЋРЎвЂњР РЋРІР‚В°Р В Р’ВµР В РІвЂћвЂ“ Р В РЎвЂќР В РЎвЂўР В РЎВР В РЎвЂР РЋР С“Р РЋР С“Р В РЎвЂР В РЎвЂ: {max_input:.2f} {currency}."
                 ),
             )
         account_currency = str(acc["currency"] or currency).upper()
@@ -11057,20 +11579,28 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
         )
         conn.commit()
         account_name = conn.execute("SELECT name FROM ad_accounts WHERE id=?", (account_id,)).fetchone()
-        _send_telegram_alert(
-            "\n".join(
-                [
-                    "💳 <b>Новая заявка на пополнение</b>",
-                    f"ID: <code>{topup_id}</code>",
-                    f"Пользователь: <code>{current_user['email']}</code> (id={resolved_user_id})",
-                    f"Платформа: <b>{acc['platform']}</b>",
-                    f"Аккаунт: <b>{account_name['name'] if account_name else account_id}</b> (id={account_id})",
-                    f"Сумма: <b>{amount_input:.2f} {currency}</b>",
-                    f"Комиссия: <b>{fee_percent:.2f}%</b>",
-                    f"Холд в кошельке: <b>{gross_amount:.2f} {currency}</b>",
-                ]
-            )
-        )
+        account_currency = str(acc["currency"] or currency).upper()
+        input_currency = str(currency or "KZT").upper()
+        amount_line = f"Amount: <b>{amount_input:.2f} {currency}</b>"
+        fx_line = None
+        if fx_rate and fx_rate > 0 and account_currency != input_currency:
+            amount_line = f"Amount: <b>{amount_input:.2f} {currency}</b> (<b>{amount_net:.2f} {account_currency}</b>)"
+            fx_line = f"Rate: <b>{fx_rate:.4f} {input_currency}/{account_currency}</b>"
+        alert_lines = [
+            "TOPUP <b>New topup request</b>",
+            f"ID: <code>{topup_id}</code>",
+            f"User: <code>{current_user['email']}</code> (id={resolved_user_id})",
+            f"Platform: <b>{acc['platform']}</b>",
+            f"Account: <b>{account_name['name'] if account_name else account_id}</b> (id={account_id})",
+            amount_line,
+        ]
+        if fx_line:
+            alert_lines.append(fx_line)
+        alert_lines.extend([
+            f"Fee: <b>{fee_percent:.2f}%</b>",
+            f"Wallet hold: <b>{gross_amount:.2f} {currency}</b>",
+        ])
+        _send_telegram_alert("\n".join(alert_lines))
         return {
             "id": topup_id,
             "account_id": account_id,
@@ -11095,10 +11625,7 @@ def invoice_by_topup(
 ):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
-    if token:
-        current_user = _get_user_by_token(token)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Missing token")
+    user_id = _resolve_scoped_download_user_id(token, current_user, scope="topup_invoice_page", resource_id=topup_id)
     with get_conn() as conn:
         row = conn.execute(
             """
@@ -11107,7 +11634,7 @@ def invoice_by_topup(
             JOIN ad_accounts a ON a.id=t.account_id
             WHERE t.id=? AND t.user_id=?
             """,
-            (topup_id, current_user["id"]),
+            (topup_id, user_id),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Invoice not found")
@@ -11125,17 +11652,17 @@ def invoice_by_topup(
             "beneficiary_iban": company.get("iban") or BENEFICIARY["iban"],
             "beneficiary_bic": company.get("bic") or BENEFICIARY["bic"],
             "beneficiary_kbe": company.get("kbe") or BENEFICIARY["kbe"],
-            "payer_name": "Плательщик не указан",
-            "payer_bin": "ИИН/БИН не указан",
-            "payer_address": "Адрес не указан",
-            "description": f"Пополнение аккаунта {row['account_name']}",
+            "payer_name": "Р В РЎСџР В Р’В»Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰Р РЋРІР‚В°Р В РЎвЂР В РЎвЂќ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
+            "payer_bin": "Р В Р’ВР В Р’ВР В РЎСљ/Р В РІР‚ВР В Р’ВР В РЎСљ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
+            "payer_address": "Р В РЎвЂ™Р В РўвЂР РЋР вЂљР В Р’ВµР РЋР С“ Р В Р вЂ¦Р В Р’Вµ Р РЋРЎвЂњР В РЎвЂќР В Р’В°Р В Р’В·Р В Р’В°Р В Р вЂ¦",
+            "description": f"Р В РЎСџР В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р В Р’В° {row['account_name']}",
             "amount": _format_amount(row["amount_input"]),
             "currency": company.get("currency") or BENEFICIARY["currency"],
             "items": [
                 {
-                    "description": f"Пополнение аккаунта {row['account_name']}",
+                    "description": f"Р В РЎСџР В РЎвЂўР В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В РЎвЂР В Р’Вµ Р В Р’В°Р В РЎвЂќР В РЎвЂќР В Р’В°Р РЋРЎвЂњР В Р вЂ¦Р РЋРІР‚С™Р В Р’В° {row['account_name']}",
                     "qty": "1",
-                    "unit": "усл.",
+                    "unit": "Р РЋРЎвЂњР РЋР С“Р В Р’В».",
                     "price": _format_amount(row["amount_input"]),
                     "amount": _format_amount(row["amount_input"]),
                 }

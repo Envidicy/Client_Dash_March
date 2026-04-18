@@ -12,8 +12,7 @@ function authHeader(request) {
   if (direct) return direct
   const cookieToken = (request.cookies?.get('auth_token')?.value || '').trim()
   if (cookieToken) return `Bearer ${cookieToken}`
-  const token = (request.nextUrl?.searchParams?.get('token') || '').trim()
-  return token ? `Bearer ${token}` : ''
+  return ''
 }
 
 async function upstreamFetch(path, auth, options = {}) {
