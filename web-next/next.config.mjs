@@ -8,6 +8,24 @@ const nextConfig = {
   reactStrictMode: true,
   outputFileTracingRoot: path.join(__dirname, '..'),
   allowedDevOrigins: ['127.0.0.1', '192.168.1.209'],
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          { key: 'Permissions-Policy', value: 'geolocation=(), camera=(), microphone=()' },
+          {
+            key: 'Content-Security-Policy',
+            value: "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+          },
+          { key: 'Access-Control-Allow-Origin', value: 'https://app.envidicy.kz' },
+        ],
+      },
+    ]
+  },
 }
 
 export default nextConfig
