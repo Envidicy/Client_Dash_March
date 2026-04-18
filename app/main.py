@@ -3670,6 +3670,25 @@ def _verify_password(password: str, salt: str, stored_hash: str) -> bool:
     return hmac.compare_digest(_hash_password_legacy(password, salt), raw)
 
 
+def _is_user_accesses_schema_error(exc: Exception) -> bool:
+    msg = str(exc or "").lower()
+    if "no such table: user_accesses" in msg:
+        return True
+    if "no such column" not in msg:
+        return False
+    return any(
+        key in msg
+        for key in (
+            "role",
+            "status",
+            "password_hash",
+            "salt",
+            "email",
+            "user_id",
+        )
+    )
+
+
 def _password_hash_needs_upgrade(stored_hash: Optional[str], salt: Optional[str]) -> bool:
     raw = str(stored_hash or "")
     if not raw.startswith(f"{_PASSWORD_HASH_SCHEME}$"):
@@ -3682,10 +3701,16 @@ def _upgrade_password_hash_if_needed(conn, access: Dict[str, object], plain_pass
         return
     new_salt = _issue_password_salt()
     new_hash = _hash_password(plain_password, new_salt)
-    conn.execute(
-        "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
-        (new_hash, new_salt, access["id"]),
-    )
+    access_id = access.get("id")
+    if access_id is not None:
+        try:
+            conn.execute(
+                "UPDATE user_accesses SET password_hash=?, salt=? WHERE id=?",
+                (new_hash, new_salt, access_id),
+            )
+        except Exception as exc:
+            if not _is_user_accesses_schema_error(exc):
+                raise
     if (access.get("role") or "member") == "owner":
         conn.execute(
             "UPDATE users SET password_hash=?, salt=? WHERE id=?",
@@ -3763,13 +3788,39 @@ def _ensure_owner_access(conn, user_id: int):
 
 def _get_access_by_email(conn, email: str):
     normalized = _normalize_email(email)
-    row = conn.execute("SELECT * FROM user_accesses WHERE email=? AND status='active'", (normalized,)).fetchone()
+    row = None
+    try:
+        row = conn.execute("SELECT * FROM user_accesses WHERE email=? AND status='active'", (normalized,)).fetchone()
+    except Exception as exc:
+        if not _is_user_accesses_schema_error(exc):
+            raise
+    if not row:
+        try:
+            row = conn.execute("SELECT * FROM user_accesses WHERE email=?", (normalized,)).fetchone()
+        except Exception as exc:
+            if not _is_user_accesses_schema_error(exc):
+                raise
     if row:
-        return dict(row)
-    legacy_user = conn.execute("SELECT id FROM users WHERE email=?", (normalized,)).fetchone()
-    if legacy_user:
-        return _ensure_owner_access(conn, legacy_user["id"])
-    return None
+        out = dict(row)
+        out.setdefault("role", "member")
+        out.setdefault("status", "active")
+        out.setdefault("email", normalized)
+        return out
+
+    legacy_user = conn.execute("SELECT id, email, password_hash, salt FROM users WHERE email=?", (normalized,)).fetchone()
+    if not legacy_user:
+        return None
+
+    legacy = dict(legacy_user)
+    return {
+        "id": None,
+        "user_id": legacy.get("id"),
+        "email": _normalize_email(legacy.get("email") or normalized),
+        "password_hash": legacy.get("password_hash"),
+        "salt": legacy.get("salt"),
+        "role": "owner",
+        "status": "active",
+    }
 
 
 def _issue_access_setup_token() -> str:
