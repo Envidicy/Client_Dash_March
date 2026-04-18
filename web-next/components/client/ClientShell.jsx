@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import styles from './client.module.css'
 import { clearAuth, getAuthToken } from '../../lib/auth'
-import { apiFetch } from '../../lib/api'
 import { useI18n } from '../../lib/i18n/client'
 import GenerateInvoiceModal from './GenerateInvoiceModal'
 
@@ -70,9 +69,9 @@ export default function ClientShell({
     async function loadSidebarData() {
       try {
         const [entityRes, ratesRes, notificationsRes] = await Promise.all([
-          apiFetch('/legal-entities', { headers: { Authorization: `Bearer ${token}` } }),
-          apiFetch('/rates/bcc'),
-          apiFetch('/notifications', { headers: { Authorization: `Bearer ${token}` } }),
+          fetch('/api/client/legal-entities', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }),
+          fetch('/api/client/rates-bcc', { cache: 'no-store' }),
+          fetch('/api/client/notifications', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }),
         ])
         if (cancelled) return
 
@@ -152,9 +151,10 @@ export default function ClientShell({
     const token = getAuthToken()
     if (!token || !unreadNotifications) return
     try {
-      await apiFetch('/notifications/read', {
+      await fetch('/api/client/notifications/read', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
       })
       setUnreadNotifications(0)
     } catch {
