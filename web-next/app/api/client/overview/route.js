@@ -420,11 +420,11 @@ export async function GET(request) {
   const rangeDays = diffDaysInclusive(current.from, current.to)
   const previous = previousRangeFor(current, rangeDays)
   const endpoints = [
-    { name: 'wallet', path: '/wallet', required: true, fallback: null },
+    { name: 'wallet', path: '/wallet', required: false, fallback: {} },
     { name: 'rates', path: '/rates/bcc', required: false, fallback: null },
     { name: 'spend_current', path: `/insights/overview?date_from=${current.fromStr}&date_to=${current.toStr}`, required: false, fallback: null },
     { name: 'spend_previous', path: `/insights/overview?date_from=${previous.fromStr}&date_to=${previous.toStr}`, required: false, fallback: null },
-    { name: 'accounts', path: '/accounts?include_live_billing=1', required: true, fallback: [] },
+    { name: 'accounts', path: '/accounts?include_live_billing=1', required: false, fallback: [] },
     { name: 'account_spend', path: `/accounts/spend?date_from=${current.fromStr}&date_to=${current.toStr}`, required: false, fallback: { items: [] } },
     { name: 'account_spend_previous', path: `/accounts/spend?date_from=${previous.fromStr}&date_to=${previous.toStr}`, required: false, fallback: { items: [] } },
     { name: 'account_spend_daily', path: `/accounts/spend/daily?date_from=${current.fromStr}&date_to=${current.toStr}`, required: false, fallback: { items: [] } },

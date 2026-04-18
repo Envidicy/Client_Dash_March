@@ -3672,9 +3672,10 @@ def _verify_password(password: str, salt: str, stored_hash: str) -> bool:
 
 def _is_user_accesses_schema_error(exc: Exception) -> bool:
     msg = str(exc or "").lower()
-    if "no such table: user_accesses" in msg:
+    if "no such table: user_accesses" in msg or 'relation "user_accesses" does not exist' in msg:
         return True
-    if "no such column" not in msg:
+    missing_column = ("no such column" in msg) or ("column" in msg and "does not exist" in msg)
+    if not missing_column:
         return False
     return any(
         key in msg
@@ -3691,9 +3692,10 @@ def _is_user_accesses_schema_error(exc: Exception) -> bool:
 
 def _is_users_auth_schema_error(exc: Exception) -> bool:
     msg = str(exc or "").lower()
-    if "no such table: users" in msg:
+    if "no such table: users" in msg or 'relation "users" does not exist' in msg:
         return True
-    if "no such column" not in msg:
+    missing_column = ("no such column" in msg) or ("column" in msg and "does not exist" in msg)
+    if not missing_column:
         return False
     return any(key in msg for key in ("password_hash", "salt", "email"))
 
@@ -3987,9 +3989,10 @@ def _build_wallet_invoice_generated_pdf_url(user_id: int, request_id: int) -> st
 
 def _is_user_tokens_ttl_schema_error(exc: Exception) -> bool:
     msg = str(exc or "").lower()
-    if "no such table: user_tokens" in msg:
+    if "no such table: user_tokens" in msg or 'relation "user_tokens" does not exist' in msg:
         return True
-    if "no such column" not in msg:
+    missing_column = ("no such column" in msg) or ("column" in msg and "does not exist" in msg)
+    if not missing_column:
         return False
     return any(
         key in msg
@@ -4005,18 +4008,37 @@ def _is_user_tokens_ttl_schema_error(exc: Exception) -> bool:
 
 
 def _ensure_user_tokens_table(conn) -> None:
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_tokens (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+              token TEXT NOT NULL UNIQUE,
+              login_email TEXT,
+              expires_at INTEGER,
+              absolute_expires_at INTEGER,
+              last_seen_at INTEGER,
+              revoked_at TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        return
+    except Exception:
+        pass
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS user_tokens (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          id BIGSERIAL PRIMARY KEY,
+          user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
           token TEXT NOT NULL UNIQUE,
           login_email TEXT,
-          expires_at INTEGER,
-          absolute_expires_at INTEGER,
-          last_seen_at INTEGER,
+          expires_at BIGINT,
+          absolute_expires_at BIGINT,
+          last_seen_at BIGINT,
           revoked_at TEXT,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          created_at TIMESTAMPTZ DEFAULT NOW()
         )
         """
     )
