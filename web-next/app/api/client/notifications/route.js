@@ -26,12 +26,16 @@ export async function GET(request) {
   const auth = authHeader(request)
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const upstreamRes = await upstreamFetch('/notifications', auth)
-  if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
+  try {
+    const upstreamRes = await upstreamFetch('/notifications', auth)
+    if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const data = await upstreamRes.json().catch(() => ({}))
-  if (!upstreamRes.ok) {
-    return NextResponse.json({ detail: data?.detail || 'Failed to fetch notifications' }, { status: upstreamRes.status || 500 })
+    const data = await upstreamRes.json().catch(() => ({}))
+    if (!upstreamRes.ok) {
+      return NextResponse.json({ items: [], unread: 0, degraded: true }, { status: 200 })
+    }
+    return NextResponse.json(data && typeof data === 'object' ? data : { items: [], unread: 0 })
+  } catch {
+    return NextResponse.json({ items: [], unread: 0, degraded: true }, { status: 200 })
   }
-  return NextResponse.json(data)
 }

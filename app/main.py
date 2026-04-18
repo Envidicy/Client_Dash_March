@@ -3814,6 +3814,22 @@ def _get_access_by_email(conn, email: str):
         out.setdefault("role", "member")
         out.setdefault("status", "active")
         out.setdefault("email", normalized)
+        if not out.get("user_id"):
+            user_row = None
+            try:
+                user_row = conn.execute("SELECT id, password_hash, salt FROM users WHERE email=?", (normalized,)).fetchone()
+            except Exception as exc:
+                if not _is_users_auth_schema_error(exc):
+                    raise
+                user_row = conn.execute("SELECT id FROM users WHERE email=?", (normalized,)).fetchone()
+            if user_row:
+                user_data = dict(user_row)
+                out["user_id"] = user_data.get("id")
+                if not out.get("password_hash"):
+                    out["password_hash"] = user_data.get("password_hash")
+                if not out.get("salt"):
+                    out["salt"] = user_data.get("salt")
+                out["role"] = out.get("role") or "owner"
         return out
 
     try:
@@ -3978,6 +3994,7 @@ def _is_user_tokens_ttl_schema_error(exc: Exception) -> bool:
     return any(
         key in msg
         for key in (
+            "id",
             "login_email",
             "expires_at",
             "absolute_expires_at",
@@ -4325,21 +4342,37 @@ def _load_token_user_row(conn, token: str) -> Optional[Dict[str, object]]:
         except Exception as inner_exc:
             if not _is_user_tokens_ttl_schema_error(inner_exc):
                 raise
-            row = conn.execute(
-                """
-                SELECT
-                  u.*,
-                  ut.id AS token_id
-                FROM user_tokens ut
-                JOIN users u ON u.id = ut.user_id
-                WHERE ut.token=?
-                LIMIT 1
-                """,
-                (token,),
-            ).fetchone()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT
+                      u.*,
+                      ut.id AS token_id
+                    FROM user_tokens ut
+                    JOIN users u ON u.id = ut.user_id
+                    WHERE ut.token=?
+                    LIMIT 1
+                    """,
+                    (token,),
+                ).fetchone()
+            except Exception as legacy_exc:
+                if not _is_user_tokens_ttl_schema_error(legacy_exc):
+                    raise
+                row = conn.execute(
+                    """
+                    SELECT
+                      u.*
+                    FROM user_tokens ut
+                    JOIN users u ON u.id = ut.user_id
+                    WHERE ut.token=?
+                    LIMIT 1
+                    """,
+                    (token,),
+                ).fetchone()
         if not row:
             return None
         out = dict(row)
+        out["token_id"] = out.get("token_id")
         out["login_email"] = out.get("login_email")
         out["expires_at"] = None
         out["absolute_expires_at"] = None

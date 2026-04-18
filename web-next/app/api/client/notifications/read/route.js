@@ -26,12 +26,16 @@ export async function POST(request) {
   const auth = authHeader(request)
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const upstreamRes = await upstreamFetch('/notifications/read', auth, { method: 'POST' })
-  if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
+  try {
+    const upstreamRes = await upstreamFetch('/notifications/read', auth, { method: 'POST' })
+    if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const data = await upstreamRes.json().catch(() => ({}))
-  if (!upstreamRes.ok) {
-    return NextResponse.json({ detail: data?.detail || 'Failed to mark notifications as read' }, { status: upstreamRes.status || 500 })
+    const data = await upstreamRes.json().catch(() => ({}))
+    if (!upstreamRes.ok) {
+      return NextResponse.json({ status: 'ok', degraded: true }, { status: 200 })
+    }
+    return NextResponse.json(data || { status: 'ok' })
+  } catch {
+    return NextResponse.json({ status: 'ok', degraded: true }, { status: 200 })
   }
-  return NextResponse.json(data || { status: 'ok' })
 }

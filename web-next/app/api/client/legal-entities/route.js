@@ -26,14 +26,18 @@ export async function GET(request) {
   const auth = authHeader(request)
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const upstreamRes = await upstreamFetch('/legal-entities', auth)
-  if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
+  try {
+    const upstreamRes = await upstreamFetch('/legal-entities', auth)
+    if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const data = await upstreamRes.json().catch(() => [])
-  if (!upstreamRes.ok) {
-    return NextResponse.json({ detail: data?.detail || 'Failed to fetch legal entities' }, { status: upstreamRes.status || 500 })
+    const data = await upstreamRes.json().catch(() => [])
+    if (!upstreamRes.ok) {
+      return NextResponse.json([], { status: 200 })
+    }
+    return NextResponse.json(Array.isArray(data) ? data : [])
+  } catch {
+    return NextResponse.json([], { status: 200 })
   }
-  return NextResponse.json(Array.isArray(data) ? data : [])
 }
 
 export async function POST(request) {
@@ -53,15 +57,19 @@ export async function POST(request) {
   }
   if (!payload.name) return NextResponse.json({ detail: 'Entity name is required' }, { status: 400 })
 
-  const upstreamRes = await upstreamFetch('/legal-entities', auth, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
+  try {
+    const upstreamRes = await upstreamFetch('/legal-entities', auth, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
 
-  const data = await upstreamRes.json().catch(() => ({}))
-  if (!upstreamRes.ok) {
-    return NextResponse.json({ detail: data?.detail || 'Failed to create legal entity' }, { status: upstreamRes.status || 500 })
+    const data = await upstreamRes.json().catch(() => ({}))
+    if (!upstreamRes.ok) {
+      return NextResponse.json({ detail: data?.detail || 'Failed to create legal entity' }, { status: upstreamRes.status || 500 })
+    }
+    return NextResponse.json(data)
+  } catch {
+    return NextResponse.json({ detail: 'Backend unavailable' }, { status: 503 })
   }
-  return NextResponse.json(data)
 }
