@@ -17,8 +17,6 @@ export default function LoginPage() {
   const [pending, setPending] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [status, setStatus] = useState(t('login.statusLogin'))
-  const [setupEmailFromQuery, setSetupEmailFromQuery] = useState('')
-  const [setupTokenFromQuery, setSetupTokenFromQuery] = useState('')
 
   const helperText = useMemo(
     () =>
@@ -39,19 +37,6 @@ export default function LoginPage() {
   useEffect(() => {
     setStatus(mode === 'login' ? t('login.statusLogin') : t('login.statusSetPassword'))
   }, [locale, mode, t])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    const queryMode = String(params.get('mode') || '').trim().toLowerCase()
-    const queryEmail = String(params.get('email') || '').trim()
-    const querySetupToken = String(params.get('setup_token') || '').trim()
-    setSetupEmailFromQuery(queryEmail)
-    setSetupTokenFromQuery(querySetupToken)
-    if (queryMode === 'set-password' || querySetupToken) {
-      setMode('set-password')
-    }
-  }, [])
 
   async function onLoginSubmit(event) {
     event.preventDefault()
@@ -88,17 +73,12 @@ export default function LoginPage() {
   async function onSetPasswordSubmit(event) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    const email = String(form.get('email') || '').trim() || setupEmailFromQuery
-    const setupToken = String(form.get('setup_token') || '').trim() || setupTokenFromQuery
+    const email = String(form.get('email') || '').trim()
     const next = String(form.get('new_password') || '').trim()
     const confirm = String(form.get('confirm_password') || '').trim()
 
     if (!email || !next) {
       setStatus(t('login.fillEmailNewPassword'))
-      return
-    }
-    if (!setupToken) {
-      setStatus(t('login.inviteLinkRequired', 'Open this page from the invite setup link.'))
       return
     }
     if (next !== confirm) {
@@ -112,7 +92,7 @@ export default function LoginPage() {
       const res = await apiFetch('/auth/set-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, setup_token: setupToken, new_password: next }),
+        body: JSON.stringify({ email, new_password: next }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.detail || 'Could not set password')
@@ -179,7 +159,7 @@ export default function LoginPage() {
                     <input
                       name="password"
                       type={showPassword ? 'text' : 'password'}
-                      placeholder="********"
+                      placeholder="••••••••"
                       required
                     />
                     <button
@@ -204,26 +184,17 @@ export default function LoginPage() {
               <form className={styles.form} onSubmit={onSetPasswordSubmit}>
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>{t('login.emailAddress')}</span>
-                  <input
-                    className={styles.fieldInput}
-                    name="email"
-                    type="email"
-                    placeholder="name@company.com"
-                    defaultValue={setupEmailFromQuery}
-                    required
-                  />
+                  <input className={styles.fieldInput} name="email" type="email" placeholder="name@company.com" required />
                 </label>
-
-                <input name="setup_token" type="hidden" value={setupTokenFromQuery} readOnly />
 
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>{t('login.newPassword')}</span>
-                  <input className={styles.fieldInput} name="new_password" type="password" placeholder="********" required />
+                  <input className={styles.fieldInput} name="new_password" type="password" placeholder="••••••••" required />
                 </label>
 
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>{t('login.confirmPassword')}</span>
-                  <input className={styles.fieldInput} name="confirm_password" type="password" placeholder="********" required />
+                  <input className={styles.fieldInput} name="confirm_password" type="password" placeholder="••••••••" required />
                 </label>
 
                 <button className={styles.submit} type="submit" disabled={pending}>
