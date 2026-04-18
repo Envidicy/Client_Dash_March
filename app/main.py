@@ -3904,6 +3904,21 @@ def _build_wallet_invoice_generated_pdf_url(user_id: int, request_id: int) -> st
     return f"/wallet/topup-requests/{request_id}/pdf-generated?{urlencode({'token': token})}"
 
 
+def _is_user_tokens_ttl_schema_error(exc: Exception) -> bool:
+    msg = str(exc or "").lower()
+    if "no such column" not in msg:
+        return False
+    return any(
+        key in msg
+        for key in (
+            "expires_at",
+            "absolute_expires_at",
+            "last_seen_at",
+            "revoked_at",
+        )
+    )
+
+
 def _auth_now_ts() -> int:
     return int(time.time())
 
@@ -3937,14 +3952,23 @@ def _issue_user_token(conn, user_id: int, login_email: Optional[str] = None) -> 
     token = secrets.token_hex(24)
     now = _auth_now_ts()
     idle_until, absolute_until = _auth_token_exp_bounds(now)
-    conn.execute(
-        """
-        INSERT INTO user_tokens (user_id, token, login_email, expires_at, absolute_expires_at, last_seen_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (user_id, token, _normalize_email(login_email) or None, idle_until, absolute_until, now),
-    )
-    conn.execute("DELETE FROM user_tokens WHERE user_id=? AND expires_at IS NOT NULL AND expires_at <= ?", (user_id, now))
+    try:
+        conn.execute(
+            """
+            INSERT INTO user_tokens (user_id, token, login_email, expires_at, absolute_expires_at, last_seen_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, token, _normalize_email(login_email) or None, idle_until, absolute_until, now),
+        )
+        conn.execute("DELETE FROM user_tokens WHERE user_id=? AND expires_at IS NOT NULL AND expires_at <= ?", (user_id, now))
+    except Exception as exc:
+        if not _is_user_tokens_ttl_schema_error(exc):
+            raise
+        logging.warning("user_tokens TTL columns are missing; falling back to legacy token insert")
+        conn.execute(
+            "INSERT INTO user_tokens (user_id, token, login_email) VALUES (?, ?, ?)",
+            (user_id, token, _normalize_email(login_email) or None),
+        )
     return token
 
 
@@ -4167,27 +4191,56 @@ def _get_bearer_token(authorization: Optional[str]) -> Optional[str]:
 
 
 def _load_token_user_row(conn, token: str) -> Optional[Dict[str, object]]:
-    row = conn.execute(
-        """
-        SELECT
-          u.*,
-          ut.id AS token_id,
-          ut.login_email,
-          ut.expires_at,
-          ut.absolute_expires_at,
-          ut.last_seen_at,
-          ut.revoked_at
-        FROM user_tokens ut
-        JOIN users u ON u.id = ut.user_id
-        WHERE ut.token=?
-        LIMIT 1
-        """,
-        (token,),
-    ).fetchone()
-    return dict(row) if row else None
+    try:
+        row = conn.execute(
+            """
+            SELECT
+              u.*,
+              ut.id AS token_id,
+              ut.login_email,
+              ut.expires_at,
+              ut.absolute_expires_at,
+              ut.last_seen_at,
+              ut.revoked_at
+            FROM user_tokens ut
+            JOIN users u ON u.id = ut.user_id
+            WHERE ut.token=?
+            LIMIT 1
+            """,
+            (token,),
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception as exc:
+        if not _is_user_tokens_ttl_schema_error(exc):
+            raise
+        row = conn.execute(
+            """
+            SELECT
+              u.*,
+              ut.id AS token_id,
+              ut.login_email
+            FROM user_tokens ut
+            JOIN users u ON u.id = ut.user_id
+            WHERE ut.token=?
+            LIMIT 1
+            """,
+            (token,),
+        ).fetchone()
+        if not row:
+            return None
+        out = dict(row)
+        out["expires_at"] = None
+        out["absolute_expires_at"] = None
+        out["last_seen_at"] = None
+        out["revoked_at"] = None
+        out["_legacy_token_schema"] = True
+        return out
 
 
 def _validate_and_refresh_token_row(conn, token_row: Dict[str, object], now_ts: Optional[int] = None) -> Optional[Dict[str, object]]:
+    if token_row.get("_legacy_token_schema"):
+        return token_row
+
     now = int(now_ts if now_ts is not None else _auth_now_ts())
     if str(token_row.get("revoked_at") or "").strip():
         return None
@@ -4211,23 +4264,36 @@ def _validate_and_refresh_token_row(conn, token_row: Dict[str, object], now_ts: 
         changed = True
 
     if absolute_until <= now or idle_until <= now:
-        conn.execute("DELETE FROM user_tokens WHERE id=?", (token_row["token_id"],))
+        try:
+            conn.execute("DELETE FROM user_tokens WHERE id=?", (token_row["token_id"],))
+        except Exception as exc:
+            if not _is_user_tokens_ttl_schema_error(exc):
+                raise
         return None
 
     if changed:
-        conn.execute(
-            """
-            UPDATE user_tokens
-            SET expires_at=?, absolute_expires_at=?, last_seen_at=?
-            WHERE id=?
-            """,
-            (idle_until, absolute_until, last_seen, token_row["token_id"]),
-        )
-        token_row["expires_at"] = idle_until
-        token_row["absolute_expires_at"] = absolute_until
-        token_row["last_seen_at"] = last_seen
+        try:
+            conn.execute(
+                """
+                UPDATE user_tokens
+                SET expires_at=?, absolute_expires_at=?, last_seen_at=?
+                WHERE id=?
+                """,
+                (idle_until, absolute_until, last_seen, token_row["token_id"]),
+            )
+            token_row["expires_at"] = idle_until
+            token_row["absolute_expires_at"] = absolute_until
+            token_row["last_seen_at"] = last_seen
+        except Exception as exc:
+            if not _is_user_tokens_ttl_schema_error(exc):
+                raise
+            return token_row
 
-    _touch_user_token(conn, token_row, now)
+    try:
+        _touch_user_token(conn, token_row, now)
+    except Exception as exc:
+        if not _is_user_tokens_ttl_schema_error(exc):
+            raise
     return token_row
 
 
