@@ -9782,7 +9782,9 @@ def list_account_requests(current_user=Depends(get_current_user)):
                    a.currency as account_currency,
                    COALESCE((SELECT SUM(COALESCE(afe.amount_kzt, 0))
                              FROM account_funding_events afe
-                             WHERE afe.account_id = a.id), 0) as topup_completed_total
+                             WHERE afe.account_id = a.id
+                               AND afe.source_type = 'topup'
+                               AND afe.voided_at IS NULL), 0) as topup_completed_total
             FROM account_requests r
             LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
             WHERE r.user_id=?
@@ -9840,7 +9842,9 @@ def admin_list_account_requests(admin_user=Depends(get_admin_user)):
                    a.currency as account_currency,
                    COALESCE((SELECT SUM(COALESCE(afe.amount_kzt, 0))
                              FROM account_funding_events afe
-                             WHERE afe.account_id = a.id), 0) as topup_completed_total
+                             WHERE afe.account_id = a.id
+                               AND afe.source_type = 'topup'
+                               AND afe.voided_at IS NULL), 0) as topup_completed_total
             FROM account_requests r
             JOIN users u ON u.id = r.user_id
             LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
@@ -10278,6 +10282,7 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                         user_id,
                         COALESCE(SUM(COALESCE(amount_kzt, 0)), 0) as completed_total_kzt
                       FROM account_funding_events
+                      WHERE source_type='topup' AND voided_at IS NULL
                       GROUP BY user_id
                     ),
                     wallet_stats AS (
@@ -10331,6 +10336,7 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                         user_id,
                         COALESCE(SUM(COALESCE(amount_kzt, 0)), 0) as completed_total_kzt
                       FROM account_funding_events
+                      WHERE source_type='topup' AND voided_at IS NULL
                       GROUP BY user_id
                     ),
                     wallet_stats AS (
