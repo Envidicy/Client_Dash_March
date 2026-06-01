@@ -78,6 +78,7 @@ export default function AdminTopupsPage() {
   const { tr, locale } = useI18n()
   const [rows, setRows] = useState([])
   const [totalCount, setTotalCount] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
   const [stats, setStats] = useState({ total: 0, pending: 0, completed: 0, failed: 0, completedGross: 0 })
   const [status, setStatus] = useState(tr('Loading topups...', 'Загрузка пополнений...'))
   const [loadingMore, setLoadingMore] = useState(false)
@@ -130,12 +131,13 @@ export default function AdminTopupsPage() {
     const offset = append ? rows.length : 0
     try {
       if (append) setLoadingMore(true)
-      const res = await adminRouteFetch(`/api/admin/topups?limit=${TOPUPS_PAGE_SIZE}&offset=${offset}`)
+      const res = await adminRouteFetch(`/api/admin/topups?limit=${TOPUPS_PAGE_SIZE}&offset=${offset}&fast=1`)
       if (!res.ok) throw new Error(tr('Failed to load topups.', 'Не удалось загрузить пополнения.'))
       const data = await res.json()
       const nextRows = Array.isArray(data?.items) ? data.items : []
       setRows((current) => (append ? [...current, ...nextRows] : nextRows))
       setTotalCount(Number(data?.count || nextRows.length || 0))
+      setHasMore(Boolean(data?.hasMore) || Number(data?.count || 0) > (append ? rows.length + nextRows.length : nextRows.length))
       setStats(data?.stats || { total: 0, pending: 0, completed: 0, failed: 0, completedGross: 0 })
       if (!append && !selectedId && nextRows.length) {
         setSelectedId(String(nextRows[0].id))
@@ -482,7 +484,7 @@ export default function AdminTopupsPage() {
               {status || `Showing ${rows.length} of ${totalCount || rows.length} topups from the current backend queue.`}
             </p>
           </div>
-          {rows.length < totalCount ? (
+          {hasMore ? (
             <button className={styles.buttonGhost} type="button" onClick={() => fetchTopups({ append: true })} disabled={loadingMore}>
               {loadingMore ? 'Loading more...' : 'Load more'}
             </button>

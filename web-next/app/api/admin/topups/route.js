@@ -120,5 +120,7 @@ export async function GET(request) {
     stats,
     limit: Number(data?.limit || items.length || 0),
     offset: Number(data?.offset || 0),
+    hasMore: Boolean(data?.hasMore),
+    fast: Boolean(data?.fast),
   })
 }

@@ -10415,6 +10415,7 @@ def admin_list_topups(
     request: Request,
     limit: int = 100,
     offset: int = 0,
+    fast: int = 0,
     status: Optional[str] = None,
     email: Optional[str] = None,
     platform: Optional[str] = None,
@@ -10472,6 +10473,41 @@ def admin_list_topups(
         """
 
         if amount_min is None:
+            if fast:
+                page_rows = conn.execute(
+                    f"""
+                    SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+                    {base_sql}
+                    ORDER BY t.created_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    tuple(params + [safe_limit, safe_offset]),
+                ).fetchall()
+                page_items = _attach_topup_account_amount([dict(row) for row in page_rows])
+                stats = {"total": safe_offset + len(page_items), "pending": 0, "completed": 0, "failed": 0, "completedGross": 0}
+                for row in page_items:
+                    raw_status = str(row.get("status") or "").lower()
+                    if raw_status in {"completed", "approved"}:
+                        stats["completed"] += 1
+                        stats["completedGross"] += float(_topup_gross_amount(
+                            float(row.get("amount_input") or 0),
+                            float(row.get("fee_percent") or _default_fee_config().get(str(row.get("account_platform") or row.get("platform") or "").lower()) or 0),
+                            float(row.get("vat_percent") or 0),
+                        ) or 0)
+                    elif raw_status in {"failed", "rejected"}:
+                        stats["failed"] += 1
+                    else:
+                        stats["pending"] += 1
+                has_more = len(page_items) == safe_limit
+                return {
+                    "items": page_items,
+                    "count": safe_offset + len(page_items) + (1 if has_more else 0),
+                    "stats": stats,
+                    "limit": safe_limit,
+                    "offset": safe_offset,
+                    "hasMore": has_more,
+                    "fast": True,
+                }
             stats_row = conn.execute(
                 f"""
                 SELECT
