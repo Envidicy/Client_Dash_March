@@ -83,7 +83,8 @@ export async function GET(request) {
   const auth = authHeader(request)
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const upstreamRes = await upstreamFetch('/admin/topups', auth)
+  const query = request.nextUrl.searchParams.toString()
+  const upstreamRes = await upstreamFetch(`/admin/topups${query ? `?${query}` : ''}`, auth)
   if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
   if (upstreamRes.status === 403) return NextResponse.json({ detail: 'Forbidden' }, { status: 403 })
   if (!upstreamRes.ok) {
@@ -92,7 +93,15 @@ export async function GET(request) {
   }
 
   const data = await upstreamRes.json().catch(() => [])
-  const items = (Array.isArray(data) ? data : []).map(normalizeTopup)
-  const stats = buildStats(items)
-  return NextResponse.json({ items, count: items.length, stats })
+  const rawItems = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : []
+  const items = rawItems.map(normalizeTopup)
+  const stats = data?.stats || buildStats(items)
+  const count = Number.isFinite(Number(data?.count)) ? Number(data.count) : items.length
+  return NextResponse.json({
+    items,
+    count,
+    stats,
+    limit: Number(data?.limit || items.length || 0),
+    offset: Number(data?.offset || 0),
+  })
 }

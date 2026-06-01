@@ -10334,20 +10334,141 @@ def admin_delete_account(account_id: int, admin_user=Depends(get_admin_user)):
 
 
 @app.get("/admin/topups")
-def admin_list_topups(admin_user=Depends(get_admin_user)):
+def admin_list_topups(
+    request: Request,
+    limit: int = 100,
+    offset: int = 0,
+    status: Optional[str] = None,
+    email: Optional[str] = None,
+    platform: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    admin_user=Depends(get_admin_user),
+):
     if not get_conn:
-        return []
+        return {"items": [], "count": 0, "stats": {"total": 0, "pending": 0, "completed": 0, "failed": 0, "completedGross": 0}}
     with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+        if not request.query_params:
+            rows = conn.execute(
+                """
+                SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+                FROM topups t
+                JOIN ad_accounts a ON a.id = t.account_id
+                JOIN users u ON u.id = t.user_id
+                ORDER BY t.created_at DESC
+                """
+            ).fetchall()
+            return _attach_topup_account_amount([dict(row) for row in rows])
+
+        safe_limit = max(1, min(int(limit or 100), 500))
+        safe_offset = max(0, int(offset or 0))
+        where = []
+        params: List[object] = []
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status:
+            if normalized_status == "completed":
+                where.append("LOWER(COALESCE(t.status, '')) IN ('completed', 'approved')")
+            elif normalized_status == "failed":
+                where.append("LOWER(COALESCE(t.status, '')) IN ('failed', 'rejected')")
+            elif normalized_status == "pending":
+                where.append("LOWER(COALESCE(t.status, '')) NOT IN ('completed', 'approved', 'failed', 'rejected')")
+        if email:
+            where.append("LOWER(COALESCE(u.email, '')) LIKE ?")
+            params.append(f"%{str(email).strip().lower()}%")
+        if platform:
+            where.append("LOWER(COALESCE(a.platform, '')) = ?")
+            params.append(str(platform).strip().lower())
+        if date_from:
+            where.append("DATE(t.created_at) >= DATE(?)")
+            params.append(str(date_from).strip())
+        if date_to:
+            where.append("DATE(t.created_at) <= DATE(?)")
+            params.append(str(date_to).strip())
+
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        base_sql = f"""
             FROM topups t
             JOIN ad_accounts a ON a.id = t.account_id
             JOIN users u ON u.id = t.user_id
+            {where_sql}
+        """
+
+        if amount_min is None:
+            stats_row = conn.execute(
+                f"""
+                SELECT
+                  COUNT(1) as total,
+                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(t.status, '')) NOT IN ('completed', 'approved', 'failed', 'rejected') THEN 1 ELSE 0 END), 0) as pending,
+                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(t.status, '')) IN ('completed', 'approved') THEN 1 ELSE 0 END), 0) as completed,
+                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(t.status, '')) IN ('failed', 'rejected') THEN 1 ELSE 0 END), 0) as failed,
+                  COALESCE(SUM(
+                    CASE WHEN LOWER(COALESCE(t.status, '')) IN ('completed', 'approved')
+                    THEN COALESCE(t.amount_input, 0) * (1 + COALESCE(t.fee_percent, 0) / 100.0 + COALESCE(t.vat_percent, 0) / 100.0)
+                    ELSE 0 END
+                  ), 0) as completed_gross
+                {base_sql}
+                """,
+                tuple(params),
+            ).fetchone()
+            page_rows = conn.execute(
+                f"""
+                SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+                {base_sql}
+                ORDER BY t.created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params + [safe_limit, safe_offset]),
+            ).fetchall()
+            page_items = _attach_topup_account_amount([dict(row) for row in page_rows])
+            total_count = int(stats_row["total"] or 0) if stats_row else 0
+            stats = {
+                "total": total_count,
+                "pending": int(stats_row["pending"] or 0) if stats_row else 0,
+                "completed": int(stats_row["completed"] or 0) if stats_row else 0,
+                "failed": int(stats_row["failed"] or 0) if stats_row else 0,
+                "completedGross": float(stats_row["completed_gross"] or 0) if stats_row else 0,
+            }
+            return {"items": page_items, "count": total_count, "stats": stats, "limit": safe_limit, "offset": safe_offset}
+
+        all_rows = conn.execute(
+            f"""
+            SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+            {base_sql}
             ORDER BY t.created_at DESC
-            """
+            """,
+            tuple(params),
         ).fetchall()
-        return _attach_topup_account_amount([dict(row) for row in rows])
+        all_items = _attach_topup_account_amount([dict(row) for row in all_rows])
+        if amount_min is not None:
+            threshold = float(amount_min or 0)
+            all_items = [
+                row for row in all_items
+                if float(_topup_gross_amount(
+                    float(row.get("amount_input") or 0),
+                    float(row.get("fee_percent") or _default_fee_config().get(str(row.get("account_platform") or row.get("platform") or "").lower()) or 0),
+                    float(row.get("vat_percent") or 0),
+                ) or 0) >= threshold
+            ]
+        total_count = len(all_items)
+        completed_gross = 0.0
+        stats = {"total": total_count, "pending": 0, "completed": 0, "failed": 0, "completedGross": 0}
+        for row in all_items:
+            raw_status = str(row.get("status") or "").lower()
+            if raw_status in {"completed", "approved"}:
+                stats["completed"] += 1
+                completed_gross += float(_topup_gross_amount(
+                    float(row.get("amount_input") or 0),
+                    float(row.get("fee_percent") or _default_fee_config().get(str(row.get("account_platform") or row.get("platform") or "").lower()) or 0),
+                    float(row.get("vat_percent") or 0),
+                ) or 0)
+            elif raw_status in {"failed", "rejected"}:
+                stats["failed"] += 1
+            else:
+                stats["pending"] += 1
+        stats["completedGross"] = completed_gross
+        page_items = all_items[safe_offset:safe_offset + safe_limit]
+        return {"items": page_items, "count": total_count, "stats": stats, "limit": safe_limit, "offset": safe_offset}
 
 
 @app.get("/admin/clients")

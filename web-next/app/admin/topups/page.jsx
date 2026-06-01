@@ -7,6 +7,8 @@ import styles from '../../../components/admin/admin.module.css'
 import { clearAuth, getAuthToken } from '../../../lib/auth'
 import { useI18n } from '../../../lib/i18n/client'
 
+const TOPUPS_PAGE_SIZE = 100
+
 function formatMoney(value, locale = 'en') {
   const num = Number(value || 0)
   return num.toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -74,8 +76,10 @@ export default function AdminTopupsPage() {
   const router = useRouter()
   const { tr, locale } = useI18n()
   const [rows, setRows] = useState([])
+  const [totalCount, setTotalCount] = useState(0)
   const [stats, setStats] = useState({ total: 0, pending: 0, completed: 0, failed: 0, completedGross: 0 })
   const [status, setStatus] = useState(tr('Loading topups...', 'Загрузка пополнений...'))
+  const [loadingMore, setLoadingMore] = useState(false)
   const [filters, setFilters] = useState({
     status: '',
     email: '',
@@ -109,20 +113,30 @@ export default function AdminTopupsPage() {
     return res
   }
 
-  async function fetchTopups() {
+  async function fetchTopups(options = {}) {
+    const append = options.append === true
+    const offset = append ? rows.length : 0
     try {
-      const res = await adminRouteFetch('/api/admin/topups')
+      if (append) setLoadingMore(true)
+      const params = new URLSearchParams({
+        limit: String(TOPUPS_PAGE_SIZE),
+        offset: String(offset),
+      })
+      const res = await adminRouteFetch(`/api/admin/topups?${params.toString()}`)
       if (!res.ok) throw new Error(tr('Failed to load topups.', 'Не удалось загрузить пополнения.'))
       const data = await res.json()
       const nextRows = Array.isArray(data?.items) ? data.items : []
-      setRows(nextRows)
+      setRows((current) => (append ? [...current, ...nextRows] : nextRows))
+      setTotalCount(Number(data?.count || nextRows.length || 0))
       setStats(data?.stats || { total: 0, pending: 0, completed: 0, failed: 0, completedGross: 0 })
-      if (!selectedId && nextRows.length) {
+      if (!append && !selectedId && nextRows.length) {
         setSelectedId(String(nextRows[0].id))
       }
       setStatus('')
     } catch (e) {
       setStatus(e?.message || tr('Failed to load topups.', 'Не удалось загрузить пополнения.'))
+    } finally {
+      if (append) setLoadingMore(false)
     }
   }
 
@@ -455,7 +469,16 @@ export default function AdminTopupsPage() {
         </div>
 
         <div className={styles.cardHeader}>
-          <p className={styles.muted}>{status || 'Topups are read directly from the current backend queue.'}</p>
+          <div>
+            <p className={styles.muted}>
+              {status || `Showing ${rows.length} of ${totalCount || rows.length} topups from the current backend queue.`}
+            </p>
+          </div>
+          {rows.length < totalCount ? (
+            <button className={styles.buttonGhost} type="button" onClick={() => fetchTopups({ append: true })} disabled={loadingMore}>
+              {loadingMore ? 'Loading more...' : 'Load more'}
+            </button>
+          ) : null}
         </div>
       </section>
     </AdminShell>
