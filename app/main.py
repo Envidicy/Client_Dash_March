@@ -10480,7 +10480,7 @@ def admin_list_topups(
                     f"""
                     SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
                     {base_sql}
-                    ORDER BY t.created_at DESC
+                    ORDER BY t.id DESC
                     LIMIT ? OFFSET ?
                     """,
                     tuple(params + [safe_limit, safe_offset]),
