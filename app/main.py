@@ -5834,11 +5834,13 @@ def _resolve_topup_account_amount(row: Dict[str, object], rates_data: Optional[D
     return amount_net_value if amount_net_value is not None else amount_input_value
 
 
-def _attach_topup_account_amount(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    try:
-        rates_data = _fetch_bcc_rates()
-    except Exception:
-        rates_data = None
+def _attach_topup_account_amount(rows: List[Dict[str, object]], include_rates: bool = True) -> List[Dict[str, object]]:
+    rates_data = None
+    if include_rates:
+        try:
+            rates_data = _fetch_bcc_rates()
+        except Exception:
+            rates_data = None
     prepared = []
     for row in rows:
         payload = dict(row)
@@ -10483,7 +10485,7 @@ def admin_list_topups(
                     """,
                     tuple(params + [safe_limit, safe_offset]),
                 ).fetchall()
-                page_items = _attach_topup_account_amount([dict(row) for row in page_rows])
+                page_items = _attach_topup_account_amount([dict(row) for row in page_rows], include_rates=False)
                 stats = {"total": safe_offset + len(page_items), "pending": 0, "completed": 0, "failed": 0, "completedGross": 0}
                 for row in page_items:
                     raw_status = str(row.get("status") or "").lower()
