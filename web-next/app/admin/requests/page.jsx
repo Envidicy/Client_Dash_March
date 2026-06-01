@@ -10,6 +10,7 @@ import { useI18n } from '../../../lib/i18n/client'
 
 const PAGE_SIZE = 12
 const REQUESTS_FETCH_LIMIT = 100
+const ADMIN_FETCH_TIMEOUT_MS = 25000
 const ACCOUNT_STATUS_OPTIONS = ['active', 'pending', 'paused', 'archived', 'closed']
 
 function statusLabel(status) {
@@ -127,14 +128,25 @@ export default function AdminRequestsPage() {
       throw new Error('Unauthorized')
     }
 
-    const res = await fetch(`/api${normalizedPath}`, {
-      ...options,
-      headers: {
-        ...(options.headers || {}),
-        Authorization: `Bearer ${token}`,
-      },
-      cache: 'no-store',
-    })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), ADMIN_FETCH_TIMEOUT_MS)
+    let res
+    try {
+      res = await fetch(`/api${normalizedPath}`, {
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          Authorization: `Bearer ${token}`,
+        },
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new Error('Admin request timed out.')
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
 
     if (res.status === 401) {
       router.push('/login')

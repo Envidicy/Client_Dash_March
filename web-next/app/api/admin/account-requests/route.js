@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getApiBase } from '../../../../lib/api'
 
 export const dynamic = 'force-dynamic'
+const UPSTREAM_TIMEOUT_MS = 25000
 
 function apiBase() {
   return getApiBase().replace(/\/$/, '')
@@ -12,14 +13,21 @@ function authHeader(request) {
 }
 
 async function upstreamFetch(path, auth, options = {}) {
-  return fetch(`${apiBase()}${path}`, {
-    ...options,
-    headers: {
-      ...(auth ? { Authorization: auth } : {}),
-      ...(options.headers || {}),
-    },
-    cache: 'no-store',
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS)
+  try {
+    return await fetch(`${apiBase()}${path}`, {
+      ...options,
+      headers: {
+        ...(auth ? { Authorization: auth } : {}),
+        ...(options.headers || {}),
+      },
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 export async function GET(request) {
@@ -27,7 +35,16 @@ export async function GET(request) {
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
   const query = request.nextUrl.searchParams.toString()
-  const upstreamRes = await upstreamFetch(`/admin/account-requests${query ? `?${query}` : ''}`, auth)
+  let upstreamRes
+  try {
+    upstreamRes = await upstreamFetch(`/admin/account-requests${query ? `?${query}` : ''}`, auth)
+  } catch (error) {
+    const timedOut = error?.name === 'AbortError'
+    return NextResponse.json(
+      { detail: timedOut ? 'Admin account requests timed out.' : 'Failed to reach admin account requests backend.' },
+      { status: timedOut ? 504 : 502 }
+    )
+  }
   if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
   if (upstreamRes.status === 403) return NextResponse.json({ detail: 'Forbidden' }, { status: 403 })
 

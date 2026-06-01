@@ -8,6 +8,7 @@ import { clearAuth, getAuthToken } from '../../../lib/auth'
 import { useI18n } from '../../../lib/i18n/client'
 
 const TOPUPS_PAGE_SIZE = 100
+const ADMIN_FETCH_TIMEOUT_MS = 25000
 
 function formatMoney(value, locale = 'en') {
   const num = Number(value || 0)
@@ -94,14 +95,25 @@ export default function AdminTopupsPage() {
 
   async function adminRouteFetch(path, options = {}) {
     const token = getAuthToken()
-    const res = await fetch(path, {
-      ...options,
-      headers: {
-        ...(options.headers || {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      cache: 'no-store',
-    })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), ADMIN_FETCH_TIMEOUT_MS)
+    let res
+    try {
+      res = await fetch(path, {
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new Error('Admin request timed out.')
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
     if (res.status === 401) {
       clearAuth()
       router.push('/login')

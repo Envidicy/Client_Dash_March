@@ -3,6 +3,7 @@ import { getApiBase } from '../../../../lib/api'
 import { getTopupBreakdown, platformLabel } from '../../../../lib/finance/model'
 
 export const dynamic = 'force-dynamic'
+const UPSTREAM_TIMEOUT_MS = 25000
 
 function apiBase() {
   return getApiBase().replace(/\/$/, '')
@@ -13,14 +14,21 @@ function authHeader(request) {
 }
 
 async function upstreamFetch(path, auth, options = {}) {
-  return fetch(`${apiBase()}${path}`, {
-    ...options,
-    headers: {
-      ...(auth ? { Authorization: auth } : {}),
-      ...(options.headers || {}),
-    },
-    cache: 'no-store',
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS)
+  try {
+    return await fetch(`${apiBase()}${path}`, {
+      ...options,
+      headers: {
+        ...(auth ? { Authorization: auth } : {}),
+        ...(options.headers || {}),
+      },
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 function normalizeStatus(status) {
@@ -84,7 +92,16 @@ export async function GET(request) {
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
   const query = request.nextUrl.searchParams.toString()
-  const upstreamRes = await upstreamFetch(`/admin/topups${query ? `?${query}` : ''}`, auth)
+  let upstreamRes
+  try {
+    upstreamRes = await upstreamFetch(`/admin/topups${query ? `?${query}` : ''}`, auth)
+  } catch (error) {
+    const timedOut = error?.name === 'AbortError'
+    return NextResponse.json(
+      { detail: timedOut ? 'Admin topups request timed out.' : 'Failed to reach admin topups backend.' },
+      { status: timedOut ? 504 : 502 }
+    )
+  }
   if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
   if (upstreamRes.status === 403) return NextResponse.json({ detail: 'Forbidden' }, { status: 403 })
   if (!upstreamRes.ok) {
