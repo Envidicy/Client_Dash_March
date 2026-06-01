@@ -491,9 +491,9 @@ export default function PerformancePage({ initialAccountId = '' }) {
             onClick={refreshPerformanceStats}
             aria-label="Refresh"
             disabled={loading || refreshing}
-            title={refreshing ? tr('Refreshing statistics…', 'Обновляем статистику…') : tr('Refresh statistics', 'Обновить статистику')}
+            title={refreshing ? tr('Refreshing statistics...', 'Refreshing statistics...') : tr('Refresh statistics', 'Refresh statistics')}
           >
-            {refreshing ? '…' : '↻'}
+            {refreshing ? '...' : 'Refresh'}
           </button>
         </div>
       </section>

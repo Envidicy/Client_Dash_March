@@ -588,7 +588,7 @@ export default function OverviewPage() {
       headerActionLabel={tr('Create Request', 'РЎРѕР·РґР°С‚СЊ Р·Р°РїСЂРѕСЃ')}
       headerActionOnClick={() => setAccountRequestOpen(true)}
       entityLabel={tr('Entity Switcher', 'РџРµСЂРµРєР»СЋС‡Р°С‚РµР»СЊ СЋСЂР»РёС†Р°')}
-      statusAlerts={loading ? tr('LoadingвЂ¦', 'Р—Р°РіСЂСѓР·РєР°вЂ¦') : statusAlerts}
+      statusAlerts={loading ? tr('Loading...', 'Loading...') : statusAlerts}
       statusRows={displayStatusRows}
     >
       {loadError ? <div className={styles.pageErrorBanner}>{loadError}</div> : null}
@@ -719,7 +719,7 @@ export default function OverviewPage() {
                         title={tr('Refresh account balance', 'Обновить баланс аккаунта')}
                         type="button"
                       >
-                        ↻
+                        Refresh
                       </button>
                     </div>
                   </td>
