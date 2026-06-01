@@ -5897,6 +5897,14 @@ def _attach_topup_account_amount(rows: List[Dict[str, object]]) -> List[Dict[str
     return prepared
 
 
+def _build_topup_account_payload(row: Dict[str, object], account_row: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+    payload = dict(row)
+    if account_row:
+        payload["account_platform"] = account_row.get("platform")
+        payload["account_currency"] = account_row.get("currency")
+    return _attach_topup_account_amount([payload])[0]
+
+
 def _funding_source_key(source_type: str, source_id: Optional[object]) -> Optional[str]:
     if source_id is None:
         return None
@@ -5943,7 +5951,9 @@ def _record_account_funding_event(
                         note=?,
                         created_by=?,
                         reversal_for_event_id=?,
-                        created_at=?
+                        created_at=?,
+                        voided_at=NULL,
+                        voided_by=NULL
                     WHERE id=?
                     """,
                     (
@@ -6057,20 +6067,68 @@ def _account_funding_totals_map(
 
     query = """
         SELECT
-          account_id,
-          COALESCE(SUM(amount), 0) as total_amount,
+          afe.account_id,
+          COALESCE(SUM(
+            CASE
+              WHEN afe.source_type='topup' THEN
+                CASE
+                  WHEN afe.voided_at IS NULL
+                   AND EXISTS (
+                     SELECT 1
+                     FROM topups t
+                     WHERE t.id = afe.source_id
+                       AND t.status='completed'
+                   )
+                  THEN COALESCE(afe.amount, 0)
+                  ELSE 0
+                END
+              ELSE COALESCE(afe.amount, 0)
+            END
+          ), 0) as total_amount,
           MAX(currency) as currency,
-          COALESCE(SUM(amount_kzt), 0) as total_kzt,
-          COALESCE(SUM(amount_usd), 0) as total_usd
-        FROM account_funding_events
-        WHERE user_id=?
+          COALESCE(SUM(
+            CASE
+              WHEN afe.source_type='topup' THEN
+                CASE
+                  WHEN afe.voided_at IS NULL
+                   AND EXISTS (
+                     SELECT 1
+                     FROM topups t
+                     WHERE t.id = afe.source_id
+                       AND t.status='completed'
+                   )
+                  THEN COALESCE(afe.amount_kzt, 0)
+                  ELSE 0
+                END
+              ELSE COALESCE(afe.amount_kzt, 0)
+            END
+          ), 0) as total_kzt,
+          COALESCE(SUM(
+            CASE
+              WHEN afe.source_type='topup' THEN
+                CASE
+                  WHEN afe.voided_at IS NULL
+                   AND EXISTS (
+                     SELECT 1
+                     FROM topups t
+                     WHERE t.id = afe.source_id
+                       AND t.status='completed'
+                   )
+                  THEN COALESCE(afe.amount_usd, 0)
+                  ELSE 0
+                END
+              ELSE COALESCE(afe.amount_usd, 0)
+            END
+          ), 0) as total_usd
+        FROM account_funding_events afe
+        WHERE afe.user_id=?
     """
     params: List[object] = [user_id]
     if account_id_values:
         placeholders = ",".join(["?"] * len(account_id_values))
-        query += f" AND account_id IN ({placeholders})"
+        query += f" AND afe.account_id IN ({placeholders})"
         params.extend(account_id_values)
-    query += " GROUP BY account_id"
+    query += " GROUP BY afe.account_id"
 
     rows = conn.execute(query, params).fetchall()
     out: Dict[str, Dict[str, float]] = {}
@@ -9784,7 +9842,13 @@ def list_account_requests(current_user=Depends(get_current_user)):
                              FROM account_funding_events afe
                              WHERE afe.account_id = a.id
                                AND afe.source_type = 'topup'
-                               AND afe.voided_at IS NULL), 0) as topup_completed_total
+                               AND afe.voided_at IS NULL
+                               AND EXISTS (
+                                 SELECT 1
+                                 FROM topups t
+                                 WHERE t.id = afe.source_id
+                                   AND t.status='completed'
+                               )), 0) as topup_completed_total
             FROM account_requests r
             LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
             WHERE r.user_id=?
@@ -9844,7 +9908,13 @@ def admin_list_account_requests(admin_user=Depends(get_admin_user)):
                              FROM account_funding_events afe
                              WHERE afe.account_id = a.id
                                AND afe.source_type = 'topup'
-                               AND afe.voided_at IS NULL), 0) as topup_completed_total
+                               AND afe.voided_at IS NULL
+                               AND EXISTS (
+                                 SELECT 1
+                                 FROM topups t
+                                 WHERE t.id = afe.source_id
+                                   AND t.status='completed'
+                               )), 0) as topup_completed_total
             FROM account_requests r
             JOIN users u ON u.id = r.user_id
             LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
@@ -10282,7 +10352,14 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                         user_id,
                         COALESCE(SUM(COALESCE(amount_kzt, 0)), 0) as completed_total_kzt
                       FROM account_funding_events
-                      WHERE source_type='topup' AND voided_at IS NULL
+                      WHERE source_type='topup'
+                        AND voided_at IS NULL
+                        AND EXISTS (
+                          SELECT 1
+                          FROM topups t
+                          WHERE t.id = account_funding_events.source_id
+                            AND t.status='completed'
+                        )
                       GROUP BY user_id
                     ),
                     wallet_stats AS (
@@ -10336,7 +10413,14 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                         user_id,
                         COALESCE(SUM(COALESCE(amount_kzt, 0)), 0) as completed_total_kzt
                       FROM account_funding_events
-                      WHERE source_type='topup' AND voided_at IS NULL
+                      WHERE source_type='topup'
+                        AND voided_at IS NULL
+                        AND EXISTS (
+                          SELECT 1
+                          FROM topups t
+                          WHERE t.id = account_funding_events.source_id
+                            AND t.status='completed'
+                        )
                       GROUP BY user_id
                     ),
                     wallet_stats AS (
@@ -10830,6 +10914,7 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
             float(row["fee_percent"] or 0),
             float(row["vat_percent"] or 0),
         )
+        account_row = conn.execute("SELECT platform, name, currency FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
 
         if previous_status != "completed" and next_status == "completed":
             if hold_applied:
@@ -10852,16 +10937,7 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                 )
                 conn.execute("UPDATE topups SET status=? WHERE id=?", (next_status, topup_id))
 
-            account_row = conn.execute("SELECT platform, name, currency FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
-            topup_payload = _attach_topup_account_amount(
-                [
-                    {
-                        **dict(row),
-                        "account_platform": account_row["platform"] if account_row else None,
-                        "account_currency": account_row["currency"] if account_row else row["currency"],
-                    }
-                ]
-            )[0]
+            topup_payload = _build_topup_account_payload(dict(row), dict(account_row) if account_row else None)
             budget_delta = float(topup_payload.get("amount_account") or 0)
             if budget_delta > 0:
                 acc = conn.execute("SELECT budget_total FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
@@ -10880,6 +10956,7 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                 source_type="topup",
                 source_id=topup_id,
                 note=f"Completed topup #{topup_id}",
+                update_existing=True,
             )
             conn.execute("UPDATE users SET is_client=1 WHERE id=?", (row["user_id"],))
             user_row = conn.execute("SELECT email FROM users WHERE id=?", (row["user_id"],)).fetchone()
@@ -10895,6 +10972,38 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                     ]
                 )
             )
+        elif previous_status == "completed" and next_status != "completed":
+            topup_payload = _build_topup_account_payload(dict(row), dict(account_row) if account_row else None)
+            budget_delta = float(topup_payload.get("amount_account") or 0)
+            if budget_delta > 0:
+                acc = conn.execute("SELECT budget_total FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
+                current_total = float(acc["budget_total"] or 0) if acc else 0.0
+                conn.execute(
+                    "UPDATE ad_accounts SET budget_total=? WHERE id=?",
+                    (max(0.0, current_total - budget_delta), row["account_id"]),
+                )
+            wallet = _get_or_create_wallet(conn, row["user_id"])
+            new_balance = float(wallet["balance"]) + gross_amount
+            conn.execute(
+                "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+                (new_balance, row["user_id"]),
+            )
+            conn.execute(
+                """
+                INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (row["user_id"], row["account_id"], gross_amount, row["currency"], "topup_hold_release", f"Reverted completed topup #{topup_id}"),
+            )
+            conn.execute(
+                """
+                UPDATE account_funding_events
+                SET voided_at=?, voided_by=?
+                WHERE source_type='topup' AND source_id=? AND voided_at IS NULL
+                """,
+                (datetime.utcnow().isoformat(), admin_user.get("email"), topup_id),
+            )
+            conn.execute("UPDATE topups SET status=?, hold_applied=0 WHERE id=?", (next_status, topup_id))
         elif previous_status == "pending" and next_status == "failed":
             if hold_applied:
                 wallet = _get_or_create_wallet(conn, row["user_id"])
