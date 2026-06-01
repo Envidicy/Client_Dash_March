@@ -44,6 +44,8 @@ _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
 _ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
 _ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC = int(os.getenv("ASSISTANT_GLOBAL_CACHE_TTL_SEC", "3600") or 3600)
+_USER_OVERVIEW_CACHE: Dict[str, Dict[str, object]] = {}
+_USER_OVERVIEW_TTL_SEC = max(30, int(os.getenv("USER_OVERVIEW_CACHE_TTL_SEC", "300") or 300))
 _PUBLIC_URL_TOKEN_SECRET_FALLBACK = secrets.token_hex(32)
 _PASSWORD_HASH_SCHEME = "pbkdf2_sha256"
 _PASSWORD_HASH_ITERATIONS = max(120000, int(os.getenv("PASSWORD_HASH_ITERATIONS", "390000") or 390000))
@@ -6058,12 +6060,14 @@ def _account_funding_totals_map(
     conn,
     user_id: int,
     account_ids: Optional[List[int]] = None,
+    sync_completed_topups: bool = True,
 ) -> Dict[str, Dict[str, float]]:
     account_id_values = sorted({int(value) for value in (account_ids or []) if int(value) > 0})
-    if len(account_id_values) == 1:
-        _sync_completed_topup_funding_events(conn, user_id=user_id, account_id=account_id_values[0])
-    else:
-        _sync_completed_topup_funding_events(conn, user_id=user_id)
+    if sync_completed_topups:
+        if len(account_id_values) == 1:
+            _sync_completed_topup_funding_events(conn, user_id=user_id, account_id=account_id_values[0])
+        else:
+            _sync_completed_topup_funding_events(conn, user_id=user_id)
 
     query = """
         SELECT
@@ -7888,6 +7892,25 @@ def _build_insights_overview_for_user(
     google_account_id: Optional[int] = None,
     tiktok_account_id: Optional[int] = None,
 ) -> Dict[str, object]:
+    cache_key = ":".join(
+        [
+            str(current_user.get("id") or ""),
+            str(date_from or ""),
+            str(date_to or ""),
+            str(meta_account_id or ""),
+            str(google_account_id or ""),
+            str(tiktok_account_id or ""),
+        ]
+    )
+    now = time.time()
+    cached_item = _USER_OVERVIEW_CACHE.get(cache_key)
+    if cached_item:
+        cached_ts = float(cached_item.get("ts") or 0.0)
+        cached_data = cached_item.get("data")
+        if cached_ts + _USER_OVERVIEW_TTL_SEC > now and isinstance(cached_data, dict):
+            return dict(cached_data)
+        _USER_OVERVIEW_CACHE.pop(cache_key, None)
+
     def _to_float(value: object) -> float:
         try:
             return float(value)
@@ -8024,13 +8047,15 @@ def _build_insights_overview_for_user(
             account_payload["daily"] = [daily_map[k] for k in sorted(daily_map.keys())]
             serialized_daily_by_account[platform].append(account_payload)
 
-    return {
+    payload = {
         "totals": totals,
         "daily": daily,
         "daily_by_account": serialized_daily_by_account,
         "date_from": date_from,
         "date_to": date_to,
     }
+    _USER_OVERVIEW_CACHE[cache_key] = {"ts": now, "data": payload}
+    return payload
 
 
 def _assistant_history_range(req: PlanRequest) -> Tuple[str, str]:
@@ -11589,7 +11614,7 @@ def accounts_finance_summary(
         wallet = _get_or_create_wallet(conn, current_user["id"])
         internal_client_balance = _finance_to_float(wallet.get("balance"))
         account_ids = [int(row.get("id") or 0) for row in accounts if int(row.get("id") or 0) > 0]
-        funding_totals_map = _account_funding_totals_map(conn, current_user["id"], account_ids)
+        funding_totals_map = _account_funding_totals_map(conn, current_user["id"], account_ids, sync_completed_topups=False)
 
         snapshot_map: Dict[int, Dict[str, object]] = {}
         if accounts:

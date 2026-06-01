@@ -7,7 +7,6 @@ import {
   getTopupAccountFundingUsd,
   getTopupBreakdown,
   getWalletAvailableBalance,
-  sumOverviewSpend,
 } from '../../../../lib/finance/model'
 
 export const dynamic = 'force-dynamic'
@@ -179,6 +178,12 @@ function buildRateStatusRows(ratesPayload) {
   return rows
 }
 
+function sumSpendItems(payload) {
+  const items = Array.isArray(payload?.items) ? payload.items : []
+  if (!items.length) return 0
+  return items.reduce((sum, row) => sum + Number(row?.spend || 0), 0)
+}
+
 export async function GET(request) {
   const auth = authHeader(request)
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
@@ -188,7 +193,7 @@ export async function GET(request) {
   const responses = await Promise.all([
     upstreamFetch('/wallet', auth),
     upstreamFetch('/rates/bcc', auth),
-    upstreamFetch(`/insights/overview?date_from=${current.fromStr}&date_to=${current.toStr}`, auth),
+    upstreamFetch(`/accounts/spend?date_from=${current.fromStr}&date_to=${current.toStr}`, auth),
     upstreamFetch('/wallet/transactions', auth),
     upstreamFetch('/topups', auth),
     upstreamFetch('/wallet/topup-requests', auth),
@@ -210,7 +215,7 @@ export async function GET(request) {
     financeDocsRes.ok ? financeDocsRes.json() : [],
   ])
 
-  const periodSpend = sumOverviewSpend(spendPayload)
+  const periodSpend = sumSpendItems(spendPayload)
   const completedTopups = (topups || []).filter((row) => {
     const status = String(row.status || '').toLowerCase()
     const date = String(row.created_at || '').slice(0, 10)

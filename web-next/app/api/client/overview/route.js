@@ -12,7 +12,6 @@ import {
   getWalletAvailableBalance,
   normalizeAccountStatus,
   platformLabel,
-  sumOverviewSpend,
 } from '../../../../lib/finance/model'
 
 export const dynamic = 'force-dynamic'
@@ -64,10 +63,6 @@ async function parseUpstreamJson({ name, path, response, fallback, required, iss
     if (required) issues.push({ name, path, status, reason: 'invalid_json' })
     return fallback
   }
-}
-
-function useDbFinanceRead() {
-  return String(process.env.FINANCE_READ_FROM_DB || '').trim() === '1'
 }
 
 function fmtMoney(value, currency = 'USD', digits = 0) {
@@ -152,21 +147,6 @@ function parseIsoDate(value) {
 function diffDaysInclusive(from, to) {
   const ms = to.getTime() - from.getTime()
   return Math.floor(ms / 86400000) + 1
-}
-
-function mergeDailySpend(payload) {
-  const byDate = new Map()
-  const daily = payload?.daily || {}
-  for (const platform of ['meta', 'google', 'tiktok']) {
-    for (const row of daily?.[platform] || []) {
-      const date = row.date || row.date_start
-      if (!date) continue
-      const current = byDate.get(date) || { date, spend: 0 }
-      current.spend += Number(row.spend || 0)
-      byDate.set(date, current)
-    }
-  }
-  return Array.from(byDate.values()).sort((a, b) => String(a.date).localeCompare(String(b.date)))
 }
 
 function sumAccountSpendItems(payload) {
@@ -402,7 +382,6 @@ export async function GET(request) {
   const auth = authHeader(request)
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const dbMode = useDbFinanceRead()
   const { searchParams } = new URL(request.url)
   const dateFromRaw = searchParams.get('date_from')
   const dateToRaw = searchParams.get('date_to')
@@ -422,9 +401,7 @@ export async function GET(request) {
   const endpoints = [
     { name: 'wallet', path: '/wallet', required: false, fallback: {} },
     { name: 'rates', path: '/rates/bcc', required: false, fallback: null },
-    { name: 'spend_current', path: `/insights/overview?date_from=${current.fromStr}&date_to=${current.toStr}`, required: false, fallback: null },
-    { name: 'spend_previous', path: `/insights/overview?date_from=${previous.fromStr}&date_to=${previous.toStr}`, required: false, fallback: null },
-    { name: 'accounts', path: '/accounts?include_live_billing=1', required: false, fallback: [] },
+    { name: 'accounts', path: '/accounts', required: false, fallback: [] },
     { name: 'account_spend', path: `/accounts/spend?date_from=${current.fromStr}&date_to=${current.toStr}`, required: false, fallback: { items: [] } },
     { name: 'account_spend_previous', path: `/accounts/spend?date_from=${previous.fromStr}&date_to=${previous.toStr}`, required: false, fallback: { items: [] } },
     { name: 'account_spend_daily', path: `/accounts/spend/daily?date_from=${current.fromStr}&date_to=${current.toStr}`, required: false, fallback: { items: [] } },
@@ -433,7 +410,7 @@ export async function GET(request) {
     { name: 'topups', path: '/topups', required: false, fallback: [] },
     { name: 'wallet_topup_requests', path: '/wallet/topup-requests', required: false, fallback: [] },
     { name: 'finance_docs', path: '/client-finance-documents', required: false, fallback: [] },
-    ...(dbMode ? [{ name: 'finance_summary', path: '/accounts/finance/summary', required: false, fallback: { items: [] } }] : []),
+    { name: 'finance_summary', path: '/accounts/finance/summary', required: false, fallback: { items: [] } },
   ]
 
   const responseMap = {}
@@ -479,8 +456,6 @@ export async function GET(request) {
   try {
     const wallet = payloadMap.wallet
     const ratesPayload = payloadMap.rates
-    const currentSpendPayload = payloadMap.spend_current
-    const previousSpendPayload = payloadMap.spend_previous
     const accounts = payloadMap.accounts
     const accountSpendPayload = payloadMap.account_spend
     const accountSpendPreviousPayload = payloadMap.account_spend_previous
@@ -500,8 +475,8 @@ export async function GET(request) {
 
     const currentSpendDb = sumAccountSpendItems(accountSpendPayload)
     const previousSpendDb = sumAccountSpendItems(accountSpendPreviousPayload)
-    const currentSpend = currentSpendDb == null ? sumOverviewSpend(currentSpendPayload) : currentSpendDb
-    const previousSpend = previousSpendDb == null ? sumOverviewSpend(previousSpendPayload) : previousSpendDb
+    const currentSpend = currentSpendDb == null ? 0 : currentSpendDb
+    const previousSpend = previousSpendDb == null ? 0 : previousSpendDb
     const spendDelta = fmtDeltaPct(currentSpend, previousSpend)
     const uniqueWalletTopupRequests = dedupeBy(
       (walletTopupRequests || []).slice().sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))),
@@ -633,10 +608,7 @@ export async function GET(request) {
 
     const pendingSummary = buildPendingSummary(accountRequests, uniqueWalletTopupRequests, financeDocs)
 
-    const spendDailyDb = dailySpendMapFromDb(accountSpendDailyPayload)
-    const spendDailyRows = mergeDailySpend(currentSpendPayload)
-    const spendDailyFallback = new Map(spendDailyRows.map((row) => [row.date, Number(row.spend || 0)]))
-    const spendDaily = spendDailyDb || spendDailyFallback
+    const spendDaily = dailySpendMapFromDb(accountSpendDailyPayload) || new Map()
     const topupsNormalized = aggregateCompletedTopups(topups, current.fromStr, current.toStr)
     const series = lastDaysSeries(current, spendDaily, topupsNormalized.daily, Math.min(31, Math.max(6, rangeDays)))
     const netFlow = topupsNormalized.total - currentSpend
@@ -675,7 +647,7 @@ export async function GET(request) {
     const platformCount = new Set(uniqueAccounts.map((row) => row.platform).filter(Boolean)).size
 
     return NextResponse.json({
-      financeMode: dbMode ? 'db_fallback' : 'runtime_live',
+      financeMode: 'snapshot',
       metrics: [
         {
           label: 'Available Balance',

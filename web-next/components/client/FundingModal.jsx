@@ -177,7 +177,7 @@ export default function FundingModal({ accountId, open, onClose, onSubmitted }) 
                 <strong className={styles.fundingStageValue}>{context.account.currency}</strong>
                 <div className={styles.fundingStageMeta}>
                   <span>{context.account.name}</span>
-                  <span>{context.account.liveBalanceLabel ? `${tr('Live', 'Live')} ${context.account.liveBalanceLabel}` : tr('Ready for funding', 'Готов к пополнению')}</span>
+                  <span>{context.account.balanceLabel ? `${tr('Balance', 'Баланс')} ${context.account.balanceLabel}` : tr('Ready for funding', 'Готов к пополнению')}</span>
                 </div>
               </article>
             </div>
