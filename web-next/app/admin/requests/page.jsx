@@ -152,11 +152,7 @@ export default function AdminRequestsPage() {
     const offset = append ? rows.length : 0
     try {
       if (append) setLoadingMore(true)
-      const params = new URLSearchParams({
-        limit: String(REQUESTS_FETCH_LIMIT),
-        offset: String(offset),
-      })
-      const res = await safeFetch(`/admin/account-requests?${params.toString()}`)
+      const res = await safeFetch(`/admin/account-requests?limit=${REQUESTS_FETCH_LIMIT}&offset=${offset}`)
       if (!res.ok) throw new Error(tr('Failed to load requests.', 'Не удалось загрузить запросы.'))
       const data = await res.json()
       const items = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : []

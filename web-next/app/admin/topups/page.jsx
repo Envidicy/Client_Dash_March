@@ -118,11 +118,7 @@ export default function AdminTopupsPage() {
     const offset = append ? rows.length : 0
     try {
       if (append) setLoadingMore(true)
-      const params = new URLSearchParams({
-        limit: String(TOPUPS_PAGE_SIZE),
-        offset: String(offset),
-      })
-      const res = await adminRouteFetch(`/api/admin/topups?${params.toString()}`)
+      const res = await adminRouteFetch(`/api/admin/topups?limit=${TOPUPS_PAGE_SIZE}&offset=${offset}`)
       if (!res.ok) throw new Error(tr('Failed to load topups.', 'Не удалось загрузить пополнения.'))
       const data = await res.json()
       const nextRows = Array.isArray(data?.items) ? data.items : []
