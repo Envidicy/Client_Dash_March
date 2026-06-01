@@ -3322,6 +3322,11 @@ def _invoice_html(payload: Dict[str, object]) -> str:
 """
 
 
+@app.get("/")
+def root() -> Dict[str, str]:
+    return {"status": "ok", "service": "envidicy-media-plan-api"}
+
+
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
@@ -10242,7 +10247,14 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
     if not get_conn:
         return []
     with get_conn() as conn:
-        _sync_completed_topup_funding_events(conn)
+        try:
+            _sync_completed_topup_funding_events(conn)
+        except Exception:
+            logging.exception("Failed to sync completed topup funding events before admin_list_clients")
+            try:
+                conn.rollback()
+            except Exception:
+                logging.exception("Rollback failed after funding sync error in admin_list_clients")
         clients: List[Dict[str, object]] = []
         try:
             try:
