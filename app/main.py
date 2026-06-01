@@ -31,7 +31,7 @@ from google.ads.googleads.client import GoogleAdsClient
 from google.api_core import exceptions as google_api_exceptions
 from dotenv import load_dotenv
 
-from app.db import get_conn
+from app.db import get_conn, should_auto_apply_schema_on_startup
 
 load_dotenv()
 
@@ -2626,7 +2626,10 @@ async def log_exceptions(request: Request, call_next):
 try:
     from app.db import apply_schema
 
-    apply_schema()
+    if should_auto_apply_schema_on_startup():
+        apply_schema()
+    else:
+        logging.info("Startup schema auto-apply is disabled for this environment")
 except Exception:
     logging.exception("Schema auto-apply failed during startup; continuing without blocking app boot")
 
