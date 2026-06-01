@@ -127,10 +127,12 @@ export default function OverviewPage() {
   const [fundingAccountId, setFundingAccountId] = useState(null)
   const [accountRequestOpen, setAccountRequestOpen] = useState(false)
   const [selectedAccountTab, setSelectedAccountTab] = useState('')
-  const [refreshingAccountId, setRefreshingAccountId] = useState('')
+  const [refreshingAccountIds, setRefreshingAccountIds] = useState([])
+  const [refreshingAll, setRefreshingAll] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [customRangeActive, setCustomRangeActive] = useState(false)
+  const [analyticsLoading, setAnalyticsLoading] = useState(false)
 
   function translateOverviewLabel(value) {
     const v = String(value || '')
@@ -199,36 +201,80 @@ export default function OverviewPage() {
     return v
   }
 
+  function markAccountRefreshing(accountId, refreshing) {
+    const id = String(accountId || '').trim()
+    if (!id) return
+    setRefreshingAccountIds((current) => {
+      const next = new Set(current)
+      if (refreshing) next.add(id)
+      else next.delete(id)
+      return Array.from(next)
+    })
+  }
+
+  async function requestAccountLiveBilling(accountId, token) {
+    const id = String(accountId || '').trim()
+    if (!id) throw new Error('account_id is required')
+    const res = await fetch(`/api/client/accounts/${encodeURIComponent(id)}/refresh-live-billing`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    if (res.status === 401) {
+      router.replace('/login')
+      return false
+    }
+    const payload = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(payload?.detail || tr('Failed to refresh account balance', 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ Р±Р°Р»Р°РЅСЃ Р°РєРєР°СѓРЅС‚Р°'))
+    return true
+  }
+
   async function refreshAccountLiveBilling(accountId) {
     const id = String(accountId || '').trim()
-    if (!id) {
-      await loadOverview()
-      return
-    }
+    if (!id) return
+    if (refreshingAccountIds.includes(id)) return
     const token = getAuthToken()
     if (!token) {
       router.replace('/login')
       return
     }
     try {
-      setRefreshingAccountId(id)
+      markAccountRefreshing(id, true)
       setLoadError('')
-      const res = await fetch(`/api/client/accounts/${encodeURIComponent(id)}/refresh-live-billing`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        cache: 'no-store',
-      })
-      if (res.status === 401) {
-        router.replace('/login')
-        return
-      }
-      const payload = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(payload?.detail || tr('Failed to refresh account balance', 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ Р±Р°Р»Р°РЅСЃ Р°РєРєР°СѓРЅС‚Р°'))
-      await loadOverview()
+      const ok = await requestAccountLiveBilling(id, token)
+      if (ok) await loadOverview({ loadAnalytics: false })
     } catch (error) {
       setLoadError(error?.message || tr('Failed to refresh account balance', 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ Р±Р°Р»Р°РЅСЃ Р°РєРєР°СѓРЅС‚Р°'))
     } finally {
-      setRefreshingAccountId('')
+      markAccountRefreshing(id, false)
+    }
+  }
+
+  async function refreshVisibleAccounts() {
+    const ids = visibleAccounts.map((row) => String(row?.accountId || '').trim()).filter(Boolean)
+    const uniqueIds = Array.from(new Set(ids))
+    if (!uniqueIds.length || refreshingAll) return
+    const token = getAuthToken()
+    if (!token) {
+      router.replace('/login')
+      return
+    }
+    setRefreshingAll(true)
+    setLoadError('')
+    setRefreshingAccountIds(uniqueIds)
+    try {
+      for (const id of uniqueIds) {
+        try {
+          const ok = await requestAccountLiveBilling(id, token)
+          if (ok) await loadOverview({ loadAnalytics: false })
+        } catch (error) {
+          setLoadError(error?.message || tr('Failed to refresh account balance', 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ Р±Р°Р»Р°РЅСЃ Р°РєРєР°СѓРЅС‚Р°'))
+        } finally {
+          markAccountRefreshing(id, false)
+        }
+      }
+    } finally {
+      setRefreshingAll(false)
     }
   }
 
@@ -253,6 +299,42 @@ export default function OverviewPage() {
     router.push('/funds')
   }
 
+  async function loadOverviewAnalytics(next = {}) {
+    const token = getAuthToken()
+    if (!token) return
+
+    const nextDateFrom = Object.prototype.hasOwnProperty.call(next, 'dateFrom') ? next.dateFrom : dateFrom
+    const nextDateTo = Object.prototype.hasOwnProperty.call(next, 'dateTo') ? next.dateTo : dateTo
+    const useCustom = Object.prototype.hasOwnProperty.call(next, 'useCustom') ? next.useCustom : customRangeActive
+
+    try {
+      setAnalyticsLoading(true)
+      const params = new URLSearchParams()
+      params.set('full', '1')
+      if (useCustom && nextDateFrom && nextDateTo) {
+        params.set('date_from', nextDateFrom)
+        params.set('date_to', nextDateTo)
+      }
+      const res = await fetch(`/api/client/overview?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+      })
+      if (res.status === 401) {
+        router.replace('/login')
+        return
+      }
+      if (!res.ok) return
+      const payload = await res.json()
+      if (payload?.capitalFlow) setCapitalFlow(payload.capitalFlow)
+      if (Array.isArray(payload?.alerts)) {
+        setAlerts(payload.alerts)
+        setStatusAlerts(payload.statusAlerts || `${payload.alerts.length} Alerts`)
+      }
+    } finally {
+      setAnalyticsLoading(false)
+    }
+  }
+
   async function loadOverview(next = {}) {
     const token = getAuthToken()
     if (!token) {
@@ -263,6 +345,7 @@ export default function OverviewPage() {
     const nextDateFrom = Object.prototype.hasOwnProperty.call(next, 'dateFrom') ? next.dateFrom : dateFrom
     const nextDateTo = Object.prototype.hasOwnProperty.call(next, 'dateTo') ? next.dateTo : dateTo
     const useCustom = Object.prototype.hasOwnProperty.call(next, 'useCustom') ? next.useCustom : customRangeActive
+    const shouldLoadAnalytics = next.loadAnalytics !== false
 
     try {
       setLoadError('')
@@ -304,6 +387,13 @@ export default function OverviewPage() {
       setCustomRangeActive(Boolean(payloadRange.custom))
       setDateFrom(String(payloadRange.date_from || nextDateFrom || ''))
       setDateTo(String(payloadRange.date_to || nextDateTo || ''))
+      if (shouldLoadAnalytics) {
+        loadOverviewAnalytics({
+          dateFrom: String(payloadRange.date_from || nextDateFrom || ''),
+          dateTo: String(payloadRange.date_to || nextDateTo || ''),
+          useCustom: Boolean(payloadRange.custom),
+        })
+      }
     } catch {
       setLoadError(tr('Failed to load overview data. Please refresh or contact support.', 'РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РґР°РЅРЅС‹Рµ overview. РћР±РЅРѕРІРёС‚Рµ СЃС‚СЂР°РЅРёС†Сѓ РёР»Рё РѕР±СЂР°С‚РёС‚РµСЃСЊ РІ РїРѕРґРґРµСЂР¶РєСѓ.'))
     } finally {
@@ -414,8 +504,9 @@ export default function OverviewPage() {
   }, [accountsData])
 
   const accountTabs = useMemo(() => {
+    if (!dedupedAccounts.length) return []
     const seen = new Set()
-    return dedupedAccounts
+    const tabs = dedupedAccounts
       .map((row) => {
         const label = String(row?.account || '').trim()
         if (!label) return null
@@ -428,10 +519,12 @@ export default function OverviewPage() {
         seen.add(key)
         return true
       })
-  }, [dedupedAccounts])
+    return [{ id: 'all', label: tr('All', 'Все') }, ...tabs]
+  }, [dedupedAccounts, tr])
 
   const visibleAccounts = useMemo(() => {
     if (!selectedAccountTab) return []
+    if (selectedAccountTab === 'all') return dedupedAccounts
     return dedupedAccounts.filter((row) => String(row?.account || '').trim().toLowerCase() === selectedAccountTab)
   }, [dedupedAccounts, selectedAccountTab])
 
@@ -516,6 +609,14 @@ export default function OverviewPage() {
             </div>
           </div>
           <div className={styles.headerControls}>
+            <button
+              className={styles.outlinedActionButton}
+              disabled={!visibleAccounts.some((row) => row.accountId) || refreshingAll}
+              onClick={refreshVisibleAccounts}
+              type="button"
+            >
+              {refreshingAll ? tr('Refreshing...', 'Обновляем...') : tr('Refresh All', 'Обновить все')}
+            </button>
             <button className={styles.headerPrimaryAction} onClick={() => setAccountRequestOpen(true)} type="button">
               {tr('New Account Request', 'РќРѕРІС‹Р№ Р·Р°РїСЂРѕСЃ РЅР° Р°РєРєР°СѓРЅС‚')}
             </button>
@@ -612,13 +713,13 @@ export default function OverviewPage() {
                         в–Ў
                       </button>
                       <button
-                        className={styles.accountIconButton}
-                        disabled={!row.accountId || refreshingAccountId === String(row.accountId)}
+                        className={`${styles.accountIconButton} ${refreshingAccountIds.includes(String(row.accountId || '')) ? styles.accountIconButtonLoading : ''}`}
+                        disabled={!row.accountId || refreshingAccountIds.includes(String(row.accountId || ''))}
                         onClick={() => handleOverviewAction('refresh', row.accountId)}
                         title={tr('Refresh account balance', 'Обновить баланс аккаунта')}
                         type="button"
                       >
-                        {refreshingAccountId === String(row.accountId) ? 'вЂ¦' : 'в†»'}
+                        ↻
                       </button>
                     </div>
                   </td>
@@ -638,7 +739,9 @@ export default function OverviewPage() {
                   ? tr('Completed Funding Timeline', 'Р”РёРЅР°РјРёРєР° Р·Р°РІРµСЂС€РµРЅРЅС‹С… РїРѕРїРѕР»РЅРµРЅРёР№')
                   : tr('Spend vs Completed Funding', 'Р Р°СЃС…РѕРґ vs Р—Р°РІРµСЂС€РµРЅРЅС‹Рµ РїРѕРїРѕР»РЅРµРЅРёСЏ')}
               </h3>
-              <p className={styles.chartInsight}>{translateOverviewHint(capitalFlow.insight)}</p>
+              <p className={styles.chartInsight}>
+                {analyticsLoading ? tr('Updating chart...', 'Обновляем график...') : translateOverviewHint(capitalFlow.insight)}
+              </p>
             </div>
             <div className={styles.dateRangeControls}>
               <input

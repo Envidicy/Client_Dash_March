@@ -378,6 +378,7 @@ export async function GET(request) {
   const preset = Math.max(7, Math.min(90, Number(searchParams.get('preset') || 30)))
   const platform = String(searchParams.get('platform') || 'all').toLowerCase()
   const accountId = String(searchParams.get('account_id') || '')
+  const fastMode = searchParams.get('fast') === '1' || searchParams.get('mode') === 'fast'
   const dateFromRaw = searchParams.get('date_from')
   const dateToRaw = searchParams.get('date_to')
 
@@ -402,6 +403,85 @@ export async function GET(request) {
   const accounts = (allAccounts || []).filter((item) => SUPPORTED_PLATFORMS.has(String(item?.platform || '').toLowerCase()))
   const validSelectedAccountId = accountId && accounts.some((item) => String(item.id) === accountId) ? accountId : ''
   const selectedAccount = (accounts || []).find((item) => String(item.id) === validSelectedAccountId)
+  const platforms = listPlatforms(platform)
+
+  if (fastMode) {
+    const financeSummaryRes = await upstreamFetch('/accounts/finance/summary', auth)
+    if (financeSummaryRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
+    const financeSummaryPayload = financeSummaryRes.ok ? await financeSummaryRes.json() : { items: [] }
+    const currentAccountRows = buildRowsFromSummary(financeSummaryPayload?.items || [], accounts, platforms, validSelectedAccountId)
+    const summarySpendTotal = (Array.isArray(financeSummaryPayload?.items) ? financeSummaryPayload.items : [])
+      .filter((row) => (platform === 'all' ? true : String(row?.platform || '').toLowerCase() === platform))
+      .filter((row) => (validSelectedAccountId ? String(row?.account_id || '') === validSelectedAccountId : true))
+      .reduce((sum, row) => sum + Number(row?.spend_total || 0), 0)
+
+    return NextResponse.json({
+      financeMode: 'snapshot',
+      performanceMode: 'fast',
+      filters: {
+        selectedPreset: preset,
+        selectedPlatform: platform,
+        selectedAccountId: validSelectedAccountId,
+        selectedDateFrom: current.fromStr,
+        selectedDateTo: current.toStr,
+        customRange: hasCustomRange,
+        presets: [
+          { value: 7, label: 'Last 7 Days' },
+          { value: 30, label: 'Last 30 Days' },
+          { value: 90, label: 'Last 90 Days' },
+        ],
+        platforms: [
+          { value: 'all', label: 'All Platforms' },
+          { value: 'google', label: 'Google Ads' },
+          { value: 'meta', label: 'Meta' },
+          { value: 'tiktok', label: 'TikTok Ads' },
+        ],
+        accounts: [
+          { value: '', label: 'All Accounts' },
+          ...(accounts || [])
+            .filter((item) => (platform === 'all' ? true : String(item.platform || '').toLowerCase() === platform))
+            .map((item) => ({
+              value: String(item.id),
+              label: item.name || `ID ${item.id}`,
+            })),
+        ],
+        accountsAll: (accounts || []).map((item) => ({
+          value: String(item.id),
+          label: item.name || `ID ${item.id}`,
+          platform: String(item.platform || '').toLowerCase(),
+        })),
+      },
+      metrics: [
+        {
+          label: 'Spend',
+          value: fmtMoney(summarySpendTotal, 'USD', 0),
+          hint: 'Saved snapshot',
+        },
+        {
+          label: 'Impressions',
+          value: '-',
+          hint: 'Loading analytics',
+        },
+        {
+          label: 'Clicks',
+          value: '-',
+          hint: 'Loading analytics',
+        },
+        {
+          label: 'CTR',
+          value: '-',
+          hint: 'Loading analytics',
+        },
+      ],
+      pulse: {
+        series: [],
+        insight: 'Saved spend snapshots are shown while delivery analytics loads.',
+      },
+      platformRows: mapRowsForUi(currentAccountRows),
+      topMovers: [],
+      attentionAreas: [],
+    })
+  }
 
   const currentParams = buildOverviewParams(current, selectedAccount)
   const previousParams = buildOverviewParams(previous, selectedAccount)
@@ -438,7 +518,6 @@ export async function GET(request) {
       .map((row) => [String(row.account_id), row])
   )
 
-  const platforms = listPlatforms(platform)
   const currentTotals = sumTotals(currentPayload?.totals, platforms)
   const previousTotals = sumTotals(previousPayload?.totals, platforms)
   const ctr = currentTotals.impressions > 0 ? (currentTotals.clicks / currentTotals.impressions) * 100 : 0

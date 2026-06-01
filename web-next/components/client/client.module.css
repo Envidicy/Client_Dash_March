@@ -910,6 +910,19 @@
   cursor: not-allowed;
 }
 
+.accountIconButtonLoading {
+  animation: accountRefreshSpin 780ms linear infinite;
+}
+
+@keyframes accountRefreshSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .noteGood,
 .noteWarn {
   display: inline-block;

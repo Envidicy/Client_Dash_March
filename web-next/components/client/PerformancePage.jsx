@@ -130,6 +130,7 @@ export default function PerformancePage({ initialAccountId = '' }) {
   const router = useRouter()
   const { tr } = useI18n()
   const [loading, setLoading] = useState(true)
+  const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [filters, setFilters] = useState(FALLBACK_FILTERS)
   const [selectedPreset, setSelectedPreset] = useState(30)
@@ -184,6 +185,8 @@ export default function PerformancePage({ initialAccountId = '' }) {
   async function loadPerformance(next = {}) {
     const seq = loadSeqRef.current + 1
     loadSeqRef.current = seq
+    const fast = next.fast === true
+    const background = next.background === true
     const token = getAuthToken()
     if (!token) {
       router.replace('/login')
@@ -200,10 +203,15 @@ export default function PerformancePage({ initialAccountId = '' }) {
     const useCustom = Object.prototype.hasOwnProperty.call(next, 'useCustom') ? next.useCustom : customRangeActive
 
     try {
-      setLoading(true)
+      if (background) {
+        setAnalyticsLoading(true)
+      } else {
+        setLoading(true)
+      }
       setLoadError('')
       const params = new URLSearchParams()
       params.set('preset', String(preset))
+      if (fast) params.set('fast', '1')
       if (platform) params.set('platform', platform)
       if (accountId) params.set('account_id', accountId)
       if (useCustom && dateFrom && dateTo) {
@@ -245,17 +253,37 @@ export default function PerformancePage({ initialAccountId = '' }) {
       setRows(Array.isArray(payload.platformRows) ? payload.platformRows : [])
       setTopMovers(Array.isArray(payload.topMovers) ? payload.topMovers : [])
       setAttentionAreas(Array.isArray(payload.attentionAreas) ? payload.attentionAreas : [])
+      if (fast && next.loadFullAfter !== false) {
+        setLoading(false)
+        window.setTimeout(() => {
+          loadPerformance({
+            preset,
+            platform,
+            accountId,
+            dateFrom,
+            dateTo,
+            useCustom,
+            background: true,
+          })
+        }, 0)
+      }
     } catch {
       if (seq !== loadSeqRef.current) return
-      setLoadError(tr('Failed to load performance data. Please refresh or contact support.', 'Не удалось загрузить данные перфоманса. Обновите страницу или обратитесь в поддержку.'))
+      if (!background) {
+        setLoadError(tr('Failed to load performance data. Please refresh or contact support.', 'Не удалось загрузить данные перфоманса. Обновите страницу или обратитесь в поддержку.'))
+      }
     } finally {
       if (seq !== loadSeqRef.current) return
-      setLoading(false)
+      if (background) {
+        setAnalyticsLoading(false)
+      } else {
+        setLoading(false)
+      }
     }
   }
 
   useEffect(() => {
-    loadPerformance({ accountId: initialAccountId || accountIdFromUrl() })
+    loadPerformance({ accountId: initialAccountId || accountIdFromUrl(), fast: true })
   }, [router, initialAccountId])
 
   async function refreshPerformanceStats() {
@@ -370,7 +398,7 @@ export default function PerformancePage({ initialAccountId = '' }) {
       pageTitle={tr('Performance Dashboard', 'Перфоманс дашборд')}
       pageSubtitle={tr('Track delivery, spend and platform performance across your advertising accounts.', 'Отслеживайте доставку, расход и эффективность платформ по вашим рекламным аккаунтам.')}
       headerActionLabel=""
-      statusAlerts={loading ? tr('Syncing…', 'Синхронизация…') : tr('Live', 'Live')}
+      statusAlerts={loading ? tr('Syncing...', 'Синхронизация...') : analyticsLoading ? tr('Updating analytics...', 'Обновляем аналитику...') : tr('Live', 'Live')}
       statusRows={statusRows}
     >
       {loadError ? <div className={styles.pageErrorBanner}>{loadError}</div> : null}
