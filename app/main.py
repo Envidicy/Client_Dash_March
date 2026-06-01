@@ -5717,13 +5717,16 @@ def _finance_refresh_snapshot_for_account(
 
     wallet = _get_or_create_wallet(conn, client_id)
     internal_client_balance = _finance_to_float(wallet.get("balance"))
+    funding_totals = _account_funding_totals_map(conn, client_id, [account_id])
+    funding_payload = funding_totals.get(str(account_id)) or {}
+    funded_total = _finance_to_float(funding_payload.get("amount"))
 
     optional_balance = None
     if refresh_live_billing:
         live_payload = _attach_live_billing(account, force_refresh=True).get("live_billing")
         optional_balance = _finance_extract_optional_balance(live_payload if isinstance(live_payload, dict) else None)
 
-    remaining_balance = internal_client_balance - spend_total
+    remaining_balance = funded_total - spend_total
     synced_at = datetime.utcnow().isoformat() + "Z"
 
     conn.execute(
@@ -5764,6 +5767,7 @@ def _finance_refresh_snapshot_for_account(
         "account_id": account_id,
         "client_id": client_id,
         "currency": currency,
+        "funded_total": round(funded_total, 6),
         "spend_today": round(spend_today, 6),
         "spend_total": round(spend_total, 6),
         "optional_balance": optional_balance,
@@ -6032,10 +6036,18 @@ def _sync_completed_topup_funding_events(conn, user_id: Optional[int] = None, ac
         )
 
 
-def _account_funding_totals_map(conn, user_id: int) -> Dict[str, Dict[str, float]]:
-    _sync_completed_topup_funding_events(conn, user_id=user_id)
-    rows = conn.execute(
-        """
+def _account_funding_totals_map(
+    conn,
+    user_id: int,
+    account_ids: Optional[List[int]] = None,
+) -> Dict[str, Dict[str, float]]:
+    account_id_values = sorted({int(value) for value in (account_ids or []) if int(value) > 0})
+    if len(account_id_values) == 1:
+        _sync_completed_topup_funding_events(conn, user_id=user_id, account_id=account_id_values[0])
+    else:
+        _sync_completed_topup_funding_events(conn, user_id=user_id)
+
+    query = """
         SELECT
           account_id,
           COALESCE(SUM(amount), 0) as total_amount,
@@ -6044,10 +6056,15 @@ def _account_funding_totals_map(conn, user_id: int) -> Dict[str, Dict[str, float
           COALESCE(SUM(amount_usd), 0) as total_usd
         FROM account_funding_events
         WHERE user_id=?
-        GROUP BY account_id
-        """,
-        (user_id,),
-    ).fetchall()
+    """
+    params: List[object] = [user_id]
+    if account_id_values:
+        placeholders = ",".join(["?"] * len(account_id_values))
+        query += f" AND account_id IN ({placeholders})"
+        params.extend(account_id_values)
+    query += " GROUP BY account_id"
+
+    rows = conn.execute(query, params).fetchall()
     out: Dict[str, Dict[str, float]] = {}
     for row in rows:
         out[str(row["account_id"])] = {
@@ -11399,10 +11416,11 @@ def accounts_finance_summary(
 
         wallet = _get_or_create_wallet(conn, current_user["id"])
         internal_client_balance = _finance_to_float(wallet.get("balance"))
+        account_ids = [int(row.get("id") or 0) for row in accounts if int(row.get("id") or 0) > 0]
+        funding_totals_map = _account_funding_totals_map(conn, current_user["id"], account_ids)
 
         snapshot_map: Dict[int, Dict[str, object]] = {}
         if accounts:
-            account_ids = [int(row.get("id") or 0) for row in accounts if int(row.get("id") or 0) > 0]
             if account_ids:
                 placeholders = ",".join(["?"] * len(account_ids))
                 rows = conn.execute(
@@ -11421,14 +11439,12 @@ def accounts_finance_summary(
             platform = str(acc.get("platform") or "").lower().strip()
             currency = str(acc.get("currency") or "USD").upper()
             snapshot = snapshot_map.get(acc_id)
+            funding_payload = funding_totals_map.get(str(acc_id)) or {}
+            funded_total = _finance_to_float(funding_payload.get("amount"))
             spend_today = _finance_to_float(snapshot.get("spend_today")) if snapshot else 0.0
             spend_total = _finance_to_float(snapshot.get("spend_total")) if snapshot else 0.0
             optional_balance = snapshot.get("optional_balance") if snapshot else None
-            remaining_balance = (
-                _finance_to_float(snapshot.get("remaining_balance"))
-                if snapshot
-                else internal_client_balance - spend_total
-            )
+            remaining_balance = funded_total - spend_total
             last_synced_at = snapshot.get("last_synced_at") if snapshot else None
 
             items.append(
@@ -11437,6 +11453,7 @@ def accounts_finance_summary(
                     "account_id": acc_id,
                     "client_id": int(acc.get("user_id") or current_user["id"]),
                     "currency": currency,
+                    "funded_total": round(funded_total, 6),
                     "spend_today": round(spend_today, 6),
                     "spend_total": round(spend_total, 6),
                     "optional_balance": optional_balance,

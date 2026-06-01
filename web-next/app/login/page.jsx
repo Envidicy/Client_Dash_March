@@ -4,10 +4,9 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { setAuth } from '../../lib/auth'
+import { isAdminEmail } from '../../lib/admin-access'
 import { useI18n } from '../../lib/i18n/client'
 import styles from './login.module.css'
-
-const ADMIN_EMAILS = new Set(['romant997@gmail.com', 'kolyadov.denis@gmail.com'])
 
 export default function LoginPage() {
   const router = useRouter()
@@ -76,7 +75,7 @@ export default function LoginPage() {
       setAuth(data)
       setStatus(t('login.accessGranted'))
       const nextEmail = String(data?.email || email || '').toLowerCase()
-      router.push(ADMIN_EMAILS.has(nextEmail) ? '/admin/requests' : '/dashboard')
+      router.push(isAdminEmail(nextEmail) ? '/admin/requests' : '/dashboard')
     } catch (error) {
       setStatus(error?.message || t('login.signInFailed'))
     } finally {

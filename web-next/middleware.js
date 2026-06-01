@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server'
+import { getApiBase } from './lib/api'
+import { isAdminEmail } from './lib/admin-access'
 
 const LOGIN_PATH = '/login'
 const DASHBOARD_PATH = '/dashboard'
+
+function apiBase() {
+  return getApiBase().replace(/\/$/, '')
+}
 
 export async function middleware(request) {
   const { pathname } = request.nextUrl
@@ -18,7 +24,7 @@ export async function middleware(request) {
   }
 
   try {
-    const verifyRes = await fetch(new URL('/api/admin/user-options', request.url), {
+    const verifyRes = await fetch(`${apiBase()}/me`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -26,15 +32,24 @@ export async function middleware(request) {
       cache: 'no-store',
     })
 
-    if (verifyRes.ok) {
+    if (verifyRes.status === 401) {
+      const url = new URL(LOGIN_PATH, request.url)
+      url.searchParams.set('next', pathname)
+      return NextResponse.redirect(url)
+    }
+
+    if (!verifyRes.ok) {
+      return NextResponse.next()
+    }
+
+    const user = await verifyRes.json().catch(() => null)
+    if (isAdminEmail(user?.email) || isAdminEmail(user?.primary_email)) {
       return NextResponse.next()
     }
 
     return NextResponse.redirect(new URL(DASHBOARD_PATH, request.url))
   } catch {
-    const url = new URL(LOGIN_PATH, request.url)
-    url.searchParams.set('next', pathname)
-    return NextResponse.redirect(url)
+    return NextResponse.next()
   }
 }
 
