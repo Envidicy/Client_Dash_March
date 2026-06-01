@@ -218,6 +218,11 @@ function relativeTime(value) {
   return shortDate(value)
 }
 
+function snapshotFreshness(value) {
+  if (!value) return 'Not synced yet'
+  return `Synced ${relativeTime(value)}`
+}
+
 function requestToneFromStatus(status) {
   const normalized = String(status || '').toLowerCase()
   if (normalized === 'approved' || normalized === 'completed') return 'good'
@@ -515,6 +520,7 @@ export async function GET(request) {
         : Number(funding?.amountUsd || funding?.amount || 0)
     const dbRemaining = Number(dbSnapshot?.remaining_balance)
     const dbOptionalBalance = Number(dbSnapshot?.optional_balance)
+    const lastSyncedAt = dbSnapshot?.last_synced_at || null
     const hasLiveBalance = Number.isFinite(liveBalance) || Number.isFinite(dbOptionalBalance)
     const hasFundingFallback = Number.isFinite(fundingValue) && fundingValue > 0 && Number.isFinite(spendValue)
     const derivedBalance = Number.isFinite(dbRemaining)
@@ -592,6 +598,8 @@ export async function GET(request) {
             : balanceSource === 'fact_minus_spend'
               ? 'Estimated'
               : 'Unavailable',
+      lastSyncedAt,
+      lastSyncedLabel: snapshotFreshness(lastSyncedAt),
       balance: derivedBalance != null ? fmtMoney(derivedBalance) : 'No data',
       spend: Number.isFinite(dbSpendTotal)
         ? `${fmtMoney(dbSpendTotal)}/total`

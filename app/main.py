@@ -5702,6 +5702,7 @@ def _finance_refresh_snapshot_for_account(
     *,
     account: Dict[str, object],
     refresh_live_billing: bool = False,
+    live_billing_payload: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     account_id = int(account.get("id") or 0)
     client_id = _finance_resolve_client_id(conn, account)
@@ -5733,7 +5734,9 @@ def _finance_refresh_snapshot_for_account(
 
     optional_balance = None
     if refresh_live_billing:
-        live_payload = _attach_live_billing(account, force_refresh=True).get("live_billing")
+        live_payload = live_billing_payload
+        if not isinstance(live_payload, dict):
+            live_payload = _attach_live_billing(account, force_refresh=True).get("live_billing")
         optional_balance = _finance_extract_optional_balance(live_payload if isinstance(live_payload, dict) else None)
 
     remaining_balance = funded_total - spend_total
@@ -11684,11 +11687,20 @@ def refresh_account_live_billing(account_id: int, current_user=Depends(get_curre
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Account not found")
-        payload = _attach_live_billing(dict(row), force_refresh=True)
+        account = dict(row)
+        payload = _attach_live_billing(account, force_refresh=True)
+        snapshot = _finance_refresh_snapshot_for_account(
+            conn,
+            account=account,
+            refresh_live_billing=True,
+            live_billing_payload=payload.get("live_billing") if isinstance(payload, dict) else None,
+        )
+        conn.commit()
         return {
             "id": payload.get("id"),
             "platform": payload.get("platform"),
             "live_billing": payload.get("live_billing"),
+            "snapshot": snapshot,
             "updated_at": datetime.utcnow().isoformat() + "Z",
         }
 
