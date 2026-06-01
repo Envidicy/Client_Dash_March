@@ -50,7 +50,10 @@ export async function GET(request) {
   const auth = authHeader(request)
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const upstreamRes = await upstreamFetch('/admin/accounts', auth)
+  const { searchParams } = new URL(request.url)
+  const includeLiveBilling = searchParams.get('include_live_billing')
+  const upstreamPath = includeLiveBilling ? `/admin/accounts?include_live_billing=${encodeURIComponent(includeLiveBilling)}` : '/admin/accounts'
+  const upstreamRes = await upstreamFetch(upstreamPath, auth)
   if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
   if (upstreamRes.status === 403) return NextResponse.json({ detail: 'Forbidden' }, { status: 403 })
   if (!upstreamRes.ok) {

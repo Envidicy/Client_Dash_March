@@ -9848,7 +9848,7 @@ def admin_list_account_requests(admin_user=Depends(get_admin_user)):
 
 
 @app.get("/admin/accounts")
-def admin_list_accounts(admin_user=Depends(get_admin_user)):
+def admin_list_accounts(include_live_billing: int = 0, admin_user=Depends(get_admin_user)):
     if not get_conn:
         return []
     with get_conn() as conn:
@@ -9860,7 +9860,10 @@ def admin_list_accounts(admin_user=Depends(get_admin_user)):
             ORDER BY a.created_at DESC
             """
         ).fetchall()
-        return _attach_live_billing_many([dict(row) for row in rows])
+        payload = [dict(row) for row in rows]
+        if include_live_billing:
+            return _attach_live_billing_many(payload)
+        return payload
 
 
 @app.get("/admin/agencies")

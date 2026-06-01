@@ -84,7 +84,7 @@ export default function AdminAccountsPage() {
 
   async function fetchAccounts() {
     try {
-      const res = await adminRouteFetch('/api/admin/accounts')
+      const res = await adminRouteFetch('/api/admin/accounts?include_live_billing=1')
       if (!res.ok) throw new Error('Failed to load accounts.')
       const data = await res.json()
       setRows(Array.isArray(data?.items) ? data.items : [])
