@@ -10339,13 +10339,14 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                     """
                     WITH topup_stats AS (
                       SELECT
-                        user_id,
+                        a.user_id as user_id,
                         COALESCE(SUM(CASE WHEN seen_by_admin=0 THEN 1 ELSE 0 END), 0) as unread_topups,
                         COALESCE(SUM(CASE WHEN status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
                         COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
-                        MAX(created_at) as last_topup_at
-                      FROM topups
-                      GROUP BY user_id
+                        MAX(t.created_at) as last_topup_at
+                      FROM topups t
+                      JOIN ad_accounts a ON a.id = t.account_id
+                      GROUP BY a.user_id
                     ),
                     funding_stats AS (
                       SELECT
@@ -10401,12 +10402,13 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                     """
                     WITH topup_stats AS (
                       SELECT
-                        user_id,
+                        a.user_id as user_id,
                         COALESCE(SUM(CASE WHEN status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
                         COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
-                        MAX(created_at) as last_topup_at
-                      FROM topups
-                      GROUP BY user_id
+                        MAX(t.created_at) as last_topup_at
+                      FROM topups t
+                      JOIN ad_accounts a ON a.id = t.account_id
+                      GROUP BY a.user_id
                     ),
                     funding_stats AS (
                       SELECT
@@ -10470,7 +10472,8 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                       COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
                       MAX(t.created_at) as last_activity
                     FROM users u
-                    LEFT JOIN topups t ON t.user_id = u.id
+                    LEFT JOIN ad_accounts a ON a.user_id = u.id
+                    LEFT JOIN topups t ON t.account_id = a.id
                     GROUP BY u.id, u.email
                     HAVING COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) > 0
                     ORDER BY u.email ASC
@@ -10509,7 +10512,8 @@ def admin_list_users(admin_user=Depends(get_admin_user)):
             SELECT u.id, u.email, u.created_at,
               COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count
             FROM users u
-            LEFT JOIN topups t ON t.user_id = u.id
+            LEFT JOIN ad_accounts a ON a.user_id = u.id
+            LEFT JOIN topups t ON t.account_id = a.id
             {email_filter}
             GROUP BY u.id, u.email, u.created_at
             HAVING COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) = 0
@@ -10583,7 +10587,7 @@ def admin_client_allocations(user_id: int, admin_user=Depends(get_admin_user)):
             SELECT t.*, a.name as account_name, a.platform as account_platform
             FROM topups t
             JOIN ad_accounts a ON a.id = t.account_id
-            WHERE t.user_id=?
+            WHERE a.user_id=?
             ORDER BY t.created_at DESC
             """,
             (user_id,),
@@ -10601,7 +10605,7 @@ def admin_client_requests(user_id: int, admin_user=Depends(get_admin_user)):
             SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency
             FROM topups t
             JOIN ad_accounts a ON a.id = t.account_id
-            WHERE t.user_id=? AND t.status!='completed'
+            WHERE a.user_id=? AND t.status!='completed'
             ORDER BY t.created_at DESC
             """,
             (user_id,),
@@ -10618,8 +10622,8 @@ def admin_client_topups(user_id: int, admin_user=Depends(get_admin_user)):
             """
             SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency
             FROM topups t
-            LEFT JOIN ad_accounts a ON a.id = t.account_id
-            WHERE t.user_id=? AND t.status='completed'
+            JOIN ad_accounts a ON a.id = t.account_id
+            WHERE a.user_id=? AND t.status='completed'
             ORDER BY t.created_at DESC
             """,
             (user_id,),
@@ -11743,7 +11747,7 @@ def list_topups(account_id: Optional[int] = None, status: Optional[str] = None, 
             if status:
                 query += " AND t.status=?"
                 params.append(status)
-            query += " AND t.user_id=?"
+            query += " AND a.user_id=?"
             params.append(current_user["id"])
             query += " ORDER BY t.created_at DESC"
             rows = conn.execute(query, params).fetchall()
@@ -11766,7 +11770,7 @@ def account_funding_totals(current_user=Depends(get_current_user)):
               a.currency as account_currency
             FROM topups t
             JOIN ad_accounts a ON a.id = t.account_id
-            WHERE t.user_id=? AND t.status IN ('pending', 'completed')
+            WHERE a.user_id=? AND t.status IN ('pending', 'completed')
             ORDER BY t.created_at DESC
             """,
             (current_user["id"],),

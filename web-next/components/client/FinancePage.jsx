@@ -445,47 +445,63 @@ export default function FinancePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pagedRows.map((row) => (
-                    <tr
-                      className={row.id === selectedId ? styles.selectedRow : ''}
-                      key={row.id || `${row.date}-${row.title}`}
-                      onClick={() => {
-                        setSelectedId(row.id)
-                        setDetailClosed(false)
-                      }}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <td>
-                        <span className={styles.tableStrong}>{row.date}</span>
-                      </td>
-                      <td>
-                        <span className={styles.tableStrong}>{row.title}</span>
-                        <span className={styles.tableSubtle}>{row.subtitle}</span>
-                      </td>
-                      <td>
-                        <span className={styles.tableSubtle}>{row.type}</span>
-                      </td>
-                      <td>
-                        <span className={styles.tableSubtle}>{row.entity}</span>
-                      </td>
-                      <td>
-                        <span className={row.positive ? styles.amountPositive : styles.amountNegative}>{row.amount}</span>
-                      </td>
-                      <td>
-                        <span
-                          className={
-                            row.status === 'Completed'
-                              ? styles.statusChip
-                              : row.status === 'Processing'
-                                ? styles.statusChipWarn
-                                : styles.statusChipMuted
-                          }
-                        >
-                          {trStatus(row.status)}
-                        </span>
+                  {pagedRows.length ? (
+                    pagedRows.map((row) => (
+                      <tr
+                        className={row.id === selectedId ? styles.selectedRow : ''}
+                        key={row.id || `${row.date}-${row.title}`}
+                        onClick={() => {
+                          setSelectedId(row.id)
+                          setDetailClosed(false)
+                        }}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td>
+                          <span className={styles.tableStrong}>{row.date}</span>
+                        </td>
+                        <td>
+                          <span className={styles.tableStrong}>{row.title}</span>
+                          <span className={styles.tableSubtle}>{row.subtitle}</span>
+                        </td>
+                        <td>
+                          <span className={styles.tableSubtle}>{row.type}</span>
+                        </td>
+                        <td>
+                          <span className={styles.tableSubtle}>{row.entity}</span>
+                        </td>
+                        <td>
+                          <span className={row.positive ? styles.amountPositive : styles.amountNegative}>{row.amount}</span>
+                        </td>
+                        <td>
+                          <span
+                            className={
+                              row.status === 'Completed'
+                                ? styles.statusChip
+                                : row.status === 'Processing'
+                                  ? styles.statusChipWarn
+                                  : styles.statusChipMuted
+                            }
+                          >
+                            {trStatus(row.status)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="6">
+                        <div className={styles.emptyTableState}>
+                          <strong>{tr('No records found', 'Записи не найдены')}</strong>
+                          <span>
+                            {tr(
+                              'There are no finance records in this section for the selected account and period.',
+                              'В этом разделе пока нет финансовых записей для выбранного аккаунта и периода.'
+                            )}
+                          </span>
+                        </div>
                       </td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
             </div>

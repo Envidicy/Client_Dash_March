@@ -1293,6 +1293,25 @@
   background: #f6f8ff;
 }
 
+.emptyTableState {
+  display: grid;
+  gap: 6px;
+  min-height: 120px;
+  padding: 28px 20px;
+  align-content: center;
+  color: #8d877b;
+}
+
+.emptyTableState strong {
+  color: #25231f;
+  font-size: 14px;
+}
+
+.emptyTableState span {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .amountNegative {
   color: #25231f;
   font-weight: 800;
