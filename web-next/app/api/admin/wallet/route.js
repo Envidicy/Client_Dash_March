@@ -210,6 +210,44 @@ export async function GET(request) {
   const auth = authHeader(request)
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
+  const { searchParams } = new URL(request.url)
+  const fastMode = searchParams.get('fast') === '1' || searchParams.get('mode') === 'fast'
+
+  if (fastMode) {
+    const [walletsRes, txRes] = await Promise.all([
+      upstreamFetch('/admin/wallets', auth),
+      upstreamFetch('/admin/wallet-transactions', auth),
+    ])
+
+    if ([walletsRes, txRes].some((res) => res.status === 401)) {
+      return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
+    }
+    if ([walletsRes, txRes].some((res) => res.status === 403)) {
+      return NextResponse.json({ detail: 'Forbidden' }, { status: 403 })
+    }
+    if (![walletsRes, txRes].every((res) => res.ok)) {
+      return NextResponse.json({ detail: 'Failed to load admin wallet data' }, { status: 500 })
+    }
+
+    const [walletsData, txData] = await Promise.all([
+      walletsRes.json().catch(() => []),
+      txRes.json().catch(() => []),
+    ])
+
+    const wallets = (Array.isArray(walletsData) ? walletsData : []).map(normalizeWallet).filter((row) => !isBlockedEmail(row.user_email))
+    const transactions = (Array.isArray(txData) ? txData : [])
+      .map(normalizeWalletTransaction)
+      .filter((row) => !isBlockedEmail(row.user_email))
+
+    return NextResponse.json({
+      mode: 'fast',
+      wallets,
+      lowWallets: [],
+      transactions,
+      profitSummary: { by_platform: [], overall: [] },
+    })
+  }
+
   const [walletsRes, lowRes, txRes, topupsRes] = await Promise.all([
     upstreamFetch('/admin/wallets', auth),
     upstreamFetch('/admin/wallets?low_only=1', auth),

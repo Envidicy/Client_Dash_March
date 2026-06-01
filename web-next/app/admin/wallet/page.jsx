@@ -83,6 +83,7 @@ export default function AdminWalletPage() {
   const [profitSummary, setProfitSummary] = useState({ by_platform: [], overall: [] })
   const [selectedId, setSelectedId] = useState('')
   const [status, setStatus] = useState('Loading wallets...')
+  const [enriching, setEnriching] = useState(false)
   const [filters, setFilters] = useState({
     type: '',
     status: '',
@@ -116,8 +117,11 @@ export default function AdminWalletPage() {
     return res
   }
 
-  async function fetchWallets() {
-    const res = await adminRouteFetch('/api/admin/wallet')
+  async function fetchWallets(options = {}) {
+    const fast = options.fast === true
+    const background = options.background === true
+    if (background) setEnriching(true)
+    const res = await adminRouteFetch(`/api/admin/wallet${fast ? '?fast=1' : ''}`)
     if (!res.ok) throw new Error('Failed to load wallet data.')
     const data = await res.json()
     const tx = Array.isArray(data?.transactions) ? data.transactions : []
@@ -127,12 +131,22 @@ export default function AdminWalletPage() {
       by_platform: Array.isArray(data?.profitSummary?.by_platform) ? data.profitSummary.by_platform : [],
       overall: Array.isArray(data?.profitSummary?.overall) ? data.profitSummary.overall : [],
     })
+    if (background) setEnriching(false)
   }
 
   async function loadAll() {
     try {
-      await fetchWallets()
-      setStatus('')
+      await fetchWallets({ fast: true })
+      setStatus('Wallet ledger loaded. Profit enrichment is updating...')
+      window.setTimeout(async () => {
+        try {
+          await fetchWallets({ background: true })
+          setStatus('')
+        } catch (e) {
+          setStatus(e?.message || 'Failed to enrich wallet data.')
+          setEnriching(false)
+        }
+      }, 0)
     } catch (e) {
       setStatus(e?.message || 'Failed to load wallets.')
     }
@@ -385,9 +399,9 @@ export default function AdminWalletPage() {
             <button className={styles.buttonGhost} type="button" onClick={() => adjustWallet(-1)}>Debit Wallet</button>
           </div>
         </div>
-        {status ? (
+        {status || enriching ? (
           <div className={styles.cardHeader}>
-            <p className={styles.muted}>{status}</p>
+            <p className={styles.muted}>{enriching && !status ? 'Updating profit details...' : status}</p>
           </div>
         ) : null}
       </section>
