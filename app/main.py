@@ -10285,6 +10285,11 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                     """
                 ).fetchall()
             except Exception:
+                logging.exception("Primary admin_list_clients query failed; falling back to compact query")
+                try:
+                    conn.rollback()
+                except Exception:
+                    logging.exception("Rollback failed after primary admin_list_clients query error")
                 rows = conn.execute(
                     """
                     SELECT
@@ -10327,6 +10332,11 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                 row["completed_total"] = float(row.get("completed_total") or 0.0)
                 row["completed_total_kzt"] = float(row.get("completed_total_kzt") or row.get("completed_total") or 0.0)
         except Exception:
+            logging.exception("Secondary admin_list_clients query failed; falling back to basic client list")
+            try:
+                conn.rollback()
+            except Exception:
+                logging.exception("Rollback failed before basic admin_list_clients fallback")
             fallback_rows = conn.execute(
                 """
                 SELECT u.id, u.email, 0 as unread_topups,
