@@ -9940,16 +9940,16 @@ def admin_list_account_requests(request: Request, admin_user=Depends(get_admin_u
         email = str(request.query_params.get("email") or "").strip().lower()
         platform = str(request.query_params.get("platform") or "").strip().lower()
         where_parts = []
-        params = {}
+        params: List[object] = []
         if status:
-            where_parts.append("LOWER(COALESCE(r.status, 'new')) = :status")
-            params["status"] = status
+            where_parts.append("LOWER(COALESCE(r.status, 'new')) = ?")
+            params.append(status)
         if email:
-            where_parts.append("LOWER(COALESCE(u.email, '')) LIKE :email")
-            params["email"] = f"%{email}%"
+            where_parts.append("LOWER(COALESCE(u.email, '')) LIKE ?")
+            params.append(f"%{email}%")
         if platform:
-            where_parts.append("LOWER(COALESCE(r.platform, '')) = :platform")
-            params["platform"] = platform
+            where_parts.append("LOWER(COALESCE(r.platform, '')) = ?")
+            params.append(platform)
         where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         select_sql = f"""
             SELECT r.*,
@@ -10002,12 +10002,11 @@ def admin_list_account_requests(request: Request, admin_user=Depends(get_admin_u
                 LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
                 {where_sql}
                 """,
-                params,
+                tuple(params),
             ).fetchone()
-            page_params = {**params, "limit": limit, "offset": offset}
             rows = conn.execute(
-                f"{select_sql} LIMIT :limit OFFSET :offset",
-                page_params,
+                f"{select_sql} LIMIT ? OFFSET ?",
+                tuple(params + [limit, offset]),
             ).fetchall()
             return {
                 "items": [dict(row) for row in rows],
@@ -10025,7 +10024,7 @@ def admin_list_account_requests(request: Request, admin_user=Depends(get_admin_u
             }
         rows = conn.execute(
             select_sql,
-            params,
+            tuple(params),
         ).fetchall()
         return [dict(row) for row in rows]
 
