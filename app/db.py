@@ -130,6 +130,8 @@ def apply_schema():
             ddl = f.read()
         with get_conn() as conn:
             schema_name = _extract_search_path(DB_URL)
+            conn.execute("SET lock_timeout TO '5000ms'")
+            conn.execute("SET statement_timeout TO '60000ms'")
             if schema_name:
                 conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
                 conn.execute(f"SET search_path TO {schema_name}")

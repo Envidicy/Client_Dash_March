@@ -1,3 +1,5 @@
+import { isAdminEmail } from './admin-access'
+
 const KEY_TOKEN = 'auth_token'
 const KEY_EMAIL = 'auth_email'
 const KEY_USER_ID = 'auth_user_id'
@@ -5,6 +7,8 @@ const KEY_IMPERSONATION_ACTIVE = 'impersonation_active'
 const KEY_IMPERSONATION_RETURN = 'impersonation_return'
 const KEY_IMPERSONATION_LABEL = 'impersonation_label'
 const COOKIE_TOKEN = 'auth_token'
+const COOKIE_EMAIL = 'auth_email'
+const COOKIE_IS_ADMIN = 'auth_is_admin'
 
 function storageGet(key) {
   if (typeof window === 'undefined') return null
@@ -22,6 +26,27 @@ function clearTokenCookie() {
   document.cookie = `${COOKIE_TOKEN}=; Path=/; Max-Age=0; SameSite=Lax`
 }
 
+function setCookie(name, value) {
+  if (typeof window === 'undefined') return
+  document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; SameSite=Lax`
+}
+
+function clearCookie(name) {
+  if (typeof window === 'undefined') return
+  document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`
+}
+
+function syncAccessCookies(email) {
+  const normalizedEmail = String(email || '').trim().toLowerCase()
+  if (!normalizedEmail) {
+    clearCookie(COOKIE_EMAIL)
+    clearCookie(COOKIE_IS_ADMIN)
+    return
+  }
+  setCookie(COOKIE_EMAIL, normalizedEmail)
+  setCookie(COOKIE_IS_ADMIN, isAdminEmail(normalizedEmail) ? '1' : '0')
+}
+
 function consumeImpersonationFromUrl() {
   if (typeof window === 'undefined') return
   const params = new URLSearchParams(window.location.search)
@@ -35,6 +60,7 @@ function consumeImpersonationFromUrl() {
   window.sessionStorage.setItem(KEY_IMPERSONATION_RETURN, params.get('impersonation_return') || '/admin/clients')
   window.sessionStorage.setItem(KEY_IMPERSONATION_LABEL, params.get('impersonate_email') || '')
   setTokenCookie(token)
+  syncAccessCookies(params.get('impersonate_email') || '')
 
   params.delete('impersonate_token')
   params.delete('impersonate_email')
@@ -52,6 +78,7 @@ export function setAuth(auth) {
   localStorage.setItem(KEY_EMAIL, auth.email)
   localStorage.setItem(KEY_USER_ID, String(auth.id))
   setTokenCookie(auth.token)
+  syncAccessCookies(auth.email)
 }
 
 export function clearAuth() {
@@ -61,12 +88,17 @@ export function clearAuth() {
   localStorage.removeItem(KEY_EMAIL)
   localStorage.removeItem(KEY_USER_ID)
   clearTokenCookie()
+  clearCookie(COOKIE_EMAIL)
+  clearCookie(COOKIE_IS_ADMIN)
 }
 
 export function getAuthToken() {
   consumeImpersonationFromUrl()
   const token = storageGet(KEY_TOKEN)
-  if (token) setTokenCookie(token)
+  if (token) {
+    setTokenCookie(token)
+    syncAccessCookies(storageGet(KEY_EMAIL))
+  }
   return token
 }
 
@@ -101,5 +133,14 @@ export function clearImpersonation() {
   window.sessionStorage.removeItem(KEY_IMPERSONATION_ACTIVE)
   window.sessionStorage.removeItem(KEY_IMPERSONATION_RETURN)
   window.sessionStorage.removeItem(KEY_IMPERSONATION_LABEL)
-  if (!window.localStorage.getItem(KEY_TOKEN)) clearTokenCookie()
+  const persistentToken = window.localStorage.getItem(KEY_TOKEN)
+  const persistentEmail = window.localStorage.getItem(KEY_EMAIL)
+  if (persistentToken) {
+    setTokenCookie(persistentToken)
+    syncAccessCookies(persistentEmail)
+    return
+  }
+  clearTokenCookie()
+  clearCookie(COOKIE_EMAIL)
+  clearCookie(COOKIE_IS_ADMIN)
 }

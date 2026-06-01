@@ -2628,7 +2628,7 @@ try:
 
     apply_schema()
 except Exception:
-    pass
+    logging.exception("Schema auto-apply failed during startup; continuing without blocking app boot")
 
 ADMIN_EMAILS = {"romant997@gmail.com", "kolyadov.denis@gmail.com"}
 BENEFICIARY = {
@@ -10251,50 +10251,52 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
         return []
     with get_conn() as conn:
         try:
-            _sync_completed_topup_funding_events(conn)
+            conn.execute("SET LOCAL lock_timeout TO '2000ms'")
+            conn.execute("SET LOCAL statement_timeout TO '15000ms'")
         except Exception:
-            logging.exception("Failed to sync completed topup funding events before admin_list_clients")
-            try:
-                conn.rollback()
-            except Exception:
-                logging.exception("Rollback failed after funding sync error in admin_list_clients")
+            pass
         clients: List[Dict[str, object]] = []
         try:
             try:
                 rows = conn.execute(
                     """
-                    SELECT
-                      u.id,
-                      u.email,
-                      COALESCE(ts.unread_topups, 0) as unread_topups,
-                      COALESCE(ts.pending_requests, 0) as pending_requests,
-                      COALESCE(ts.completed_total_kzt, 0) as completed_total,
-                      COALESCE(ts.completed_count, 0) as completed_count,
-                      COALESCE(ts.last_topup_at, ws.last_funding_at) as last_activity
-                    FROM users u
-                    LEFT JOIN (
+                    WITH topup_stats AS (
                       SELECT
                         user_id,
                         COALESCE(SUM(CASE WHEN seen_by_admin=0 THEN 1 ELSE 0 END), 0) as unread_topups,
                         COALESCE(SUM(CASE WHEN status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
                         COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
-                        COALESCE((
-                          SELECT SUM(COALESCE(afe.amount_kzt, 0))
-                          FROM account_funding_events afe
-                          WHERE afe.user_id = t.user_id
-                        ), 0) as completed_total_kzt,
                         MAX(created_at) as last_topup_at
-                      FROM topups t
+                      FROM topups
                       GROUP BY user_id
-                    ) ts ON ts.user_id = u.id
-                    LEFT JOIN (
+                    ),
+                    funding_stats AS (
                       SELECT
                         user_id,
-                        COALESCE(SUM(CASE WHEN type='adjustment' AND amount > 0 THEN amount ELSE 0 END), 0) as completed_total,
+                        COALESCE(SUM(COALESCE(amount_kzt, 0)), 0) as completed_total_kzt
+                      FROM account_funding_events
+                      GROUP BY user_id
+                    ),
+                    wallet_stats AS (
+                      SELECT
+                        user_id,
                         MAX(created_at) as last_funding_at
                       FROM wallet_transactions
+                      WHERE type='adjustment' AND amount > 0
                       GROUP BY user_id
-                    ) ws ON ws.user_id = u.id
+                    )
+                    SELECT
+                      u.id,
+                      u.email,
+                      COALESCE(ts.unread_topups, 0) as unread_topups,
+                      COALESCE(ts.pending_requests, 0) as pending_requests,
+                      COALESCE(fs.completed_total_kzt, 0) as completed_total,
+                      COALESCE(ts.completed_count, 0) as completed_count,
+                      COALESCE(ts.last_topup_at, ws.last_funding_at) as last_activity
+                    FROM users u
+                    LEFT JOIN topup_stats ts ON ts.user_id = u.id
+                    LEFT JOIN funding_stats fs ON fs.user_id = u.id
+                    LEFT JOIN wallet_stats ws ON ws.user_id = u.id
                     WHERE COALESCE(ts.completed_count, 0) > 0 OR COALESCE(u.is_client, 0) = 1
                     ORDER BY unread_topups DESC, u.email ASC
                     """
@@ -10305,39 +10307,49 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                     conn.rollback()
                 except Exception:
                     logging.exception("Rollback failed after primary admin_list_clients query error")
+                try:
+                    conn.execute("SET LOCAL lock_timeout TO '1000ms'")
+                    conn.execute("SET LOCAL statement_timeout TO '8000ms'")
+                except Exception:
+                    pass
                 rows = conn.execute(
                     """
+                    WITH topup_stats AS (
+                      SELECT
+                        user_id,
+                        COALESCE(SUM(CASE WHEN status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
+                        COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
+                        MAX(created_at) as last_topup_at
+                      FROM topups
+                      GROUP BY user_id
+                    ),
+                    funding_stats AS (
+                      SELECT
+                        user_id,
+                        COALESCE(SUM(COALESCE(amount_kzt, 0)), 0) as completed_total_kzt
+                      FROM account_funding_events
+                      GROUP BY user_id
+                    ),
+                    wallet_stats AS (
+                      SELECT
+                        user_id,
+                        MAX(created_at) as last_funding_at
+                      FROM wallet_transactions
+                      WHERE type='adjustment' AND amount > 0
+                      GROUP BY user_id
+                    )
                     SELECT
                       u.id,
                       u.email,
                       0 as unread_topups,
                       COALESCE(ts.pending_requests, 0) as pending_requests,
-                      COALESCE(ts.completed_total_kzt, 0) as completed_total,
+                      COALESCE(fs.completed_total_kzt, 0) as completed_total,
                       COALESCE(ts.completed_count, 0) as completed_count,
                       COALESCE(ts.last_topup_at, ws.last_funding_at) as last_activity
                     FROM users u
-                    LEFT JOIN (
-                      SELECT
-                        user_id,
-                        COALESCE(SUM(CASE WHEN status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
-                        COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
-                        COALESCE((
-                          SELECT SUM(COALESCE(afe.amount_kzt, 0))
-                          FROM account_funding_events afe
-                          WHERE afe.user_id = t.user_id
-                        ), 0) as completed_total_kzt,
-                        MAX(created_at) as last_topup_at
-                      FROM topups t
-                      GROUP BY user_id
-                    ) ts ON ts.user_id = u.id
-                    LEFT JOIN (
-                      SELECT
-                        user_id,
-                        COALESCE(SUM(CASE WHEN type='adjustment' AND amount > 0 THEN amount ELSE 0 END), 0) as completed_total,
-                        MAX(created_at) as last_funding_at
-                      FROM wallet_transactions
-                      GROUP BY user_id
-                    ) ws ON ws.user_id = u.id
+                    LEFT JOIN topup_stats ts ON ts.user_id = u.id
+                    LEFT JOIN funding_stats fs ON fs.user_id = u.id
+                    LEFT JOIN wallet_stats ws ON ws.user_id = u.id
                     WHERE COALESCE(ts.completed_count, 0) > 0 OR COALESCE(u.is_client, 0) = 1
                     ORDER BY u.email ASC
                     """
@@ -10352,19 +10364,32 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                 conn.rollback()
             except Exception:
                 logging.exception("Rollback failed before basic admin_list_clients fallback")
-            fallback_rows = conn.execute(
-                """
-                SELECT u.id, u.email, 0 as unread_topups,
-                  COALESCE(SUM(CASE WHEN t.status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
-                  COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
-                  MAX(t.created_at) as last_activity
-                FROM users u
-                LEFT JOIN topups t ON t.user_id = u.id
-                GROUP BY u.id, u.email
-                HAVING COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) > 0
-                ORDER BY u.email ASC
-                """
-            ).fetchall()
+            try:
+                try:
+                    conn.execute("SET LOCAL lock_timeout TO '1000ms'")
+                    conn.execute("SET LOCAL statement_timeout TO '5000ms'")
+                except Exception:
+                    pass
+                fallback_rows = conn.execute(
+                    """
+                    SELECT u.id, u.email, 0 as unread_topups,
+                      COALESCE(SUM(CASE WHEN t.status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
+                      COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
+                      MAX(t.created_at) as last_activity
+                    FROM users u
+                    LEFT JOIN topups t ON t.user_id = u.id
+                    GROUP BY u.id, u.email
+                    HAVING COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) > 0
+                    ORDER BY u.email ASC
+                    """
+                ).fetchall()
+            except Exception:
+                logging.exception("Basic admin_list_clients fallback failed; returning empty list")
+                try:
+                    conn.rollback()
+                except Exception:
+                    logging.exception("Rollback failed after basic admin_list_clients fallback error")
+                return []
             clients = []
             for row in fallback_rows:
                 payload = dict(row)
