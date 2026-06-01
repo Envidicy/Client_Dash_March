@@ -9,6 +9,7 @@ import { adminFetch } from '../../../lib/admin'
 import { useI18n } from '../../../lib/i18n/client'
 
 const PAGE_SIZE = 12
+const REQUESTS_FETCH_LIMIT = 100
 const ACCOUNT_STATUS_OPTIONS = ['active', 'pending', 'paused', 'archived', 'closed']
 
 function statusLabel(status) {
@@ -82,9 +83,12 @@ export default function AdminRequestsPage() {
   const router = useRouter()
   const { tr } = useI18n()
   const [rows, setRows] = useState([])
+  const [totalCount, setTotalCount] = useState(0)
+  const [remoteStats, setRemoteStats] = useState(null)
   const [accountRows, setAccountRows] = useState([])
   const [status, setStatus] = useState(tr('Loading requests…', 'Загрузка запросов…'))
   const [accountsStatus, setAccountsStatus] = useState('')
+  const [loadingMore, setLoadingMore] = useState(false)
   const [workbenchMode, setWorkbenchMode] = useState('accounts')
   const [page, setPage] = useState(1)
   const [selectedId, setSelectedId] = useState('')
@@ -143,16 +147,28 @@ export default function AdminRequestsPage() {
     return res
   }
 
-  async function fetchRequests() {
+  async function fetchRequests(options = {}) {
+    const append = options.append === true
+    const offset = append ? rows.length : 0
     try {
-      const res = await safeFetch('/admin/account-requests')
+      if (append) setLoadingMore(true)
+      const params = new URLSearchParams({
+        limit: String(REQUESTS_FETCH_LIMIT),
+        offset: String(offset),
+      })
+      const res = await safeFetch(`/admin/account-requests?${params.toString()}`)
       if (!res.ok) throw new Error(tr('Failed to load requests.', 'Не удалось загрузить запросы.'))
       const data = await res.json()
-      const items = Array.isArray(data) ? data : []
-      setRows(items)
+      const items = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : []
+      setRows((current) => (append ? [...current, ...items] : items))
+      setTotalCount(Number(data?.count || items.length || 0))
+      setRemoteStats(data?.stats || null)
+      if (!append) setPage(1)
       setStatus('')
-      if (!selectedId && items.length) setSelectedId(String(items[0].id))
+      if (!append && !selectedId && items.length) setSelectedId(String(items[0].id))
+      if (append) setLoadingMore(false)
     } catch (error) {
+      if (append) setLoadingMore(false)
       setStatus(error?.message || tr('Failed to load requests.', 'Не удалось загрузить запросы.'))
     }
   }
@@ -313,6 +329,16 @@ export default function AdminRequestsPage() {
   }, [])
 
   const stats = useMemo(() => {
+    if (remoteStats) {
+      return {
+        total: Number(remoteStats.total || 0),
+        fresh: Number(remoteStats.fresh || 0),
+        processing: Number(remoteStats.processing || 0),
+        approved: Number(remoteStats.approved || 0),
+        rejected: Number(remoteStats.rejected || 0),
+        needsFundingReview: Number(remoteStats.needsFundingReview || 0),
+      }
+    }
     const total = rows.length
     const fresh = rows.filter((row) => row.status === 'new').length
     const processing = rows.filter((row) => row.status === 'processing').length
@@ -324,7 +350,7 @@ export default function AdminRequestsPage() {
       return budget > 0 && funded < budget
     }).length
     return { total, fresh, processing, approved, rejected, needsFundingReview }
-  }, [rows])
+  }, [remoteStats, rows])
 
   const groupedClients = useMemo(() => {
     const map = new Map()
@@ -568,11 +594,16 @@ export default function AdminRequestsPage() {
               </table>
               <div className={styles.cardHeader}>
                 <p className={styles.muted}>
-                  Showing {(page - 1) * PAGE_SIZE + (pageClients.length ? 1 : 0)}-{(page - 1) * PAGE_SIZE + pageClients.length} of {groupedClients.length} clients
+                  Showing {(page - 1) * PAGE_SIZE + (pageClients.length ? 1 : 0)}-{(page - 1) * PAGE_SIZE + pageClients.length} of {groupedClients.length} loaded clients. Loaded {rows.length} of {totalCount || rows.length} requests.
                 </p>
                 <div className={styles.tableActions}>
                   <button className={styles.buttonGhost} type="button" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>{tr('Previous', 'Назад')}</button>
                   <button className={styles.buttonGhost} type="button" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>{tr('Next', 'Далее')}</button>
+                  {rows.length < totalCount ? (
+                    <button className={styles.buttonGhost} type="button" onClick={() => fetchRequests({ append: true })} disabled={loadingMore}>
+                      {loadingMore ? 'Loading more...' : 'Load more'}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </div>

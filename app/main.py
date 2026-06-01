@@ -9919,13 +9919,39 @@ def create_account_request(payload: AccountRequestCreate, current_user=Depends(g
 
 
 @app.get("/admin/account-requests")
-def admin_list_account_requests(admin_user=Depends(get_admin_user)):
+def admin_list_account_requests(request: Request, admin_user=Depends(get_admin_user)):
     if not get_conn:
         return []
     with get_conn() as conn:
-        _sync_completed_topup_funding_events(conn)
-        rows = conn.execute(
-            """
+        has_query = bool(request.query_params)
+        if not has_query:
+            _sync_completed_topup_funding_events(conn)
+        try:
+            limit = int(request.query_params.get("limit") or 100)
+        except (TypeError, ValueError):
+            limit = 100
+        try:
+            offset = int(request.query_params.get("offset") or 0)
+        except (TypeError, ValueError):
+            offset = 0
+        limit = max(1, min(limit, 500))
+        offset = max(0, offset)
+        status = str(request.query_params.get("status") or "").strip().lower()
+        email = str(request.query_params.get("email") or "").strip().lower()
+        platform = str(request.query_params.get("platform") or "").strip().lower()
+        where_parts = []
+        params = {}
+        if status:
+            where_parts.append("LOWER(COALESCE(r.status, 'new')) = :status")
+            params["status"] = status
+        if email:
+            where_parts.append("LOWER(COALESCE(u.email, '')) LIKE :email")
+            params["email"] = f"%{email}%"
+        if platform:
+            where_parts.append("LOWER(COALESCE(r.platform, '')) = :platform")
+            params["platform"] = platform
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        select_sql = f"""
             SELECT r.*,
                    u.email as user_email,
                    a.id as account_id,
@@ -9946,8 +9972,60 @@ def admin_list_account_requests(admin_user=Depends(get_admin_user)):
             FROM account_requests r
             JOIN users u ON u.id = r.user_id
             LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
+            {where_sql}
             ORDER BY r.created_at DESC
             """
+        if has_query:
+            count_row = conn.execute(
+                f"""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN COALESCE(r.status, 'new') = 'new' THEN 1 ELSE 0 END) as fresh,
+                       SUM(CASE WHEN r.status = 'processing' THEN 1 ELSE 0 END) as processing,
+                       SUM(CASE WHEN r.status = 'approved' THEN 1 ELSE 0 END) as approved,
+                       SUM(CASE WHEN r.status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+                       SUM(CASE
+                         WHEN COALESCE(a.budget_total, 0) > 0
+                          AND COALESCE((SELECT SUM(COALESCE(afe.amount_kzt, 0))
+                                        FROM account_funding_events afe
+                                        WHERE afe.account_id = a.id
+                                          AND afe.source_type = 'topup'
+                                          AND afe.voided_at IS NULL
+                                          AND EXISTS (
+                                            SELECT 1
+                                            FROM topups t
+                                            WHERE t.id = afe.source_id
+                                              AND t.status='completed'
+                                          )), 0) < COALESCE(a.budget_total, 0)
+                         THEN 1 ELSE 0 END) as needs_funding_review
+                FROM account_requests r
+                JOIN users u ON u.id = r.user_id
+                LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
+                {where_sql}
+                """,
+                params,
+            ).fetchone()
+            page_params = {**params, "limit": limit, "offset": offset}
+            rows = conn.execute(
+                f"{select_sql} LIMIT :limit OFFSET :offset",
+                page_params,
+            ).fetchall()
+            return {
+                "items": [dict(row) for row in rows],
+                "count": int(count_row["total"] or 0) if count_row else 0,
+                "stats": {
+                    "total": int(count_row["total"] or 0) if count_row else 0,
+                    "fresh": int(count_row["fresh"] or 0) if count_row else 0,
+                    "processing": int(count_row["processing"] or 0) if count_row else 0,
+                    "approved": int(count_row["approved"] or 0) if count_row else 0,
+                    "rejected": int(count_row["rejected"] or 0) if count_row else 0,
+                    "needsFundingReview": int(count_row["needs_funding_review"] or 0) if count_row else 0,
+                },
+                "limit": limit,
+                "offset": offset,
+            }
+        rows = conn.execute(
+            select_sql,
+            params,
         ).fetchall()
         return [dict(row) for row in rows]
 

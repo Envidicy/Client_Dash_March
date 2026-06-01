@@ -26,7 +26,8 @@ export async function GET(request) {
   const auth = authHeader(request)
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const upstreamRes = await upstreamFetch('/admin/account-requests', auth)
+  const query = request.nextUrl.searchParams.toString()
+  const upstreamRes = await upstreamFetch(`/admin/account-requests${query ? `?${query}` : ''}`, auth)
   if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
   if (upstreamRes.status === 403) return NextResponse.json({ detail: 'Forbidden' }, { status: 403 })
 
@@ -38,5 +39,12 @@ export async function GET(request) {
     )
   }
 
-  return NextResponse.json(Array.isArray(data) ? data : [])
+  if (Array.isArray(data)) return NextResponse.json(data)
+  return NextResponse.json({
+    items: Array.isArray(data?.items) ? data.items : [],
+    count: Number(data?.count || 0),
+    stats: data?.stats || null,
+    limit: Number(data?.limit || 0),
+    offset: Number(data?.offset || 0),
+  })
 }
