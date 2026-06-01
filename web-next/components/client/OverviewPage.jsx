@@ -52,6 +52,49 @@ function formatChartMoney(value, currency = 'USD') {
   }).format(num)
 }
 
+function AccountActionIcon({ type }) {
+  const common = {
+    width: 16,
+    height: 16,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2.2,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    'aria-hidden': 'true',
+    focusable: 'false',
+  }
+
+  if (type === 'topup') {
+    return (
+      <svg {...common}>
+        <line x1="12" x2="12" y1="2" y2="22" />
+        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6" />
+      </svg>
+    )
+  }
+
+  if (type === 'dashboard') {
+    return (
+      <svg {...common}>
+        <path d="M4 19V5" />
+        <path d="M4 19h16" />
+        <path d="m7 15 4-4 3 3 5-7" />
+      </svg>
+    )
+  }
+
+  return (
+    <svg {...common}>
+      <path d="M21 12a9 9 0 0 1-15.5 6.2" />
+      <path d="M3 12A9 9 0 0 1 18.5 5.8" />
+      <path d="M18 2v4h4" />
+      <path d="M6 22v-4H2" />
+    </svg>
+  )
+}
+
 function SpendFundingChart({ data = [], tr, showSpend = true, currency = 'USD' }) {
   return (
     <div className={styles.rechartsWrap}>
@@ -696,30 +739,33 @@ export default function OverviewPage() {
                   <td>
                     <div className={styles.accountActions}>
                       <button
+                        aria-label={tr('Top up account', 'Пополнить аккаунт')}
                         className={styles.accountIconButton}
                         disabled={!row.accountId}
                         onClick={() => openFundingModal(row.accountId)}
                         title={tr('Top up account', 'Пополнить аккаунт')}
                         type="button"
                       >
-                        Top up
+                        <AccountActionIcon type="topup" />
                       </button>
                       <button
+                        aria-label={tr('Open dashboard', 'Открыть дашборд')}
                         className={styles.accountIconButton}
                         onClick={() => openAccountDashboard(row.accountId)}
                         title={tr('Open dashboard', 'Открыть дашборд')}
                         type="button"
                       >
-                        Open
+                        <AccountActionIcon type="dashboard" />
                       </button>
                       <button
+                        aria-label={tr('Refresh account balance', 'Обновить баланс аккаунта')}
                         className={`${styles.accountIconButton} ${refreshingAccountIds.includes(String(row.accountId || '')) ? styles.accountIconButtonLoading : ''}`}
                         disabled={!row.accountId || refreshingAccountIds.includes(String(row.accountId || ''))}
                         onClick={() => handleOverviewAction('refresh', row.accountId)}
                         title={tr('Refresh account balance', 'Обновить баланс аккаунта')}
                         type="button"
                       >
-                        Refresh
+                        <AccountActionIcon type="refresh" />
                       </button>
                     </div>
                   </td>
