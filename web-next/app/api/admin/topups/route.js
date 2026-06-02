@@ -3,7 +3,7 @@ import { getApiBase } from '../../../../lib/api'
 import { getTopupBreakdown, platformLabel } from '../../../../lib/finance/model'
 
 export const dynamic = 'force-dynamic'
-const UPSTREAM_TIMEOUT_MS = 25000
+const UPSTREAM_TIMEOUT_MS = 12000
 
 function apiBase() {
   return getApiBase().replace(/\/$/, '')

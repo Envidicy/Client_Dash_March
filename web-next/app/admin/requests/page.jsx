@@ -10,7 +10,7 @@ import { useI18n } from '../../../lib/i18n/client'
 
 const PAGE_SIZE = 12
 const REQUESTS_FETCH_LIMIT = 100
-const ADMIN_FETCH_TIMEOUT_MS = 25000
+const ADMIN_FETCH_TIMEOUT_MS = 12000
 const ACCOUNT_STATUS_OPTIONS = ['active', 'pending', 'paused', 'archived', 'closed']
 
 function statusLabel(status) {

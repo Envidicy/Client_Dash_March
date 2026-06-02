@@ -10429,6 +10429,11 @@ def admin_list_topups(
     if not get_conn:
         return {"items": [], "count": 0, "stats": {"total": 0, "pending": 0, "completed": 0, "failed": 0, "completedGross": 0}}
     with get_conn() as conn:
+        try:
+            conn.execute("SET LOCAL lock_timeout TO '2000ms'")
+            conn.execute("SET LOCAL statement_timeout TO '8000ms'")
+        except Exception:
+            pass
         if not request.query_params:
             rows = conn.execute(
                 """
@@ -10476,6 +10481,8 @@ def admin_list_topups(
 
         if amount_min is None:
             if fast:
+                fast_started_at = time.time()
+                logging.info("admin topups fast start limit=%s offset=%s filters=%s", safe_limit, safe_offset, bool(where))
                 if where:
                     page_rows = conn.execute(
                         f"""
@@ -10488,6 +10495,7 @@ def admin_list_topups(
                     ).fetchall()
                     page_items = _attach_topup_account_amount([dict(row) for row in page_rows], include_rates=False)
                 else:
+                    select_started_at = time.time()
                     topup_rows = conn.execute(
                         """
                         SELECT *
@@ -10497,24 +10505,41 @@ def admin_list_topups(
                         """,
                         (safe_limit, safe_offset),
                     ).fetchall()
+                    logging.info(
+                        "admin topups fast selected rows=%s elapsed=%.3fs",
+                        len(topup_rows),
+                        time.time() - select_started_at,
+                    )
                     topup_items = [dict(row) for row in topup_rows]
                     account_ids = sorted({int(row["account_id"]) for row in topup_items if row.get("account_id") is not None})
                     user_ids = sorted({int(row["user_id"]) for row in topup_items if row.get("user_id") is not None})
                     account_map = {}
                     user_map = {}
                     if account_ids:
+                        accounts_started_at = time.time()
                         placeholders = ",".join(["?"] * len(account_ids))
                         account_rows = conn.execute(
                             f"SELECT id, name, platform, currency FROM ad_accounts WHERE id IN ({placeholders})",
                             tuple(account_ids),
                         ).fetchall()
+                        logging.info(
+                            "admin topups fast selected accounts=%s elapsed=%.3fs",
+                            len(account_rows),
+                            time.time() - accounts_started_at,
+                        )
                         account_map = {int(row["id"]): dict(row) for row in account_rows}
                     if user_ids:
+                        users_started_at = time.time()
                         placeholders = ",".join(["?"] * len(user_ids))
                         user_rows = conn.execute(
                             f"SELECT id, email FROM users WHERE id IN ({placeholders})",
                             tuple(user_ids),
                         ).fetchall()
+                        logging.info(
+                            "admin topups fast selected users=%s elapsed=%.3fs",
+                            len(user_rows),
+                            time.time() - users_started_at,
+                        )
                         user_map = {int(row["id"]): dict(row) for row in user_rows}
                     page_items = []
                     for row in topup_items:
@@ -10544,6 +10569,11 @@ def admin_list_topups(
                     else:
                         stats["pending"] += 1
                 has_more = len(page_items) == safe_limit
+                logging.info(
+                    "admin topups fast done items=%s total_elapsed=%.3fs",
+                    len(page_items),
+                    time.time() - fast_started_at,
+                )
                 return {
                     "items": page_items,
                     "count": safe_offset + len(page_items) + (1 if has_more else 0),

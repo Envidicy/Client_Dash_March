@@ -8,7 +8,7 @@ import { clearAuth, getAuthToken } from '../../../lib/auth'
 import { useI18n } from '../../../lib/i18n/client'
 
 const TOPUPS_PAGE_SIZE = 100
-const ADMIN_FETCH_TIMEOUT_MS = 25000
+const ADMIN_FETCH_TIMEOUT_MS = 12000
 
 function formatMoney(value, locale = 'en') {
   const num = Number(value || 0)

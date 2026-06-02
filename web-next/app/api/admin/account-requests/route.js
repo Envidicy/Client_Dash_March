@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getApiBase } from '../../../../lib/api'
 
 export const dynamic = 'force-dynamic'
-const UPSTREAM_TIMEOUT_MS = 25000
+const UPSTREAM_TIMEOUT_MS = 12000
 
 function apiBase() {
   return getApiBase().replace(/\/$/, '')
