@@ -10476,16 +10476,59 @@ def admin_list_topups(
 
         if amount_min is None:
             if fast:
-                page_rows = conn.execute(
-                    f"""
-                    SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
-                    {base_sql}
-                    ORDER BY t.id DESC
-                    LIMIT ? OFFSET ?
-                    """,
-                    tuple(params + [safe_limit, safe_offset]),
-                ).fetchall()
-                page_items = _attach_topup_account_amount([dict(row) for row in page_rows], include_rates=False)
+                if where:
+                    page_rows = conn.execute(
+                        f"""
+                        SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+                        {base_sql}
+                        ORDER BY t.id DESC
+                        LIMIT ? OFFSET ?
+                        """,
+                        tuple(params + [safe_limit, safe_offset]),
+                    ).fetchall()
+                    page_items = _attach_topup_account_amount([dict(row) for row in page_rows], include_rates=False)
+                else:
+                    topup_rows = conn.execute(
+                        """
+                        SELECT *
+                        FROM topups
+                        ORDER BY id DESC
+                        LIMIT ? OFFSET ?
+                        """,
+                        (safe_limit, safe_offset),
+                    ).fetchall()
+                    topup_items = [dict(row) for row in topup_rows]
+                    account_ids = sorted({int(row["account_id"]) for row in topup_items if row.get("account_id") is not None})
+                    user_ids = sorted({int(row["user_id"]) for row in topup_items if row.get("user_id") is not None})
+                    account_map = {}
+                    user_map = {}
+                    if account_ids:
+                        placeholders = ",".join(["?"] * len(account_ids))
+                        account_rows = conn.execute(
+                            f"SELECT id, name, platform, currency FROM ad_accounts WHERE id IN ({placeholders})",
+                            tuple(account_ids),
+                        ).fetchall()
+                        account_map = {int(row["id"]): dict(row) for row in account_rows}
+                    if user_ids:
+                        placeholders = ",".join(["?"] * len(user_ids))
+                        user_rows = conn.execute(
+                            f"SELECT id, email FROM users WHERE id IN ({placeholders})",
+                            tuple(user_ids),
+                        ).fetchall()
+                        user_map = {int(row["id"]): dict(row) for row in user_rows}
+                    page_items = []
+                    for row in topup_items:
+                        payload = dict(row)
+                        account = account_map.get(int(payload["account_id"])) if payload.get("account_id") is not None else None
+                        user = user_map.get(int(payload["user_id"])) if payload.get("user_id") is not None else None
+                        if account:
+                            payload["account_name"] = account.get("name")
+                            payload["account_platform"] = account.get("platform")
+                            payload["account_currency"] = account.get("currency")
+                        if user:
+                            payload["user_email"] = user.get("email")
+                        page_items.append(payload)
+                    page_items = _attach_topup_account_amount(page_items, include_rates=False)
                 stats = {"total": safe_offset + len(page_items), "pending": 0, "completed": 0, "failed": 0, "completedGross": 0}
                 for row in page_items:
                     raw_status = str(row.get("status") or "").lower()
