@@ -52,6 +52,49 @@ function formatChartMoney(value, currency = 'USD') {
   }).format(num)
 }
 
+function AccountActionIcon({ type }) {
+  const common = {
+    width: 16,
+    height: 16,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2.2,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    'aria-hidden': 'true',
+    focusable: 'false',
+  }
+
+  if (type === 'topup') {
+    return (
+      <svg {...common}>
+        <line x1="12" x2="12" y1="2" y2="22" />
+        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6" />
+      </svg>
+    )
+  }
+
+  if (type === 'dashboard') {
+    return (
+      <svg {...common}>
+        <path d="M4 19V5" />
+        <path d="M4 19h16" />
+        <path d="m7 15 4-4 3 3 5-7" />
+      </svg>
+    )
+  }
+
+  return (
+    <svg {...common}>
+      <path d="M21 12a9 9 0 0 1-15.5 6.2" />
+      <path d="M3 12A9 9 0 0 1 18.5 5.8" />
+      <path d="M18 2v4h4" />
+      <path d="M6 22v-4H2" />
+    </svg>
+  )
+}
+
 function SpendFundingChart({ data = [], tr, showSpend = true, currency = 'USD' }) {
   return (
     <div className={styles.rechartsWrap}>
@@ -83,14 +126,14 @@ function SpendFundingChart({ data = [], tr, showSpend = true, currency = 'USD' }
             formatter={(value, key) => [
               formatChartMoney(value, showSpend && key !== 'topups' ? 'USD' : currency),
               key === 'topups' || !showSpend
-                ? tr('Completed Funding', 'Р—Р°РІРµСЂС€РµРЅРЅС‹Рµ РїРѕРїРѕР»РЅРµРЅРёСЏ')
-                : tr('Spend', 'Р Р°СЃС…РѕРґ'),
+                ? tr('Completed Funding', 'Завершенные пополнения')
+                : tr('Spend', 'Расход'),
             ]}
             labelStyle={{ color: '#4a463f', fontWeight: 700 }}
           />
           <Legend
             formatter={(value) =>
-              value === 'topups' || !showSpend ? tr('Completed Funding', 'Р—Р°РІРµСЂС€РµРЅРЅС‹Рµ РїРѕРїРѕР»РЅРµРЅРёСЏ') : tr('Spend', 'Р Р°СЃС…РѕРґ')
+              value === 'topups' || !showSpend ? tr('Completed Funding', 'Завершенные пополнения') : tr('Spend', 'Расход')
             }
             iconType="circle"
             wrapperStyle={{ paddingTop: 12, fontSize: 11, fontWeight: 700, color: '#7e786d' }}
@@ -121,114 +164,160 @@ export default function OverviewPage() {
   const [activity, setActivity] = useState([])
   const [requests, setRequests] = useState([])
   const [alerts, setAlerts] = useState([])
-  const [statusAlerts, setStatusAlerts] = useState(tr('0 Alerts', '0 СѓРІРµРґРѕРјР»РµРЅРёР№'))
+  const [statusAlerts, setStatusAlerts] = useState(tr('0 Alerts', '0 уведомлений'))
   const [statusRows, setStatusRows] = useState([])
   const [loadError, setLoadError] = useState('')
   const [fundingAccountId, setFundingAccountId] = useState(null)
   const [accountRequestOpen, setAccountRequestOpen] = useState(false)
   const [selectedAccountTab, setSelectedAccountTab] = useState('')
-  const [refreshingAccountId, setRefreshingAccountId] = useState('')
+  const [refreshingAccountIds, setRefreshingAccountIds] = useState([])
+  const [refreshingAll, setRefreshingAll] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [customRangeActive, setCustomRangeActive] = useState(false)
+  const [analyticsLoading, setAnalyticsLoading] = useState(false)
 
   function translateOverviewLabel(value) {
     const v = String(value || '')
-    if (v === 'Available Balance') return tr('Available Balance', 'Р”РѕСЃС‚СѓРїРЅС‹Р№ Р±Р°Р»Р°РЅСЃ')
-    if (v === 'Monthly Spend') return tr('Monthly Spend', 'Р Р°СЃС…РѕРґ Р·Р° РјРµСЃСЏС†')
-    if (v === 'Active Accounts') return tr('Active Accounts', 'РђРєС‚РёРІРЅС‹Рµ Р°РєРєР°СѓРЅС‚С‹')
-    if (v === 'Pending Items') return tr('Pending Items', 'РћР¶РёРґР°СЋС‰РёРµ Р·Р°РґР°С‡Рё')
+    if (v === 'Available Balance') return tr('Available Balance', 'Доступный баланс')
+    if (v === 'Monthly Spend') return tr('Monthly Spend', 'Расход за месяц')
+    if (v === 'Active Accounts') return tr('Active Accounts', 'Активные аккаунты')
+    if (v === 'Pending Items') return tr('Pending Items', 'Ожидающие задачи')
     return v
   }
 
   function translateOverviewHint(value) {
     const v = String(value || '')
-    if (v === 'Ready for allocation') return tr('Ready for allocation', 'Р“РѕС‚РѕРІ Рє СЂР°СЃРїСЂРµРґРµР»РµРЅРёСЋ')
-    if (v === 'Approvals, docs, renewals') return tr('Approvals, docs, renewals', 'РЎРѕРіР»Р°СЃРѕРІР°РЅРёСЏ, РґРѕРєСѓРјРµРЅС‚С‹, РїСЂРѕРґР»РµРЅРёСЏ')
-    if (v === 'Current 30 days') return tr('Current 30 days', 'РўРµРєСѓС‰РёРµ 30 РґРЅРµР№')
+    if (v === 'Ready for allocation') return tr('Ready for allocation', 'Готов к распределению')
+    if (v === 'Approvals, docs, renewals') return tr('Approvals, docs, renewals', 'Согласования, документы, продления')
+    if (v === 'Current 30 days') return tr('Current 30 days', 'Текущие 30 дней')
     if (v === 'Completed account funding is currently covering period spend.') {
-      return tr('Completed account funding is currently covering period spend.', 'Р—Р°РІРµСЂС€РµРЅРЅС‹Рµ РїРѕРїРѕР»РЅРµРЅРёСЏ РїРѕРєСЂС‹РІР°СЋС‚ СЂР°СЃС…РѕРґ Р·Р° РїРµСЂРёРѕРґ.')
+      return tr('Completed account funding is currently covering period spend.', 'Завершенные пополнения покрывают расход за период.')
     }
     if (v === 'Completed account funding is trailing period spend.') {
-      return tr('Completed account funding is trailing period spend.', 'Р—Р°РІРµСЂС€РµРЅРЅС‹Рµ РїРѕРїРѕР»РЅРµРЅРёСЏ РѕС‚СЃС‚Р°СЋС‚ РѕС‚ СЂР°СЃС…РѕРґР° Р·Р° РїРµСЂРёРѕРґ.')
+      return tr('Completed account funding is trailing period spend.', 'Завершенные пополнения отстают от расхода за период.')
     }
-    if (v === 'Data unavailable') return tr('Data unavailable', 'Р”Р°РЅРЅС‹Рµ РЅРµРґРѕСЃС‚СѓРїРЅС‹')
+    if (v === 'Data unavailable') return tr('Data unavailable', 'Данные недоступны')
     if (v === 'Completed account funding by selected period.') {
-      return tr('Completed account funding by selected period.', 'РўРѕР»СЊРєРѕ Р·Р°РІРµСЂС€РµРЅРЅС‹Рµ РїРѕРїРѕР»РЅРµРЅРёСЏ Р·Р° РІС‹Р±СЂР°РЅРЅС‹Р№ РїРµСЂРёРѕРґ.')
+      return tr('Completed account funding by selected period.', 'Только завершенные пополнения за выбранный период.')
     }
-    if (v === 'Not connected') return tr('Not connected', 'РќРµ РїРѕРґРєР»СЋС‡РµРЅРѕ')
-    if (v === 'Calculated') return tr('Calculated', 'Р Р°СЃС‡С‘С‚РЅС‹Р№')
-    if (v === 'Estimated') return tr('Estimated', 'РћС†РµРЅРѕС‡РЅС‹Р№')
-    if (v === 'Unavailable') return tr('Unavailable', 'РќРµРґРѕСЃС‚СѓРїРЅРѕ')
+    if (v === 'Not connected') return tr('Not connected', 'Не подключено')
+    if (v === 'Calculated') return tr('Calculated', 'Расчётный')
+    if (v === 'Estimated') return tr('Estimated', 'Оценочный')
+    if (v === 'Unavailable') return tr('Unavailable', 'Недоступно')
     if (v === 'Live') return tr('Live', 'Live')
-    if (v === 'Not synced yet') return tr('Not synced yet', 'Р•С‰С‘ РЅРµ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅРѕ')
+    if (v === 'Not synced yet') return tr('Not synced yet', 'Ещё не синхронизировано')
     const syncedMatch = v.match(/^Synced\s+(.+)$/i)
     if (syncedMatch) {
       const raw = String(syncedMatch[1] || '').trim()
-      if (/^just now$/i.test(raw)) return tr('Synced Just now', 'РЎРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅРѕ С‚РѕР»СЊРєРѕ С‡С‚Рѕ')
-      if (/^recently$/i.test(raw)) return tr('Synced Recently', 'РЎРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅРѕ РЅРµРґР°РІРЅРѕ')
+      if (/^just now$/i.test(raw)) return tr('Synced Just now', 'Синхронизировано только что')
+      if (/^recently$/i.test(raw)) return tr('Synced Recently', 'Синхронизировано недавно')
       const hourMatch = raw.match(/^(\d+)\s+hours?\s+ago$/i)
-      if (hourMatch) return tr(`Synced ${raw}`, `РЎРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅРѕ ${hourMatch[1]} С‡. РЅР°Р·Р°Рґ`)
+      if (hourMatch) return tr(`Synced ${raw}`, `Синхронизировано ${hourMatch[1]} ч. назад`)
       const dayMatch = raw.match(/^(\d+)\s+days?\s+ago$/i)
-      if (dayMatch) return tr(`Synced ${raw}`, `РЎРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅРѕ ${dayMatch[1]} РґРЅ. РЅР°Р·Р°Рґ`)
-      return tr(`Synced ${raw}`, `РЎРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅРѕ ${raw}`)
+      if (dayMatch) return tr(`Synced ${raw}`, `Синхронизировано ${dayMatch[1]} дн. назад`)
+      return tr(`Synced ${raw}`, `Синхронизировано ${raw}`)
     }
     const acrossMatch = v.match(/^Across\s+(\d+)\s+platforms$/i)
-    if (acrossMatch) return tr(`Across ${acrossMatch[1]} platforms`, `РџРѕ ${acrossMatch[1]} РїР»Р°С‚С„РѕСЂРјР°Рј`)
+    if (acrossMatch) return tr(`Across ${acrossMatch[1]} platforms`, `По ${acrossMatch[1]} платформам`)
     const vsMatch = v.match(/^vs last period\s+([+-]?\d+(?:\.\d+)?)%$/i)
-    if (vsMatch) return tr(`vs last period ${vsMatch[1]}%`, `Рє РїСЂРѕС€Р»РѕРјСѓ РїРµСЂРёРѕРґСѓ ${vsMatch[1]}%`)
+    if (vsMatch) return tr(`vs last period ${vsMatch[1]}%`, `к прошлому периоду ${vsMatch[1]}%`)
     return v
   }
 
   function translateAction(value) {
     const v = String(value || '')
-    if (v === 'Top up now') return tr('Top up now', 'РџРѕРїРѕР»РЅРёС‚СЊ')
-    if (v === 'Upload docs') return tr('Upload docs', 'Р—Р°РіСЂСѓР·РёС‚СЊ РґРѕРєСѓРјРµРЅС‚С‹')
-    if (v === 'Review') return tr('Review', 'РџСЂРѕРІРµСЂРёС‚СЊ')
-    if (v === 'Open') return tr('Open', 'РћС‚РєСЂС‹С‚СЊ')
-    if (v === 'Open request') return tr('Open request', 'РћС‚РєСЂС‹С‚СЊ Р·Р°РїСЂРѕСЃ')
+    if (v === 'Top up now') return tr('Top up now', 'Пополнить')
+    if (v === 'Upload docs') return tr('Upload docs', 'Загрузить документы')
+    if (v === 'Review') return tr('Review', 'Проверить')
+    if (v === 'Open') return tr('Open', 'Открыть')
+    if (v === 'Open request') return tr('Open request', 'Открыть запрос')
     return v
   }
 
   function translateStatus(value) {
     const v = String(value || '')
-    if (v === 'Active') return tr('Active', 'РђРєС‚РёРІРµРЅ')
-    if (v === 'Pending Setup') return tr('Pending Setup', 'РћР¶РёРґР°РµС‚ РЅР°СЃС‚СЂРѕР№РєРё')
-    if (v === 'Paused') return tr('Paused', 'РќР° РїР°СѓР·Рµ')
-    if (v === 'Archived') return tr('Archived', 'РђСЂС…РёРІ')
+    if (v === 'Active') return tr('Active', 'Активен')
+    if (v === 'Pending Setup') return tr('Pending Setup', 'Ожидает настройки')
+    if (v === 'Paused') return tr('Paused', 'На паузе')
+    if (v === 'Archived') return tr('Archived', 'Архив')
     return v
+  }
+
+  function markAccountRefreshing(accountId, refreshing) {
+    const id = String(accountId || '').trim()
+    if (!id) return
+    setRefreshingAccountIds((current) => {
+      const next = new Set(current)
+      if (refreshing) next.add(id)
+      else next.delete(id)
+      return Array.from(next)
+    })
+  }
+
+  async function requestAccountLiveBilling(accountId, token) {
+    const id = String(accountId || '').trim()
+    if (!id) throw new Error('account_id is required')
+    const res = await fetch(`/api/client/accounts/${encodeURIComponent(id)}/refresh-live-billing`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    if (res.status === 401) {
+      router.replace('/login')
+      return false
+    }
+    const payload = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(payload?.detail || tr('Failed to refresh account balance', 'Не удалось обновить баланс аккаунта'))
+    return true
   }
 
   async function refreshAccountLiveBilling(accountId) {
     const id = String(accountId || '').trim()
-    if (!id) {
-      await loadOverview()
-      return
-    }
+    if (!id) return
+    if (refreshingAccountIds.includes(id)) return
     const token = getAuthToken()
     if (!token) {
       router.replace('/login')
       return
     }
     try {
-      setRefreshingAccountId(id)
+      markAccountRefreshing(id, true)
       setLoadError('')
-      const res = await fetch(`/api/client/accounts/${encodeURIComponent(id)}/refresh-live-billing`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        cache: 'no-store',
-      })
-      if (res.status === 401) {
-        router.replace('/login')
-        return
-      }
-      const payload = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(payload?.detail || tr('Failed to refresh account balance', 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ Р±Р°Р»Р°РЅСЃ Р°РєРєР°СѓРЅС‚Р°'))
-      await loadOverview()
+      const ok = await requestAccountLiveBilling(id, token)
+      if (ok) await loadOverview({ loadAnalytics: false })
     } catch (error) {
-      setLoadError(error?.message || tr('Failed to refresh account balance', 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ Р±Р°Р»Р°РЅСЃ Р°РєРєР°СѓРЅС‚Р°'))
+      setLoadError(error?.message || tr('Failed to refresh account balance', 'Не удалось обновить баланс аккаунта'))
     } finally {
-      setRefreshingAccountId('')
+      markAccountRefreshing(id, false)
+    }
+  }
+
+  async function refreshVisibleAccounts() {
+    const ids = visibleAccounts.map((row) => String(row?.accountId || '').trim()).filter(Boolean)
+    const uniqueIds = Array.from(new Set(ids))
+    if (!uniqueIds.length || refreshingAll) return
+    const token = getAuthToken()
+    if (!token) {
+      router.replace('/login')
+      return
+    }
+    setRefreshingAll(true)
+    setLoadError('')
+    setRefreshingAccountIds(uniqueIds)
+    try {
+      for (const id of uniqueIds) {
+        try {
+          const ok = await requestAccountLiveBilling(id, token)
+          if (ok) await loadOverview({ loadAnalytics: false })
+        } catch (error) {
+          setLoadError(error?.message || tr('Failed to refresh account balance', 'Не удалось обновить баланс аккаунта'))
+        } finally {
+          markAccountRefreshing(id, false)
+        }
+      }
+    } finally {
+      setRefreshingAll(false)
     }
   }
 
@@ -253,6 +342,42 @@ export default function OverviewPage() {
     router.push('/funds')
   }
 
+  async function loadOverviewAnalytics(next = {}) {
+    const token = getAuthToken()
+    if (!token) return
+
+    const nextDateFrom = Object.prototype.hasOwnProperty.call(next, 'dateFrom') ? next.dateFrom : dateFrom
+    const nextDateTo = Object.prototype.hasOwnProperty.call(next, 'dateTo') ? next.dateTo : dateTo
+    const useCustom = Object.prototype.hasOwnProperty.call(next, 'useCustom') ? next.useCustom : customRangeActive
+
+    try {
+      setAnalyticsLoading(true)
+      const params = new URLSearchParams()
+      params.set('full', '1')
+      if (useCustom && nextDateFrom && nextDateTo) {
+        params.set('date_from', nextDateFrom)
+        params.set('date_to', nextDateTo)
+      }
+      const res = await fetch(`/api/client/overview?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+      })
+      if (res.status === 401) {
+        router.replace('/login')
+        return
+      }
+      if (!res.ok) return
+      const payload = await res.json()
+      if (payload?.capitalFlow) setCapitalFlow(payload.capitalFlow)
+      if (Array.isArray(payload?.alerts)) {
+        setAlerts(payload.alerts)
+        setStatusAlerts(payload.statusAlerts || `${payload.alerts.length} Alerts`)
+      }
+    } finally {
+      setAnalyticsLoading(false)
+    }
+  }
+
   async function loadOverview(next = {}) {
     const token = getAuthToken()
     if (!token) {
@@ -263,6 +388,7 @@ export default function OverviewPage() {
     const nextDateFrom = Object.prototype.hasOwnProperty.call(next, 'dateFrom') ? next.dateFrom : dateFrom
     const nextDateTo = Object.prototype.hasOwnProperty.call(next, 'dateTo') ? next.dateTo : dateTo
     const useCustom = Object.prototype.hasOwnProperty.call(next, 'useCustom') ? next.useCustom : customRangeActive
+    const shouldLoadAnalytics = next.loadAnalytics !== false
 
     try {
       setLoadError('')
@@ -280,7 +406,7 @@ export default function OverviewPage() {
         router.replace('/login')
         return
       }
-      if (!res.ok) throw new Error(tr('Failed to load overview', 'РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ overview'))
+      if (!res.ok) throw new Error(tr('Failed to load overview', 'Не удалось загрузить overview'))
       const payload = await res.json()
       setMetrics(Array.isArray(payload.metrics) ? payload.metrics : [])
       setPendingSummary(payload.pending || { approvals: 0, funding: 0, documents: 0, total: 0 })
@@ -298,14 +424,21 @@ export default function OverviewPage() {
       setActivity(Array.isArray(payload.activity) ? payload.activity : [])
       setRequests(Array.isArray(payload.requests) ? payload.requests : [])
       setAlerts(Array.isArray(payload.alerts) ? payload.alerts : [])
-      setStatusAlerts(payload.statusAlerts || tr('0 Alerts', '0 СѓРІРµРґРѕРјР»РµРЅРёР№'))
+      setStatusAlerts(payload.statusAlerts || tr('0 Alerts', '0 уведомлений'))
       setStatusRows(Array.isArray(payload.statusRows) ? payload.statusRows : [])
       const payloadRange = payload?.range || {}
       setCustomRangeActive(Boolean(payloadRange.custom))
       setDateFrom(String(payloadRange.date_from || nextDateFrom || ''))
       setDateTo(String(payloadRange.date_to || nextDateTo || ''))
+      if (shouldLoadAnalytics) {
+        loadOverviewAnalytics({
+          dateFrom: String(payloadRange.date_from || nextDateFrom || ''),
+          dateTo: String(payloadRange.date_to || nextDateTo || ''),
+          useCustom: Boolean(payloadRange.custom),
+        })
+      }
     } catch {
-      setLoadError(tr('Failed to load overview data. Please refresh or contact support.', 'РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РґР°РЅРЅС‹Рµ overview. РћР±РЅРѕРІРёС‚Рµ СЃС‚СЂР°РЅРёС†Сѓ РёР»Рё РѕР±СЂР°С‚РёС‚РµСЃСЊ РІ РїРѕРґРґРµСЂР¶РєСѓ.'))
+      setLoadError(tr('Failed to load overview data. Please refresh or contact support.', 'Не удалось загрузить данные overview. Обновите страницу или обратитесь в поддержку.'))
     } finally {
       setLoading(false)
     }
@@ -317,10 +450,10 @@ export default function OverviewPage() {
 
   const pendingHint = useMemo(() => {
     const parts = []
-    if (pendingSummary.approvals) parts.push(`${pendingSummary.approvals} ${tr('approvals', 'СЃРѕРіР»Р°СЃРѕРІР°РЅРёР№')}`)
-    if (pendingSummary.funding) parts.push(`${pendingSummary.funding} ${tr('funding', 'РїРѕРїРѕР»РЅРµРЅРёР№')}`)
-    if (pendingSummary.documents) parts.push(`${pendingSummary.documents} ${tr('docs', 'РґРѕРєСѓРјРµРЅС‚РѕРІ')}`)
-    return parts.join(' В· ') || tr('No client actions pending', 'РќРµС‚ РѕР¶РёРґР°СЋС‰РёС… РґРµР№СЃС‚РІРёР№ РєР»РёРµРЅС‚Р°')
+    if (pendingSummary.approvals) parts.push(`${pendingSummary.approvals} ${tr('approvals', 'согласований')}`)
+    if (pendingSummary.funding) parts.push(`${pendingSummary.funding} ${tr('funding', 'пополнений')}`)
+    if (pendingSummary.documents) parts.push(`${pendingSummary.documents} ${tr('docs', 'документов')}`)
+    return parts.join(' / ') || tr('No client actions pending', 'Нет ожидающих действий клиента')
   }, [pendingSummary, tr])
 
   const displayMetrics = useMemo(
@@ -414,8 +547,9 @@ export default function OverviewPage() {
   }, [accountsData])
 
   const accountTabs = useMemo(() => {
+    if (!dedupedAccounts.length) return []
     const seen = new Set()
-    return dedupedAccounts
+    const tabs = dedupedAccounts
       .map((row) => {
         const label = String(row?.account || '').trim()
         if (!label) return null
@@ -428,10 +562,12 @@ export default function OverviewPage() {
         seen.add(key)
         return true
       })
-  }, [dedupedAccounts])
+    return [{ id: 'all', label: tr('All', 'Все') }, ...tabs]
+  }, [dedupedAccounts, tr])
 
   const visibleAccounts = useMemo(() => {
     if (!selectedAccountTab) return []
+    if (selectedAccountTab === 'all') return dedupedAccounts
     return dedupedAccounts.filter((row) => String(row?.account || '').trim().toLowerCase() === selectedAccountTab)
   }, [dedupedAccounts, selectedAccountTab])
 
@@ -460,11 +596,11 @@ export default function OverviewPage() {
 
   function applyOverviewRange() {
     if (!dateFrom || !dateTo) {
-      setLoadError(tr('Select both dates to apply a custom range.', 'Р’С‹Р±РµСЂРёС‚Рµ РѕР±Рµ РґР°С‚С‹, С‡С‚РѕР±С‹ РїСЂРёРјРµРЅРёС‚СЊ РїСЂРѕРёР·РІРѕР»СЊРЅС‹Р№ РґРёР°РїР°Р·РѕРЅ.'))
+      setLoadError(tr('Select both dates to apply a custom range.', 'Выберите обе даты, чтобы применить произвольный диапазон.'))
       return
     }
     if (dateFrom > dateTo) {
-      setLoadError(tr('Start date must be earlier than end date.', 'Р”Р°С‚Р° РЅР°С‡Р°Р»Р° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ СЂР°РЅСЊС€Рµ РґР°С‚С‹ РѕРєРѕРЅС‡Р°РЅРёСЏ.'))
+      setLoadError(tr('Start date must be earlier than end date.', 'Дата начала должна быть раньше даты окончания.'))
       return
     }
     loadOverview({
@@ -488,14 +624,14 @@ export default function OverviewPage() {
   return (
     <ClientShell
       activeNav="overview"
-      pageTitle={tr('Overview', 'РћР±Р·РѕСЂ')}
-      pageSubtitle={tr('Track your balances, account status and approvals.', 'РћС‚СЃР»РµР¶РёРІР°Р№С‚Рµ Р±Р°Р»Р°РЅСЃС‹, СЃС‚Р°С‚СѓСЃС‹ Р°РєРєР°СѓРЅС‚РѕРІ Рё СЃРѕРіР»Р°СЃРѕРІР°РЅРёСЏ.')}
-      pageActionLabel={tr('Request Account', 'Р—Р°РїСЂРѕСЃРёС‚СЊ Р°РєРєР°СѓРЅС‚')}
+      pageTitle={tr('Overview', 'Обзор')}
+      pageSubtitle={tr('Track your balances, account status and approvals.', 'Отслеживайте балансы, статусы аккаунтов и согласования.')}
+      pageActionLabel={tr('Request Account', 'Запросить аккаунт')}
       pageActionOnClick={() => setAccountRequestOpen(true)}
-      headerActionLabel={tr('Create Request', 'РЎРѕР·РґР°С‚СЊ Р·Р°РїСЂРѕСЃ')}
+      headerActionLabel={tr('Create Request', 'Создать запрос')}
       headerActionOnClick={() => setAccountRequestOpen(true)}
-      entityLabel={tr('Entity Switcher', 'РџРµСЂРµРєР»СЋС‡Р°С‚РµР»СЊ СЋСЂР»РёС†Р°')}
-      statusAlerts={loading ? tr('LoadingвЂ¦', 'Р—Р°РіСЂСѓР·РєР°вЂ¦') : statusAlerts}
+      entityLabel={tr('Entity Switcher', 'Переключатель юрлица')}
+      statusAlerts={loading ? tr('Loading...', 'Loading...') : statusAlerts}
       statusRows={displayStatusRows}
     >
       {loadError ? <div className={styles.pageErrorBanner}>{loadError}</div> : null}
@@ -508,19 +644,27 @@ export default function OverviewPage() {
       <section className={styles.sectionCard} id="accounts-overview">
         <div className={styles.sectionHeader}>
           <div>
-            <h3 className={styles.sectionTitle}>{tr('Ad Accounts Overview', 'РћР±Р·РѕСЂ СЂРµРєР»Р°РјРЅС‹С… Р°РєРєР°СѓРЅС‚РѕРІ')}</h3>
+            <h3 className={styles.sectionTitle}>{tr('Ad Accounts Overview', 'Обзор рекламных аккаунтов')}</h3>
             <div className={styles.tagRow}>
-              <span className={styles.tag}>{accountTags.active} {tr('Active', 'РђРєС‚РёРІРЅС‹')}</span>
-              <span className={styles.tagDanger}>{accountTags.warn} {tr('Need Attention', 'РўСЂРµР±СѓСЋС‚ РІРЅРёРјР°РЅРёСЏ')}</span>
-              <span className={styles.tagMuted}>{accountTags.pending} {tr('Setup Pending', 'РћР¶РёРґР°СЋС‚ РЅР°СЃС‚СЂРѕР№РєРё')}</span>
+              <span className={styles.tag}>{accountTags.active} {tr('Active', 'Активны')}</span>
+              <span className={styles.tagDanger}>{accountTags.warn} {tr('Need Attention', 'Требуют внимания')}</span>
+              <span className={styles.tagMuted}>{accountTags.pending} {tr('Setup Pending', 'Ожидают настройки')}</span>
             </div>
           </div>
           <div className={styles.headerControls}>
+            <button
+              className={styles.outlinedActionButton}
+              disabled={!visibleAccounts.some((row) => row.accountId) || refreshingAll}
+              onClick={refreshVisibleAccounts}
+              type="button"
+            >
+              {refreshingAll ? tr('Refreshing...', 'Обновляем...') : tr('Refresh All', 'Обновить все')}
+            </button>
             <button className={styles.headerPrimaryAction} onClick={() => setAccountRequestOpen(true)} type="button">
-              {tr('New Account Request', 'РќРѕРІС‹Р№ Р·Р°РїСЂРѕСЃ РЅР° Р°РєРєР°СѓРЅС‚')}
+              {tr('New Account Request', 'Новый запрос на аккаунт')}
             </button>
             <Link className={styles.outlinedAction} href="/funds">
-              {tr('View All Accounts', 'Р’СЃРµ Р°РєРєР°СѓРЅС‚С‹')}
+              {tr('View All Accounts', 'Все аккаунты')}
             </Link>
           </div>
         </div>
@@ -550,13 +694,13 @@ export default function OverviewPage() {
             </colgroup>
             <thead>
               <tr>
-                <th>{tr('Account', 'РђРєРєР°СѓРЅС‚')}</th>
-                <th>{tr('Platform', 'РџР»Р°С‚С„РѕСЂРјР°')}</th>
-                <th>{tr('Status', 'РЎС‚Р°С‚СѓСЃ')}</th>
-                <th>{tr('Balance', 'Р‘Р°Р»Р°РЅСЃ')}</th>
-                <th>{tr('Spend', 'Р Р°СЃС…РѕРґ')}</th>
-                <th>{tr('Note', 'РљРѕРјРјРµРЅС‚Р°СЂРёР№')}</th>
-                <th>{tr('Action', 'Р”РµР№СЃС‚РІРёРµ')}</th>
+                <th>{tr('Account', 'Аккаунт')}</th>
+                <th>{tr('Platform', 'Платформа')}</th>
+                <th>{tr('Status', 'Статус')}</th>
+                <th>{tr('Balance', 'Баланс')}</th>
+                <th>{tr('Spend', 'Расход')}</th>
+                <th>{tr('Note', 'Комментарий')}</th>
+                <th>{tr('Action', 'Действие')}</th>
               </tr>
             </thead>
             <tbody>
@@ -595,30 +739,33 @@ export default function OverviewPage() {
                   <td>
                     <div className={styles.accountActions}>
                       <button
+                        aria-label={tr('Top up account', 'Пополнить аккаунт')}
                         className={styles.accountIconButton}
                         disabled={!row.accountId}
                         onClick={() => openFundingModal(row.accountId)}
-                        title={tr('Top up account', 'РџРѕРїРѕР»РЅРёС‚СЊ Р°РєРєР°СѓРЅС‚')}
+                        title={tr('Top up account', 'Пополнить аккаунт')}
                         type="button"
                       >
-                        в‚ё
+                        <AccountActionIcon type="topup" />
                       </button>
                       <button
+                        aria-label={tr('Open dashboard', 'Открыть дашборд')}
                         className={styles.accountIconButton}
                         onClick={() => openAccountDashboard(row.accountId)}
-                        title={tr('Open dashboard', 'РћС‚РєСЂС‹С‚СЊ РґР°С€Р±РѕСЂРґ')}
+                        title={tr('Open dashboard', 'Открыть дашборд')}
                         type="button"
                       >
-                        в–Ў
+                        <AccountActionIcon type="dashboard" />
                       </button>
                       <button
-                        className={styles.accountIconButton}
-                        disabled={!row.accountId || refreshingAccountId === String(row.accountId)}
+                        aria-label={tr('Refresh account balance', 'Обновить баланс аккаунта')}
+                        className={`${styles.accountIconButton} ${refreshingAccountIds.includes(String(row.accountId || '')) ? styles.accountIconButtonLoading : ''}`}
+                        disabled={!row.accountId || refreshingAccountIds.includes(String(row.accountId || ''))}
                         onClick={() => handleOverviewAction('refresh', row.accountId)}
                         title={tr('Refresh account balance', 'Обновить баланс аккаунта')}
                         type="button"
                       >
-                        {refreshingAccountId === String(row.accountId) ? 'вЂ¦' : 'в†»'}
+                        <AccountActionIcon type="refresh" />
                       </button>
                     </div>
                   </td>
@@ -635,10 +782,12 @@ export default function OverviewPage() {
             <div>
               <h3 className={styles.sectionTitle}>
                 {capitalFlow?.spendVisible === false
-                  ? tr('Completed Funding Timeline', 'Р”РёРЅР°РјРёРєР° Р·Р°РІРµСЂС€РµРЅРЅС‹С… РїРѕРїРѕР»РЅРµРЅРёР№')
-                  : tr('Spend vs Completed Funding', 'Р Р°СЃС…РѕРґ vs Р—Р°РІРµСЂС€РµРЅРЅС‹Рµ РїРѕРїРѕР»РЅРµРЅРёСЏ')}
+                  ? tr('Completed Funding Timeline', 'Динамика завершенных пополнений')
+                  : tr('Spend vs Completed Funding', 'Расход vs Завершенные пополнения')}
               </h3>
-              <p className={styles.chartInsight}>{translateOverviewHint(capitalFlow.insight)}</p>
+              <p className={styles.chartInsight}>
+                {analyticsLoading ? tr('Updating chart...', 'Обновляем график...') : translateOverviewHint(capitalFlow.insight)}
+              </p>
             </div>
             <div className={styles.dateRangeControls}>
               <input
@@ -647,8 +796,8 @@ export default function OverviewPage() {
                 value={dateFrom}
                 onChange={(event) => setDateFrom(event.target.value)}
                 max={dateTo || undefined}
-                aria-label={tr('Date from', 'Р”Р°С‚Р° СЃ')}
-                title={tr('Date from', 'Р”Р°С‚Р° СЃ')}
+                aria-label={tr('Date from', 'Дата с')}
+                title={tr('Date from', 'Дата с')}
               />
               <input
                 className={styles.dateInput}
@@ -656,36 +805,36 @@ export default function OverviewPage() {
                 value={dateTo}
                 onChange={(event) => setDateTo(event.target.value)}
                 min={dateFrom || undefined}
-                aria-label={tr('Date to', 'Р”Р°С‚Р° РїРѕ')}
-                title={tr('Date to', 'Р”Р°С‚Р° РїРѕ')}
+                aria-label={tr('Date to', 'Дата по')}
+                title={tr('Date to', 'Дата по')}
               />
               <button className={styles.dateApplyButton} onClick={applyOverviewRange} type="button">
-                {tr('Apply', 'РџСЂРёРјРµРЅРёС‚СЊ')}
+                {tr('Apply', 'Применить')}
               </button>
               <button className={styles.dateResetButton} onClick={resetOverviewRange} type="button">
-                {customRangeActive ? tr('Reset', 'РЎР±СЂРѕСЃ') : tr('Last 30d', '30 РґРЅРµР№')}
+                {customRangeActive ? tr('Reset', 'Сброс') : tr('Last 30d', '30 дней')}
               </button>
             </div>
           </div>
 
           <div className={styles.chartMetrics}>
             <div className={styles.chartMetric}>
-              <span>{tr('Top-ups', 'РџРѕРїРѕР»РЅРµРЅРёСЏ')}</span>
+              <span>{tr('Top-ups', 'Пополнения')}</span>
               <strong>{capitalFlow.topups}</strong>
             </div>
             {capitalFlow?.spendVisible === false ? (
               <div className={styles.chartMetric}>
-                <span>{tr('Days with completed top-up', 'Р”РЅРµР№ СЃ Р·Р°РІРµСЂС€РµРЅРЅС‹Рј РїРѕРїРѕР»РЅРµРЅРёРµРј')}</span>
+                <span>{tr('Days with completed top-up', 'Дней с завершенным пополнением')}</span>
                 <strong>{String(topupDaysCount)}</strong>
               </div>
             ) : (
               <>
                 <div className={styles.chartMetric}>
-                  <span>{tr('Spend', 'Р Р°СЃС…РѕРґ')}</span>
+                  <span>{tr('Spend', 'Расход')}</span>
                   <strong>{capitalFlow.spend}</strong>
                 </div>
                 <div className={styles.chartMetric}>
-                  <span>{tr('Net Flow', 'Р§РёСЃС‚С‹Р№ РїРѕС‚РѕРє')}</span>
+                  <span>{tr('Net Flow', 'Чистый поток')}</span>
                   <strong>{capitalFlow.net}</strong>
                 </div>
               </>
@@ -703,7 +852,7 @@ export default function OverviewPage() {
             <div className={styles.chartEmptyNote}>
               {tr(
                 'No completed account funding was recorded during this period.',
-                'Р—Р° СЌС‚РѕС‚ РїРµСЂРёРѕРґ РЅРµ Р±С‹Р»Рѕ Р·Р°РІРµСЂС€РµРЅРЅС‹С… РїРѕРїРѕР»РЅРµРЅРёР№ Р°РєРєР°СѓРЅС‚РѕРІ.'
+                'За этот период не было завершенных пополнений аккаунтов.'
               )}
               
             </div>
@@ -713,12 +862,12 @@ export default function OverviewPage() {
 
         <div className={styles.rightStack}>
           <article className={styles.smallCard}>
-            <h3 className={styles.smallTitle}>{tr('Important Alerts', 'Р’Р°Р¶РЅС‹Рµ СѓРІРµРґРѕРјР»РµРЅРёСЏ')}</h3>
+            <h3 className={styles.smallTitle}>{tr('Important Alerts', 'Важные уведомления')}</h3>
             <div className={styles.alertList}>
               {displayAlerts.map((item) => (
                 <div className={styles.alertItem} key={item.id || item.title}>
                   <strong>{item.title}</strong>
-                  {item.action === tr('Top up now', 'РџРѕРїРѕР»РЅРёС‚СЊ') && item.accountId ? (
+                  {item.action === tr('Top up now', 'Пополнить') && item.accountId ? (
                     <button className={styles.inlineActionButton} onClick={() => openFundingModal(item.accountId)} type="button">
                       {item.action}
                     </button>
@@ -738,7 +887,7 @@ export default function OverviewPage() {
         <article className={styles.sectionCard}>
           <div className={styles.sectionHeader}>
             <div>
-              <h3 className={styles.sectionTitle}>{tr('Recent Activity', 'РќРµРґР°РІРЅСЏСЏ Р°РєС‚РёРІРЅРѕСЃС‚СЊ')}</h3>
+              <h3 className={styles.sectionTitle}>{tr('Recent Activity', 'Недавняя активность')}</h3>
             </div>
           </div>
           <div className={styles.feedList}>
@@ -768,10 +917,10 @@ export default function OverviewPage() {
         <article className={styles.sectionCard}>
           <div className={styles.sectionHeader}>
             <div>
-              <h3 className={styles.sectionTitle}>{tr('Pending Requests', 'РћР¶РёРґР°СЋС‰РёРµ Р·Р°РїСЂРѕСЃС‹')}</h3>
+              <h3 className={styles.sectionTitle}>{tr('Pending Requests', 'Ожидающие запросы')}</h3>
             </div>
             <Link className={styles.linkAction} href="/funds">
-              {tr('View All', 'РЎРјРѕС‚СЂРµС‚СЊ РІСЃРµ')}
+              {tr('View All', 'Смотреть все')}
             </Link>
           </div>
           <div className={styles.requestList}>

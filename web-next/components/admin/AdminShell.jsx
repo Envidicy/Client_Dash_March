@@ -104,6 +104,19 @@ export default function AdminShell({ title, subtitle, actionLabel, actionOnClick
             </div>
           </header>
 
+          <nav className={styles.mobileNav} aria-label="Admin sections">
+            {NAV_ITEMS.map((item) => (
+              <Link
+                key={item.key}
+                href={item.href}
+                className={`${styles.mobileNavLink} ${activeKey === item.key ? styles.mobileNavLinkActive : ''}`}
+              >
+                <span className={styles.mobileNavIcon}>{item.icon}</span>
+                <span>{item.label}</span>
+              </Link>
+            ))}
+          </nav>
+
           <main className={styles.content}>
             <div className={styles.pageHeader}>
               <div>

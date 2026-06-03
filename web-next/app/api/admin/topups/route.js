@@ -3,6 +3,7 @@ import { getApiBase } from '../../../../lib/api'
 import { getTopupBreakdown, platformLabel } from '../../../../lib/finance/model'
 
 export const dynamic = 'force-dynamic'
+const UPSTREAM_TIMEOUT_MS = 12000
 
 function apiBase() {
   return getApiBase().replace(/\/$/, '')
@@ -13,14 +14,21 @@ function authHeader(request) {
 }
 
 async function upstreamFetch(path, auth, options = {}) {
-  return fetch(`${apiBase()}${path}`, {
-    ...options,
-    headers: {
-      ...(auth ? { Authorization: auth } : {}),
-      ...(options.headers || {}),
-    },
-    cache: 'no-store',
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS)
+  try {
+    return await fetch(`${apiBase()}${path}`, {
+      ...options,
+      headers: {
+        ...(auth ? { Authorization: auth } : {}),
+        ...(options.headers || {}),
+      },
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 function normalizeStatus(status) {
@@ -83,7 +91,17 @@ export async function GET(request) {
   const auth = authHeader(request)
   if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
-  const upstreamRes = await upstreamFetch('/admin/topups', auth)
+  const query = request.nextUrl.searchParams.toString()
+  let upstreamRes
+  try {
+    upstreamRes = await upstreamFetch(`/admin/topups${query ? `?${query}` : ''}`, auth)
+  } catch (error) {
+    const timedOut = error?.name === 'AbortError'
+    return NextResponse.json(
+      { detail: timedOut ? 'Admin topups request timed out.' : 'Failed to reach admin topups backend.' },
+      { status: timedOut ? 504 : 502 }
+    )
+  }
   if (upstreamRes.status === 401) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
   if (upstreamRes.status === 403) return NextResponse.json({ detail: 'Forbidden' }, { status: 403 })
   if (!upstreamRes.ok) {
@@ -92,7 +110,17 @@ export async function GET(request) {
   }
 
   const data = await upstreamRes.json().catch(() => [])
-  const items = (Array.isArray(data) ? data : []).map(normalizeTopup)
-  const stats = buildStats(items)
-  return NextResponse.json({ items, count: items.length, stats })
+  const rawItems = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : []
+  const items = rawItems.map(normalizeTopup)
+  const stats = data?.stats || buildStats(items)
+  const count = Number.isFinite(Number(data?.count)) ? Number(data.count) : items.length
+  return NextResponse.json({
+    items,
+    count,
+    stats,
+    limit: Number(data?.limit || items.length || 0),
+    offset: Number(data?.offset || 0),
+    hasMore: Boolean(data?.hasMore),
+    fast: Boolean(data?.fast),
+  })
 }

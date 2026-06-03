@@ -42,6 +42,7 @@ export default function AdminAccountsPage() {
   const [fundingStatus, setFundingStatus] = useState('')
   const [fundingEvents, setFundingEvents] = useState([])
   const [fundingLoading, setFundingLoading] = useState(false)
+  const [liveBillingLoading, setLiveBillingLoading] = useState(false)
 
   const [form, setForm] = useState({
     id: '',
@@ -82,16 +83,24 @@ export default function AdminAccountsPage() {
     return res
   }
 
-  async function fetchAccounts() {
+  async function fetchAccounts(options = {}) {
+    const includeLiveBilling = options.includeLiveBilling === true
     try {
-      const res = await adminRouteFetch('/api/admin/accounts?include_live_billing=1')
+      if (includeLiveBilling) setLiveBillingLoading(true)
+      const res = await adminRouteFetch(`/api/admin/accounts${includeLiveBilling ? '?include_live_billing=1' : ''}`)
       if (!res.ok) throw new Error('Failed to load accounts.')
       const data = await res.json()
       setRows(Array.isArray(data?.items) ? data.items : [])
-      setStatus('')
+      setStatus(includeLiveBilling ? 'Live billing refreshed.' : '')
     } catch (e) {
       setStatus(e?.message || 'Failed to load accounts.')
+    } finally {
+      if (includeLiveBilling) setLiveBillingLoading(false)
     }
+  }
+
+  async function refreshLiveBilling() {
+    await fetchAccounts({ includeLiveBilling: true })
   }
 
   async function fetchUsers() {
@@ -271,6 +280,9 @@ export default function AdminAccountsPage() {
             <h3 className={styles.cardTitle}>Accounts</h3>
           </div>
           <div className={styles.tableActions}>
+            <button className={styles.buttonGhost} type="button" onClick={refreshLiveBilling} disabled={liveBillingLoading}>
+              {liveBillingLoading ? 'Refreshing live billing...' : 'Refresh live billing'}
+            </button>
             <button className={styles.buttonGhost} type="button" onClick={exportAccounts}>Export Excel</button>
           </div>
         </div>
@@ -295,7 +307,7 @@ export default function AdminAccountsPage() {
                     <td><span className={statusChipClass(row.status_key)}>{row.status_label || '—'}</span></td>
                     <td>{row.account_code || '—'}</td>
                     <td>{row.external_id || '—'}</td>
-                    <td>{row.live_billing_summary?.label || 'No data'}</td>
+                    <td>{row.live_billing_summary?.label || 'Not refreshed'}</td>
                     <td style={{ textAlign: 'right' }}>
                       <button
                         className={styles.buttonGhost}

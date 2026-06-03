@@ -5850,11 +5850,13 @@ def _resolve_topup_account_amount(row: Dict[str, object], rates_data: Optional[D
     return amount_net_value if amount_net_value is not None else amount_input_value
 
 
-def _attach_topup_account_amount(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    try:
-        rates_data = _fetch_bcc_rates()
-    except Exception as exc:
-        rates_data = _manual_marked_rates_data(str(exc))
+def _attach_topup_account_amount(rows: List[Dict[str, object]], include_rates: bool = True) -> List[Dict[str, object]]:
+    rates_data = None
+    if include_rates:
+        try:
+            rates_data = _fetch_bcc_rates()
+        except Exception as exc:
+            rates_data = _manual_marked_rates_data(str(exc))
     prepared = []
     for row in rows:
         payload = dict(row)
@@ -9935,13 +9937,39 @@ def create_account_request(payload: AccountRequestCreate, current_user=Depends(g
 
 
 @app.get("/admin/account-requests")
-def admin_list_account_requests(admin_user=Depends(get_admin_user)):
+def admin_list_account_requests(request: Request, admin_user=Depends(get_admin_user)):
     if not get_conn:
         return []
     with get_conn() as conn:
-        _sync_completed_topup_funding_events(conn)
-        rows = conn.execute(
-            """
+        has_query = bool(request.query_params)
+        if not has_query:
+            _sync_completed_topup_funding_events(conn)
+        try:
+            limit = int(request.query_params.get("limit") or 100)
+        except (TypeError, ValueError):
+            limit = 100
+        try:
+            offset = int(request.query_params.get("offset") or 0)
+        except (TypeError, ValueError):
+            offset = 0
+        limit = max(1, min(limit, 500))
+        offset = max(0, offset)
+        status = str(request.query_params.get("status") or "").strip().lower()
+        email = str(request.query_params.get("email") or "").strip().lower()
+        platform = str(request.query_params.get("platform") or "").strip().lower()
+        where_parts = []
+        params: List[object] = []
+        if status:
+            where_parts.append("LOWER(COALESCE(r.status, 'new')) = ?")
+            params.append(status)
+        if email:
+            where_parts.append("LOWER(COALESCE(u.email, '')) LIKE ?")
+            params.append(f"%{email}%")
+        if platform:
+            where_parts.append("LOWER(COALESCE(r.platform, '')) = ?")
+            params.append(platform)
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        select_sql = f"""
             SELECT r.*,
                    u.email as user_email,
                    a.id as account_id,
@@ -9962,8 +9990,59 @@ def admin_list_account_requests(admin_user=Depends(get_admin_user)):
             FROM account_requests r
             JOIN users u ON u.id = r.user_id
             LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
+            {where_sql}
             ORDER BY r.created_at DESC
             """
+        if has_query:
+            count_row = conn.execute(
+                f"""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN COALESCE(r.status, 'new') = 'new' THEN 1 ELSE 0 END) as fresh,
+                       SUM(CASE WHEN r.status = 'processing' THEN 1 ELSE 0 END) as processing,
+                       SUM(CASE WHEN r.status = 'approved' THEN 1 ELSE 0 END) as approved,
+                       SUM(CASE WHEN r.status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+                       SUM(CASE
+                         WHEN COALESCE(a.budget_total, 0) > 0
+                          AND COALESCE((SELECT SUM(COALESCE(afe.amount_kzt, 0))
+                                        FROM account_funding_events afe
+                                        WHERE afe.account_id = a.id
+                                          AND afe.source_type = 'topup'
+                                          AND afe.voided_at IS NULL
+                                          AND EXISTS (
+                                            SELECT 1
+                                            FROM topups t
+                                            WHERE t.id = afe.source_id
+                                              AND t.status='completed'
+                                          )), 0) < COALESCE(a.budget_total, 0)
+                         THEN 1 ELSE 0 END) as needs_funding_review
+                FROM account_requests r
+                JOIN users u ON u.id = r.user_id
+                LEFT JOIN ad_accounts a ON a.user_id = r.user_id AND a.platform = r.platform AND a.name = r.name
+                {where_sql}
+                """,
+                tuple(params),
+            ).fetchone()
+            rows = conn.execute(
+                f"{select_sql} LIMIT ? OFFSET ?",
+                tuple(params + [limit, offset]),
+            ).fetchall()
+            return {
+                "items": [dict(row) for row in rows],
+                "count": int(count_row["total"] or 0) if count_row else 0,
+                "stats": {
+                    "total": int(count_row["total"] or 0) if count_row else 0,
+                    "fresh": int(count_row["fresh"] or 0) if count_row else 0,
+                    "processing": int(count_row["processing"] or 0) if count_row else 0,
+                    "approved": int(count_row["approved"] or 0) if count_row else 0,
+                    "rejected": int(count_row["rejected"] or 0) if count_row else 0,
+                    "needsFundingReview": int(count_row["needs_funding_review"] or 0) if count_row else 0,
+                },
+                "limit": limit,
+                "offset": offset,
+            }
+        rows = conn.execute(
+            select_sql,
+            tuple(params),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -10350,20 +10429,250 @@ def admin_delete_account(account_id: int, admin_user=Depends(get_admin_user)):
 
 
 @app.get("/admin/topups")
-def admin_list_topups(admin_user=Depends(get_admin_user)):
+def admin_list_topups(
+    request: Request,
+    limit: int = 100,
+    offset: int = 0,
+    fast: int = 0,
+    status: Optional[str] = None,
+    email: Optional[str] = None,
+    platform: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    admin_user=Depends(get_admin_user),
+):
     if not get_conn:
-        return []
+        return {"items": [], "count": 0, "stats": {"total": 0, "pending": 0, "completed": 0, "failed": 0, "completedGross": 0}}
     with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+        try:
+            conn.execute("SET LOCAL lock_timeout TO '2000ms'")
+            conn.execute("SET LOCAL statement_timeout TO '8000ms'")
+        except Exception:
+            pass
+        if not request.query_params:
+            rows = conn.execute(
+                """
+                SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+                FROM topups t
+                JOIN ad_accounts a ON a.id = t.account_id
+                JOIN users u ON u.id = t.user_id
+                ORDER BY t.created_at DESC
+                """
+            ).fetchall()
+            return _attach_topup_account_amount([dict(row) for row in rows])
+
+        safe_limit = max(1, min(int(limit or 100), 500))
+        safe_offset = max(0, int(offset or 0))
+        where = []
+        params: List[object] = []
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status:
+            if normalized_status == "completed":
+                where.append("LOWER(COALESCE(t.status, '')) IN ('completed', 'approved')")
+            elif normalized_status == "failed":
+                where.append("LOWER(COALESCE(t.status, '')) IN ('failed', 'rejected')")
+            elif normalized_status == "pending":
+                where.append("LOWER(COALESCE(t.status, '')) NOT IN ('completed', 'approved', 'failed', 'rejected')")
+        if email:
+            where.append("LOWER(COALESCE(u.email, '')) LIKE ?")
+            params.append(f"%{str(email).strip().lower()}%")
+        if platform:
+            where.append("LOWER(COALESCE(a.platform, '')) = ?")
+            params.append(str(platform).strip().lower())
+        if date_from:
+            where.append("DATE(t.created_at) >= DATE(?)")
+            params.append(str(date_from).strip())
+        if date_to:
+            where.append("DATE(t.created_at) <= DATE(?)")
+            params.append(str(date_to).strip())
+
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        base_sql = f"""
             FROM topups t
             JOIN ad_accounts a ON a.id = t.account_id
             JOIN users u ON u.id = t.user_id
+            {where_sql}
+        """
+
+        if amount_min is None:
+            if fast:
+                fast_started_at = time.time()
+                logging.info("admin topups fast start limit=%s offset=%s filters=%s", safe_limit, safe_offset, bool(where))
+                if where:
+                    page_rows = conn.execute(
+                        f"""
+                        SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+                        {base_sql}
+                        ORDER BY t.id DESC
+                        LIMIT ? OFFSET ?
+                        """,
+                        tuple(params + [safe_limit, safe_offset]),
+                    ).fetchall()
+                    page_items = _attach_topup_account_amount([dict(row) for row in page_rows], include_rates=False)
+                else:
+                    select_started_at = time.time()
+                    topup_rows = conn.execute(
+                        """
+                        SELECT *
+                        FROM topups
+                        ORDER BY id DESC
+                        LIMIT ? OFFSET ?
+                        """,
+                        (safe_limit, safe_offset),
+                    ).fetchall()
+                    logging.info(
+                        "admin topups fast selected rows=%s elapsed=%.3fs",
+                        len(topup_rows),
+                        time.time() - select_started_at,
+                    )
+                    topup_items = [dict(row) for row in topup_rows]
+                    account_ids = sorted({int(row["account_id"]) for row in topup_items if row.get("account_id") is not None})
+                    user_ids = sorted({int(row["user_id"]) for row in topup_items if row.get("user_id") is not None})
+                    account_map = {}
+                    user_map = {}
+                    if account_ids:
+                        accounts_started_at = time.time()
+                        placeholders = ",".join(["?"] * len(account_ids))
+                        account_rows = conn.execute(
+                            f"SELECT id, name, platform, currency FROM ad_accounts WHERE id IN ({placeholders})",
+                            tuple(account_ids),
+                        ).fetchall()
+                        logging.info(
+                            "admin topups fast selected accounts=%s elapsed=%.3fs",
+                            len(account_rows),
+                            time.time() - accounts_started_at,
+                        )
+                        account_map = {int(row["id"]): dict(row) for row in account_rows}
+                    if user_ids:
+                        users_started_at = time.time()
+                        placeholders = ",".join(["?"] * len(user_ids))
+                        user_rows = conn.execute(
+                            f"SELECT id, email FROM users WHERE id IN ({placeholders})",
+                            tuple(user_ids),
+                        ).fetchall()
+                        logging.info(
+                            "admin topups fast selected users=%s elapsed=%.3fs",
+                            len(user_rows),
+                            time.time() - users_started_at,
+                        )
+                        user_map = {int(row["id"]): dict(row) for row in user_rows}
+                    page_items = []
+                    for row in topup_items:
+                        payload = dict(row)
+                        account = account_map.get(int(payload["account_id"])) if payload.get("account_id") is not None else None
+                        user = user_map.get(int(payload["user_id"])) if payload.get("user_id") is not None else None
+                        if account:
+                            payload["account_name"] = account.get("name")
+                            payload["account_platform"] = account.get("platform")
+                            payload["account_currency"] = account.get("currency")
+                        if user:
+                            payload["user_email"] = user.get("email")
+                        page_items.append(payload)
+                    page_items = _attach_topup_account_amount(page_items, include_rates=False)
+                stats = {"total": safe_offset + len(page_items), "pending": 0, "completed": 0, "failed": 0, "completedGross": 0}
+                for row in page_items:
+                    raw_status = str(row.get("status") or "").lower()
+                    if raw_status in {"completed", "approved"}:
+                        stats["completed"] += 1
+                        stats["completedGross"] += float(_topup_gross_amount(
+                            float(row.get("amount_input") or 0),
+                            float(row.get("fee_percent") or _default_fee_config().get(str(row.get("account_platform") or row.get("platform") or "").lower()) or 0),
+                            float(row.get("vat_percent") or 0),
+                        ) or 0)
+                    elif raw_status in {"failed", "rejected"}:
+                        stats["failed"] += 1
+                    else:
+                        stats["pending"] += 1
+                has_more = len(page_items) == safe_limit
+                logging.info(
+                    "admin topups fast done items=%s total_elapsed=%.3fs",
+                    len(page_items),
+                    time.time() - fast_started_at,
+                )
+                return {
+                    "items": page_items,
+                    "count": safe_offset + len(page_items) + (1 if has_more else 0),
+                    "stats": stats,
+                    "limit": safe_limit,
+                    "offset": safe_offset,
+                    "hasMore": has_more,
+                    "fast": True,
+                }
+            stats_row = conn.execute(
+                f"""
+                SELECT
+                  COUNT(1) as total,
+                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(t.status, '')) NOT IN ('completed', 'approved', 'failed', 'rejected') THEN 1 ELSE 0 END), 0) as pending,
+                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(t.status, '')) IN ('completed', 'approved') THEN 1 ELSE 0 END), 0) as completed,
+                  COALESCE(SUM(CASE WHEN LOWER(COALESCE(t.status, '')) IN ('failed', 'rejected') THEN 1 ELSE 0 END), 0) as failed,
+                  COALESCE(SUM(
+                    CASE WHEN LOWER(COALESCE(t.status, '')) IN ('completed', 'approved')
+                    THEN COALESCE(t.amount_input, 0) * (1 + COALESCE(t.fee_percent, 0) / 100.0 + COALESCE(t.vat_percent, 0) / 100.0)
+                    ELSE 0 END
+                  ), 0) as completed_gross
+                {base_sql}
+                """,
+                tuple(params),
+            ).fetchone()
+            page_rows = conn.execute(
+                f"""
+                SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+                {base_sql}
+                ORDER BY t.created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params + [safe_limit, safe_offset]),
+            ).fetchall()
+            page_items = _attach_topup_account_amount([dict(row) for row in page_rows])
+            total_count = int(stats_row["total"] or 0) if stats_row else 0
+            stats = {
+                "total": total_count,
+                "pending": int(stats_row["pending"] or 0) if stats_row else 0,
+                "completed": int(stats_row["completed"] or 0) if stats_row else 0,
+                "failed": int(stats_row["failed"] or 0) if stats_row else 0,
+                "completedGross": float(stats_row["completed_gross"] or 0) if stats_row else 0,
+            }
+            return {"items": page_items, "count": total_count, "stats": stats, "limit": safe_limit, "offset": safe_offset}
+
+        all_rows = conn.execute(
+            f"""
+            SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+            {base_sql}
             ORDER BY t.created_at DESC
-            """
+            """,
+            tuple(params),
         ).fetchall()
-        return _attach_topup_account_amount([dict(row) for row in rows])
+        all_items = _attach_topup_account_amount([dict(row) for row in all_rows])
+        if amount_min is not None:
+            threshold = float(amount_min or 0)
+            all_items = [
+                row for row in all_items
+                if float(_topup_gross_amount(
+                    float(row.get("amount_input") or 0),
+                    float(row.get("fee_percent") or _default_fee_config().get(str(row.get("account_platform") or row.get("platform") or "").lower()) or 0),
+                    float(row.get("vat_percent") or 0),
+                ) or 0) >= threshold
+            ]
+        total_count = len(all_items)
+        completed_gross = 0.0
+        stats = {"total": total_count, "pending": 0, "completed": 0, "failed": 0, "completedGross": 0}
+        for row in all_items:
+            raw_status = str(row.get("status") or "").lower()
+            if raw_status in {"completed", "approved"}:
+                stats["completed"] += 1
+                completed_gross += float(_topup_gross_amount(
+                    float(row.get("amount_input") or 0),
+                    float(row.get("fee_percent") or _default_fee_config().get(str(row.get("account_platform") or row.get("platform") or "").lower()) or 0),
+                    float(row.get("vat_percent") or 0),
+                ) or 0)
+            elif raw_status in {"failed", "rejected"}:
+                stats["failed"] += 1
+            else:
+                stats["pending"] += 1
+        stats["completedGross"] = completed_gross
+        page_items = all_items[safe_offset:safe_offset + safe_limit]
+        return {"items": page_items, "count": total_count, "stats": stats, "limit": safe_limit, "offset": safe_offset}
 
 
 @app.get("/admin/clients")

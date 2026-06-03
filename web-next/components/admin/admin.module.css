@@ -190,6 +190,14 @@
   font-weight: 800;
 }
 
+.mobileNav {
+  display: none;
+}
+
+.mobileNavLink {
+  text-decoration: none;
+}
+
 .content {
   padding: 24px 26px 30px;
 }
@@ -1143,34 +1151,348 @@
   .sidebar {
     display: none;
   }
+
+  .main {
+    min-width: 0;
+  }
+
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    min-height: 54px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    background: rgba(247, 243, 236, 0.94);
+    backdrop-filter: blur(12px);
+  }
+
+  .mobileNav {
+    position: sticky;
+    top: 54px;
+    z-index: 25;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    min-height: 46px;
+    padding: 6px 26px 7px;
+    border-bottom: 1px solid #e9e1d5;
+    background: rgba(247, 243, 236, 0.94);
+    scrollbar-width: none;
+    backdrop-filter: blur(12px);
+  }
+
+  .mobileNav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobileNavLink {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    border: 1px solid #e4dccf;
+    border-radius: 999px;
+    background: #fffdfa;
+    color: #5f5a51;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 800;
+    box-shadow: 0 4px 14px rgba(31, 29, 25, 0.04);
+  }
+
+  .mobileNavLinkActive {
+    border-color: #cfdcff;
+    background: #2457ff;
+    color: #fff;
+    box-shadow: 0 10px 24px rgba(36, 87, 255, 0.18);
+  }
+
+  .mobileNavIcon {
+    width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #f2ede5;
+    color: #8a8378;
+    font-size: 10px;
+    font-weight: 900;
+  }
+
+  .mobileNavLinkActive .mobileNavIcon {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+  }
 }
 
 @media (max-width: 720px) {
+  .shell {
+    background: #f7f3ec;
+  }
+
   .content,
   .topbar {
-    padding-left: 18px;
-    padding-right: 18px;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  .topbarEyebrow {
+    font-size: 11px;
+    line-height: 1;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .topbarTitle {
+    display: none;
+  }
+
+  .profileBadge {
+    max-width: 84px;
+    gap: 0;
+    border-radius: 999px;
+    padding: 3px;
+    overflow: hidden;
+  }
+
+  .profileBadge span:last-child {
+    display: none;
+  }
+
+  .avatar {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+  }
+
+  .mobileNav {
+    top: 44px;
+    min-height: 40px;
+    padding: 5px 14px 6px;
+  }
+
+  .mobileNavLink {
+    min-height: 29px;
+    padding: 5px 9px;
+    font-size: 10px;
+  }
+
+  .mobileNavIcon {
+    display: none;
+  }
+
+  .content {
+    padding-top: 12px;
+    padding-bottom: 22px;
   }
 
   .pageHeader,
-  .cardHeader,
-  .topbar {
+  .cardHeader {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .pageHeader {
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .pageTitle {
+    font-size: 23px;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+  }
+
+  .pageSubtitle {
+    display: none;
+  }
+
+  .headerAction,
+  .logoutButton {
+    width: 100%;
+  }
+
+  .grid {
+    gap: 14px;
+  }
+
+  .card {
+    border-radius: 18px;
+  }
+
+  .shell :global(.panel) {
+    border-radius: 18px;
+  }
+
+  .cardHeader {
+    gap: 10px;
+    padding: 16px 14px 12px;
+  }
+
+  .shell :global(.panel-head) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 16px 14px 12px;
+  }
+
+  .cardTitle {
+    font-size: 19px;
+  }
+
+  .shell :global(.panel-head h2),
+  .shell :global(.panel-head h3) {
+    font-size: 19px;
+  }
+
+  .cardSubtle {
+    line-height: 1.45;
+  }
+
+  .statsGrid {
+    gap: 10px;
+  }
+
+  .statCard,
+  .shell :global(.stat) {
+    border-radius: 16px;
+    padding: 13px;
+  }
+
+  .statValue,
+  .shell :global(.stat h3) {
+    font-size: 21px;
+  }
+
+  .filters,
+  .shell :global(.form-grid),
+  .shell :global(.grid-3) {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .input,
+  .select,
+  .shell :global(.field input),
+  .shell :global(.field select),
+  .shell :global(.field-input) {
+    min-height: 44px;
+    font-size: 13px;
+  }
+
+  .tableWrap,
+  .shell :global(.table-wrapper) {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table,
+  .shell :global(.table) {
+    min-width: 760px;
+  }
+
+  .table th,
+  .shell :global(.table th) {
+    padding: 11px 12px;
+    font-size: 9px;
+    white-space: nowrap;
+  }
+
+  .table td,
+  .shell :global(.table td) {
+    padding: 12px;
+    font-size: 13px;
+  }
+
+  .tableActions {
+    justify-content: flex-start;
+  }
+
+  .shell :global(.panel-actions),
+  .shell :global(.inline-actions) {
+    justify-content: flex-start;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .shell :global(.inline-actions) {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .buttonGhost,
+  .buttonPrimary,
+  .shell :global(.btn) {
+    min-height: 40px;
+  }
+
+  .shell :global(.panel-actions .btn) {
+    width: 100%;
+  }
+
+  .modeSwitch {
+    width: 100%;
+    justify-content: space-between;
+    overflow-x: auto;
+  }
+
+  .modeSwitchButton,
+  .modeSwitchActive {
+    flex: 1 0 auto;
+  }
+
+  .shell :global(.tab-buttons) {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .shell :global(.tab-button) {
+    flex: 0 0 auto;
+  }
+
+  .shell :global(.tabs) {
+    padding: 14px;
   }
 
   .modalOverlay {
     padding: 10px;
   }
 
-  .modalHeader,
-  .modalBody {
-    padding-left: 18px;
-    padding-right: 18px;
+  .modal,
+  .shell :global(.modal-dialog) {
+    max-height: calc(100vh - 20px);
+    border-radius: 20px;
   }
 
-  .modeSwitch {
-    width: 100%;
-    justify-content: space-between;
+  .modalHeader,
+  .modalBody,
+  .shell :global(.modal-head),
+  .shell :global(.modal-body) {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .modalTitle,
+  .shell :global(.modal-head h3) {
+    font-size: 24px;
+    line-height: 1.05;
   }
 }
