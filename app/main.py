@@ -323,7 +323,7 @@ def _get_marked_bcc_sell_rate(code: str, rates_data: Optional[Dict[str, object]]
     if not code_upper:
         return None
     try:
-        rates_payload = rates_data or _fetch_bcc_rates()
+        rates_payload = rates_data if rates_data is not None else _fetch_bcc_rates()
     except Exception as exc:
         rates_payload = _manual_marked_rates_data(str(exc))
     rates = rates_payload.get("rates") if isinstance(rates_payload, dict) else None
@@ -5851,7 +5851,7 @@ def _resolve_topup_account_amount(row: Dict[str, object], rates_data: Optional[D
 
 
 def _attach_topup_account_amount(rows: List[Dict[str, object]], include_rates: bool = True) -> List[Dict[str, object]]:
-    rates_data = None
+    rates_data = None if include_rates else {"rates": {}}
     if include_rates:
         try:
             rates_data = _fetch_bcc_rates()
