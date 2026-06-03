@@ -10694,8 +10694,8 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                       SELECT
                         a.user_id as user_id,
                         COALESCE(SUM(CASE WHEN seen_by_admin=0 THEN 1 ELSE 0 END), 0) as unread_topups,
-                        COALESCE(SUM(CASE WHEN status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
-                        COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
+                        COALESCE(SUM(CASE WHEN t.status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
+                        COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
                         MAX(t.created_at) as last_topup_at
                       FROM topups t
                       JOIN ad_accounts a ON a.id = t.account_id
@@ -10756,8 +10756,8 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                     WITH topup_stats AS (
                       SELECT
                         a.user_id as user_id,
-                        COALESCE(SUM(CASE WHEN status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
-                        COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
+                        COALESCE(SUM(CASE WHEN t.status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
+                        COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
                         MAX(t.created_at) as last_topup_at
                       FROM topups t
                       JOIN ad_accounts a ON a.id = t.account_id
