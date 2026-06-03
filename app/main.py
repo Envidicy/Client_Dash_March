@@ -40,6 +40,10 @@ _BCC_RATES_CACHE = {"ts": 0.0, "data": None}
 _BCC_RATES_TTL_SEC = 900
 _BCC_TOKEN_CACHE = {"token": None, "expires_at": 0.0}
 _BCC_DEFAULT_MARKUP_PERCENT = float(os.getenv("BCC_DEFAULT_MARKUP_PERCENT", "5") or 5)
+_MANUAL_MARKED_RATES = {
+    "USD": float(os.getenv("MANUAL_USD_KZT_MARKED_RATE", "524") or 524),
+    "EUR": float(os.getenv("MANUAL_EUR_KZT_MARKED_RATE", "598") or 598),
+}
 _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
 _ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
@@ -296,14 +300,32 @@ def _fetch_bcc_rates() -> Dict[str, object]:
     return data
 
 
+def _manual_marked_rates_data(warning: Optional[str] = None) -> Dict[str, object]:
+    multiplier = 1 + (_BCC_DEFAULT_MARKUP_PERCENT / 100.0)
+    rates = {}
+    for code, marked_rate in _MANUAL_MARKED_RATES.items():
+        sell_value = marked_rate / multiplier if multiplier > 0 else marked_rate
+        rates[code] = {"sell": sell_value, "sell_marked": marked_rate, "buy": marked_rate}
+    data = {
+        "source": "manual_rates",
+        "markup_percent": _BCC_DEFAULT_MARKUP_PERCENT,
+        "rates": rates,
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+        "dateTime": None,
+    }
+    if warning:
+        data["warning"] = warning
+    return data
+
+
 def _get_marked_bcc_sell_rate(code: str, rates_data: Optional[Dict[str, object]] = None) -> Optional[float]:
     code_upper = str(code or "").upper()
     if not code_upper:
         return None
     try:
         rates_payload = rates_data or _fetch_bcc_rates()
-    except Exception:
-        return None
+    except Exception as exc:
+        rates_payload = _manual_marked_rates_data(str(exc))
     rates = rates_payload.get("rates") if isinstance(rates_payload, dict) else None
     if not isinstance(rates, dict):
         return None
@@ -3350,13 +3372,7 @@ def bcc_rates() -> Dict[str, object]:
                 "warning": str(exc),
                 "fetched_at": datetime.utcnow().isoformat() + "Z",
             }
-        return {
-            "source": "bcc_unavailable",
-            "markup_percent": _BCC_DEFAULT_MARKUP_PERCENT,
-            "rates": {"USD": None, "EUR": None},
-            "fetched_at": datetime.utcnow().isoformat() + "Z",
-            "warning": str(exc),
-        }
+        return _manual_marked_rates_data(str(exc))
 
 
 @app.get("/rate-cards", response_model=List[RateCard])
@@ -5837,8 +5853,8 @@ def _resolve_topup_account_amount(row: Dict[str, object], rates_data: Optional[D
 def _attach_topup_account_amount(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
     try:
         rates_data = _fetch_bcc_rates()
-    except Exception:
-        rates_data = None
+    except Exception as exc:
+        rates_data = _manual_marked_rates_data(str(exc))
     prepared = []
     for row in rows:
         payload = dict(row)
@@ -10677,8 +10693,8 @@ def admin_client_wallet_transactions(user_id: int, admin_user=Depends(get_admin_
         result = []
         try:
             rates_data = _fetch_bcc_rates()
-        except Exception:
-            rates_data = None
+        except Exception as exc:
+            rates_data = _manual_marked_rates_data(str(exc))
         for row in rows:
             payload = dict(row)
             payload["amount_usd"] = _convert_amount_to_usd(payload.get("amount"), payload.get("currency"), rates_data)
