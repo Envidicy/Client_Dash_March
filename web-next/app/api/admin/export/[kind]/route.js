@@ -33,21 +33,46 @@ function csvCell(value) {
 function buildTopupsCsv(items) {
   const rows = Array.isArray(items) ? items : []
   const lines = [
-    ['Date', 'Client', 'Platform', 'Account', 'Amount', 'Fee', 'VAT', 'Total Wallet Debit', 'Currency', 'Status'],
+    [
+      'Date',
+      'Client',
+      'Platform',
+      'Account',
+      'Amount',
+      'Total fee %',
+      'Platform fee %',
+      'Platform fee amount',
+      'Agency',
+      'Agency rebate %',
+      'Agency rebate amount',
+      'VAT',
+      'Total Wallet Debit',
+      'Currency',
+      'Status',
+    ],
     ...rows.map((row) => {
       const amount = Number(row?.amount_input || 0)
-      const feePercent = Number(row?.fee_percent || 0)
+      const platformFeePercent = Number(row?.platform_fee_percent ?? row?.fee_percent ?? 0)
+      const agencyRebatePercent = Number(row?.agency_rebate_percent || 0)
+      const feePercent = Number(row?.total_fee_percent ?? row?.fee_percent ?? platformFeePercent + agencyRebatePercent)
       const vatPercent = Number(row?.vat_percent || 0)
-      const fee = amount * (feePercent / 100)
+      const platformFee = Number(row?.platform_fee_amount ?? amount * (platformFeePercent / 100))
+      const agencyRebate = Number(row?.agency_rebate_amount ?? amount * (agencyRebatePercent / 100))
+      const fee = Number(row?.total_fee_amount ?? amount * (feePercent / 100))
       const vat = amount * (vatPercent / 100)
-      const total = amount + fee + vat
+      const total = Number(row?.total_wallet_debit ?? amount + fee + vat)
       return [
         row?.created_at || '',
         row?.user_email || '',
         row?.account_platform || row?.platform || '',
         row?.account_name || '',
         amount.toFixed(2),
-        fee.toFixed(2),
+        feePercent.toFixed(4),
+        platformFeePercent.toFixed(4),
+        platformFee.toFixed(2),
+        row?.agency_name || '',
+        agencyRebatePercent.toFixed(4),
+        agencyRebate.toFixed(2),
         vat.toFixed(2),
         total.toFixed(2),
         row?.currency || '',

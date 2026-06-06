@@ -151,9 +151,15 @@ def apply_schema():
             conn.execute("ALTER TABLE account_requests ADD COLUMN IF NOT EXISTS comment TEXT")
             conn.execute("ALTER TABLE ad_accounts ADD COLUMN IF NOT EXISTS visible_to_client INTEGER DEFAULT 1")
             conn.execute("ALTER TABLE ad_accounts ADD COLUMN IF NOT EXISTS budget_total DOUBLE PRECISION")
+            conn.execute("ALTER TABLE ad_accounts ADD COLUMN IF NOT EXISTS owner_type TEXT DEFAULT 'client'")
+            conn.execute("ALTER TABLE ad_accounts ADD COLUMN IF NOT EXISTS agency_id BIGINT")
             conn.execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS fee_config TEXT")
             conn.execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS notifications_seen_at TIMESTAMPTZ")
             conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS hold_applied INTEGER DEFAULT 0")
+            conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS platform_fee_percent DOUBLE PRECISION DEFAULT 0")
+            conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS agency_id BIGINT")
+            conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS agency_rebate_percent DOUBLE PRECISION DEFAULT 0")
+            conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS agency_rebate_amount DOUBLE PRECISION DEFAULT 0")
             conn.execute("ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS login_email TEXT")
             conn.execute("ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS expires_at BIGINT")
             conn.execute("ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS absolute_expires_at BIGINT")
@@ -235,6 +241,61 @@ def apply_schema():
               status TEXT DEFAULT 'active',
               created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
               UNIQUE(agency_id, user_id)
+            )
+            """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS agency_clients (
+              id BIGSERIAL PRIMARY KEY,
+              agency_id BIGINT REFERENCES agencies(id) ON DELETE CASCADE,
+              client_user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+              status TEXT DEFAULT 'active',
+              default_rebate_percent DOUBLE PRECISION DEFAULT 3,
+              created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id, client_user_id)
+            )
+            """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS agency_client_rates (
+              id BIGSERIAL PRIMARY KEY,
+              agency_id BIGINT REFERENCES agencies(id) ON DELETE CASCADE,
+              client_user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+              platform TEXT NOT NULL,
+              platform_fee_percent DOUBLE PRECISION,
+              rebate_percent DOUBLE PRECISION DEFAULT 3,
+              created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id, client_user_id, platform)
+            )
+            """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS agency_wallets (
+              id BIGSERIAL PRIMARY KEY,
+              agency_id BIGINT REFERENCES agencies(id) ON DELETE CASCADE,
+              balance DOUBLE PRECISION DEFAULT 0,
+              currency TEXT DEFAULT 'KZT',
+              low_threshold DOUBLE PRECISION DEFAULT 50000,
+              updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id)
+            )
+            """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS agency_wallet_transactions (
+              id BIGSERIAL PRIMARY KEY,
+              agency_id BIGINT REFERENCES agencies(id) ON DELETE CASCADE,
+              client_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+              account_id BIGINT REFERENCES ad_accounts(id) ON DELETE SET NULL,
+              amount DOUBLE PRECISION NOT NULL,
+              currency TEXT DEFAULT 'KZT',
+              type TEXT NOT NULL,
+              source_type TEXT,
+              source_id BIGINT,
+              source_key TEXT UNIQUE,
+              note TEXT,
+              created_by TEXT,
+              initiated_by_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+              acting_as_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+              created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
             """)
             conn.execute("""
@@ -634,6 +695,77 @@ def apply_schema():
         )
         _ensure_table(
             conn,
+            "agency_clients",
+            """
+            CREATE TABLE IF NOT EXISTS agency_clients (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+              client_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+              status TEXT DEFAULT 'active',
+              default_rebate_percent DOUBLE PRECISION DEFAULT 3,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id, client_user_id)
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
+            "agency_client_rates",
+            """
+            CREATE TABLE IF NOT EXISTS agency_client_rates (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+              client_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+              platform TEXT NOT NULL,
+              platform_fee_percent DOUBLE PRECISION,
+              rebate_percent DOUBLE PRECISION DEFAULT 3,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id, client_user_id, platform)
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
+            "agency_wallets",
+            """
+            CREATE TABLE IF NOT EXISTS agency_wallets (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+              balance DOUBLE PRECISION DEFAULT 0,
+              currency TEXT DEFAULT 'KZT',
+              low_threshold DOUBLE PRECISION DEFAULT 50000,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(agency_id)
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
+            "agency_wallet_transactions",
+            """
+            CREATE TABLE IF NOT EXISTS agency_wallet_transactions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+              client_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+              account_id INTEGER REFERENCES ad_accounts(id) ON DELETE SET NULL,
+              amount DOUBLE PRECISION NOT NULL,
+              currency TEXT DEFAULT 'KZT',
+              type TEXT NOT NULL,
+              source_type TEXT,
+              source_id INTEGER,
+              source_key TEXT UNIQUE,
+              note TEXT,
+              created_by TEXT,
+              initiated_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+              acting_as_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
             "agency_user_account_access",
             """
             CREATE TABLE IF NOT EXISTS agency_user_account_access (
@@ -861,9 +993,15 @@ def apply_schema():
         _ensure_column(conn, "ad_accounts", "account_code", "TEXT")
         _ensure_column(conn, "ad_accounts", "visible_to_client", "INTEGER")
         _ensure_column(conn, "ad_accounts", "budget_total", "DOUBLE PRECISION")
+        _ensure_column(conn, "ad_accounts", "owner_type", "TEXT")
+        _ensure_column(conn, "ad_accounts", "agency_id", "INTEGER")
         _ensure_column(conn, "topups", "user_id", "INTEGER")
         _ensure_column(conn, "topups", "seen_by_admin", "INTEGER")
         _ensure_column(conn, "topups", "hold_applied", "INTEGER")
+        _ensure_column(conn, "topups", "platform_fee_percent", "DOUBLE PRECISION")
+        _ensure_column(conn, "topups", "agency_id", "INTEGER")
+        _ensure_column(conn, "topups", "agency_rebate_percent", "DOUBLE PRECISION")
+        _ensure_column(conn, "topups", "agency_rebate_amount", "DOUBLE PRECISION")
         _ensure_column(conn, "account_funding_events", "reversed_by_event_id", "INTEGER")
         _ensure_column(conn, "account_funding_events", "reversal_for_event_id", "INTEGER")
         _ensure_column(conn, "account_funding_events", "voided_at", "TEXT")

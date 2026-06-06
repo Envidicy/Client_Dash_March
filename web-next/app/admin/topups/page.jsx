@@ -14,7 +14,6 @@ function formatMoney(value, locale = 'en') {
   const num = Number(value || 0)
   return num.toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
-
 function formatFxRate(value, locale = 'en') {
   const num = Number(value)
   if (!Number.isFinite(num) || num <= 0) return 'Not applied'
@@ -25,7 +24,7 @@ function statusLabel(value) {
   if (value === 'completed') return 'Completed'
   if (value === 'failed') return 'Failed'
   if (value === 'pending') return 'Pending'
-  return value || '—'
+  return value || '-'
 }
 
 function statusClass(value) {
@@ -45,16 +44,16 @@ function StatCard({ label, value, hint }) {
 }
 
 function formatDate(value) {
-  if (!value) return '—'
+  if (!value) return '-'
   const raw = String(value).replace('T', ' ')
-  return raw.split(' ')[0] || '—'
+  return raw.split(' ')[0] || '-'
 }
 
 function formatTime(value) {
-  if (!value) return '—'
+  if (!value) return '-'
   const raw = String(value).replace('T', ' ')
   const parts = raw.split(' ')
-  return parts[1]?.slice(0, 5) || '—'
+  return parts[1]?.slice(0, 5) || '-'
 }
 
 function topupRiskFlags(row) {
@@ -80,7 +79,7 @@ export default function AdminTopupsPage() {
   const [totalCount, setTotalCount] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [stats, setStats] = useState({ total: 0, pending: 0, completed: 0, failed: 0, completedGross: 0 })
-  const [status, setStatus] = useState(tr('Loading topups...', 'Загрузка пополнений...'))
+  const [status, setStatus] = useState(tr('Loading topups...', 'Loading topups...'))
   const [loadingMore, setLoadingMore] = useState(false)
   const [filters, setFilters] = useState({
     status: '',
@@ -132,7 +131,7 @@ export default function AdminTopupsPage() {
     try {
       if (append) setLoadingMore(true)
       const res = await adminRouteFetch(`/api/admin/topups?limit=${TOPUPS_PAGE_SIZE}&offset=${offset}&fast=1`)
-      if (!res.ok) throw new Error(tr('Failed to load topups.', 'Не удалось загрузить пополнения.'))
+      if (!res.ok) throw new Error(tr('Failed to load topups.', 'Failed to load topups.'))
       const data = await res.json()
       const nextRows = Array.isArray(data?.items) ? data.items : []
       setRows((current) => (append ? [...current, ...nextRows] : nextRows))
@@ -144,7 +143,7 @@ export default function AdminTopupsPage() {
       }
       setStatus('')
     } catch (e) {
-      setStatus(e?.message || tr('Failed to load topups.', 'Не удалось загрузить пополнения.'))
+      setStatus(e?.message || tr('Failed to load topups.', 'Failed to load topups.'))
     } finally {
       if (append) setLoadingMore(false)
     }
@@ -157,10 +156,10 @@ export default function AdminTopupsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: nextStatus }),
       })
-      if (!res.ok) throw new Error(tr('Failed to update topup status.', 'Не удалось обновить статус пополнения.'))
+      if (!res.ok) throw new Error(tr('Failed to update topup status.', 'Failed to update topup status.'))
       await fetchTopups()
     } catch (e) {
-      setStatus(e?.message || tr('Failed to update topup status.', 'Не удалось обновить статус пополнения.'))
+      setStatus(e?.message || tr('Failed to update topup status.', 'Failed to update topup status.'))
     }
   }
 
@@ -180,7 +179,7 @@ export default function AdminTopupsPage() {
       const res = await adminRouteFetch(`/api/admin/export/topups${query}`)
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}))
-        throw new Error(payload?.detail || tr('Export unavailable', 'Экспорт недоступен'))
+        throw new Error(payload?.detail || tr('Export unavailable', 'Export unavailable'))
       }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
@@ -193,9 +192,9 @@ export default function AdminTopupsPage() {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-      setStatus(tr('Topups export downloaded.', 'Экспорт пополнений скачан.'))
+      setStatus(tr('Topups export downloaded.', 'Topups export downloaded.'))
     } catch (e) {
-      setStatus(e?.message || tr('Export failed.', 'Ошибка экспорта.'))
+      setStatus(e?.message || tr('Export failed.', 'Export failed.'))
     } finally {
       setExporting(false)
     }
@@ -243,54 +242,54 @@ export default function AdminTopupsPage() {
   const selectedRisk = selected ? topupRiskFlags(selected) : []
 
   return (
-    <AdminShell title={tr('Topups', 'Пополнения')} subtitle={tr('Payment registry, workflow statuses and manual financial review.', 'Реестр платежей, статусы workflow и ручная финансовая проверка.')}>
+    <AdminShell title={tr('Topups', 'Topups')} subtitle={tr('Payment registry, workflow statuses and manual financial review.', 'Payment registry, workflow statuses and manual financial review.')}>
       <section className={styles.statsGrid}>
-        <StatCard label={tr('Total Topups', 'Всего пополнений')} value={stats.total} hint={tr('All payment intents from clients', 'Все платежные намерения клиентов')} />
-        <StatCard label={tr('Pending', 'Ожидают')} value={stats.pending} hint={tr('Require payment confirmation or review', 'Требуют подтверждения оплаты или проверки')} />
-        <StatCard label={tr('Completed', 'Завершено')} value={stats.completed} hint={tr('Already credited to the workflow', 'Уже зачислены в workflow')} />
-        <StatCard label={tr('Completed Gross', 'Завершено (gross)')} value={`${formatMoney(stats.completedGross, locale)} KZT`} hint={tr('Input amount with fee and VAT', 'Сумма входа с комиссией и VAT')} />
+        <StatCard label={tr('Total Topups', 'Total Topups')} value={stats.total} hint={tr('All payment intents from clients', 'All payment intents from clients')} />
+        <StatCard label={tr('Pending', 'Pending')} value={stats.pending} hint={tr('Require payment confirmation or review', 'Require payment confirmation or review')} />
+        <StatCard label={tr('Completed', 'Completed')} value={stats.completed} hint={tr('Already credited to the workflow', 'Already credited to the workflow')} />
+        <StatCard label={tr('Completed Gross', 'Completed Gross')} value={`${formatMoney(stats.completedGross, locale)} KZT`} hint={tr('Input amount with fee and VAT', 'Input amount with fee and VAT')} />
       </section>
 
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <div>
-            <h3 className={styles.cardTitle}>{tr('Topup Queue', 'Очередь пополнений')}</h3>
-            <p className={styles.cardSubtle}>{tr('Filter payment requests by workflow status or client email.', 'Фильтруйте платежные запросы по статусу workflow и email клиента.')}</p>
+            <h3 className={styles.cardTitle}>{tr('Topup Queue', 'Topup Queue')}</h3>
+            <p className={styles.cardSubtle}>{tr('Filter payment requests by workflow status or client email.', 'Filter payment requests by workflow status or client email.')}</p>
           </div>
           <div className={styles.tableActions}>
             <button className={styles.buttonGhost} type="button" onClick={exportTopups} disabled={exporting}>
-              {exporting ? tr('Exporting...', 'Экспорт...') : tr('Export Excel', 'Экспорт Excel')}
+              {exporting ? tr('Exporting...', 'Exporting...') : tr('Export Excel', 'Export Excel')}
             </button>
           </div>
         </div>
 
         <div className={styles.cardHeader} style={{ borderBottom: 0, paddingTop: 8 }}>
           <div className={styles.tableActions} style={{ justifyContent: 'flex-start' }}>
-            <button className={styles.buttonGhost} type="button" onClick={() => setActiveView('all')} aria-pressed={activeView === 'all'}>{tr('All Transactions', 'Все транзакции')}</button>
-            <button className={styles.buttonGhost} type="button" onClick={() => setActiveView('pending')} aria-pressed={activeView === 'pending'}>{tr('Pending Review', 'Ожидают проверки')}</button>
-            <button className={styles.buttonGhost} type="button" onClick={() => setActiveView('high')} aria-pressed={activeView === 'high'}>{tr('High Amount', 'Крупные суммы')}</button>
-            <button className={styles.buttonGhost} type="button" onClick={() => setActiveView('manual')} aria-pressed={activeView === 'manual'}>{tr('Manual Review', 'Ручная проверка')}</button>
+            <button className={styles.buttonGhost} type="button" onClick={() => setActiveView('all')} aria-pressed={activeView === 'all'}>{tr('All Transactions', 'All Transactions')}</button>
+            <button className={styles.buttonGhost} type="button" onClick={() => setActiveView('pending')} aria-pressed={activeView === 'pending'}>{tr('Pending Review', 'Pending Review')}</button>
+            <button className={styles.buttonGhost} type="button" onClick={() => setActiveView('high')} aria-pressed={activeView === 'high'}>{tr('High Amount', 'High Amount')}</button>
+            <button className={styles.buttonGhost} type="button" onClick={() => setActiveView('manual')} aria-pressed={activeView === 'manual'}>{tr('Manual Review', 'Manual Review')}</button>
           </div>
         </div>
 
         <div className={styles.filters}>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>{tr('Status', 'Статус')}</span>
+            <span className={styles.fieldLabel}>{tr('Status', 'Status')}</span>
             <select className={styles.select} value={filters.status} onChange={(e) => setFilters((s) => ({ ...s, status: e.target.value }))}>
-              <option value="">{tr('All', 'Все')}</option>
-              <option value="pending">{tr('Pending', 'Ожидают')}</option>
-              <option value="completed">{tr('Completed', 'Завершено')}</option>
-              <option value="failed">{tr('Failed', 'Ошибка')}</option>
+              <option value="">{tr('All', 'All')}</option>
+              <option value="pending">{tr('Pending', 'Pending')}</option>
+              <option value="completed">{tr('Completed', 'Completed')}</option>
+              <option value="failed">{tr('Failed', 'Failed')}</option>
             </select>
           </label>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>{tr('Client Email', 'Email клиента')}</span>
+            <span className={styles.fieldLabel}>{tr('Client Email', 'Client Email')}</span>
             <input className={styles.input} value={filters.email} onChange={(e) => setFilters((s) => ({ ...s, email: e.target.value }))} placeholder="client@email.com" />
           </label>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>{tr('Platform', 'Платформа')}</span>
+            <span className={styles.fieldLabel}>{tr('Platform', 'Platform')}</span>
             <select className={styles.select} value={filters.platform} onChange={(e) => setFilters((s) => ({ ...s, platform: e.target.value }))}>
-              <option value="">{tr('All', 'Все')}</option>
+              <option value="">{tr('All', 'All')}</option>
               <option value="meta">Meta</option>
               <option value="google">Google</option>
               <option value="tiktok">TikTok</option>
@@ -300,15 +299,15 @@ export default function AdminTopupsPage() {
             </select>
           </label>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>{tr('Date From', 'Дата с')}</span>
+            <span className={styles.fieldLabel}>{tr('Date From', 'Date From')}</span>
             <input className={styles.input} type="date" value={filters.dateFrom} onChange={(e) => setFilters((s) => ({ ...s, dateFrom: e.target.value }))} />
           </label>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>{tr('Date To', 'Дата по')}</span>
+            <span className={styles.fieldLabel}>{tr('Date To', 'Date To')}</span>
             <input className={styles.input} type="date" value={filters.dateTo} onChange={(e) => setFilters((s) => ({ ...s, dateTo: e.target.value }))} />
           </label>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>{tr('Amount Min', 'Мин. сумма')}</span>
+            <span className={styles.fieldLabel}>{tr('Amount Min', 'Amount Min')}</span>
             <input className={styles.input} type="number" min="0" value={filters.amountMin} onChange={(e) => setFilters((s) => ({ ...s, amountMin: e.target.value }))} placeholder="10000" />
           </label>
         </div>
@@ -334,18 +333,21 @@ export default function AdminTopupsPage() {
             <table className={styles.table}>
               <thead>
                 <tr>
-                  <th>{tr('Date', 'Дата')}</th>
+                  <th>{tr('Date', 'Date')}</th>
                   <th>{tr('Ref ID', 'Ref ID')}</th>
-                  <th>{tr('Client', 'Клиент')}</th>
-                  <th>{tr('Platform', 'Платформа')}</th>
-                  <th>{tr('FX Rate', 'FX курс')}</th>
-                  <th>{tr('Status', 'Статус')}</th>
-                  <th style={{ textAlign: 'right' }}>{tr('Actions', 'Действия')}</th>
+                  <th>{tr('Client', 'Client')}</th>
+                  <th>{tr('Type', 'Type')}</th>
+                  <th>{tr('Platform', 'Platform')}</th>
+                  <th>{tr('Debit', 'Debit')}</th>
+                  <th>{tr('Fee', 'Fee')}</th>
+                  <th>{tr('FX Rate', 'FX Rate')}</th>
+                  <th>{tr('Status', 'Status')}</th>
+                  <th style={{ textAlign: 'right' }}>{tr('Actions', 'Actions')}</th>
                 </tr>
               </thead>
               <tbody>
                 {!filtered.length ? (
-                  <tr><td colSpan={7}>{tr('No topups found.', 'Пополнений не найдено.')}</td></tr>
+                  <tr><td colSpan={10}>{tr('No topups found.', 'No topups found.')}</td></tr>
                 ) : (
                   filtered.map((row) => {
                     const isSelected = String(row.id) === String(selected?.id)
@@ -364,19 +366,31 @@ export default function AdminTopupsPage() {
                           <span className={styles.tableMeta}>#{row.id}</span>
                         </td>
                         <td>
-                          <span className={styles.tableStrong}>{row.user_email || '—'}</span>
+                          <span className={styles.tableStrong}>{row.user_email || '-'}</span>
                           <span className={styles.tableMeta}>{row.account_name || 'Ad Account'}</span>
                         </td>
-                        <td><span className={styles.platformBadge}>{row.account_platform_label || '—'}</span></td>
+                        <td>
+                          <span className={row.agency_id ? styles.statusChip : styles.statusChipMuted}>{row.agency_id ? 'Agency' : 'Direct'}</span>
+                          <span className={styles.tableMeta}>{row.agency_name || '-'}</span>
+                        </td>
+                        <td><span className={styles.platformBadge}>{row.account_platform_label || '-'}</span></td>
+                        <td>
+                          <span className={styles.tableStrong}>{formatMoney(row.total_wallet_debit, locale)}</span>
+                          <span className={styles.tableMeta}>{row.currency || 'KZT'}</span>
+                        </td>
+                        <td>
+                          <span className={styles.tableStrong}>{Number(row.total_fee_percent || row.fee_percent || 0).toFixed(2)}%</span>
+                          <span className={styles.tableMeta}>P {Number(row.platform_fee_percent || 0).toFixed(2)}% / R {Number(row.agency_rebate_percent || 0).toFixed(2)}%</span>
+                        </td>
                         <td>{formatFxRate((row.breakdown || {}).fxRate || row.fx_rate, locale)}</td>
                         <td><span className={statusClass(row.status)}>{statusLabel(row.status)}</span></td>
                         <td style={{ textAlign: 'right' }}>
                           {row.status === 'pending' ? (
                             <button className={styles.buttonPrimary} type="button" onClick={() => setSelectedId(String(row.id))}>
-                              {tr('Review', 'Проверить')}
+                              {tr('Review', 'Review')}
                             </button>
                           ) : (
-                            <span className={styles.statusChipMuted}>{tr('Done', 'Готово')}</span>
+                            <span className={styles.statusChipMuted}>{tr('Done', 'Done')}</span>
                           )}
                         </td>
                       </tr>
@@ -437,7 +451,9 @@ export default function AdminTopupsPage() {
                   <span className={styles.fieldLabel}>Financial Ledger</span>
                   <div style={{ display: 'grid', gap: 8 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}><span>Client Funding</span><strong>{formatMoney(selectedBreakdown.clientFunding)} {selectedBreakdown.inputCurrency || ''}</strong></div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}><span>Acquiring Fee</span><strong>-{formatMoney(selectedBreakdown.acquiringFee)} {selectedBreakdown.inputCurrency || ''}</strong></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}><span>Total Fee</span><strong>-{formatMoney(selectedBreakdown.acquiringFee)} {selectedBreakdown.inputCurrency || ''}</strong></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}><span>Platform Fee</span><strong>{formatMoney(selectedBreakdown.platformFee || 0)} {selectedBreakdown.inputCurrency || ''}</strong></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}><span>Agency Rebate</span><strong>{formatMoney(selectedBreakdown.agencyRebate || 0)} {selectedBreakdown.inputCurrency || ''}</strong></div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}><span>VAT</span><strong>-{formatMoney(selectedBreakdown.vat)} {selectedBreakdown.inputCurrency || ''}</strong></div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}><span>Total Wallet Debit</span><strong>{formatMoney(selectedBreakdown.totalWalletDebit)} {selectedBreakdown.inputCurrency || ''}</strong></div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}><span>Net Account Funding</span><strong>{formatMoney(selectedBreakdown.netAccountFunding)} {selectedBreakdown.accountCurrency || ''}</strong></div>
@@ -453,15 +469,19 @@ export default function AdminTopupsPage() {
                   </div>
                   <div className={styles.detailRow}>
                     <span className={styles.detailLabel}>Raw Status</span>
-                    <span className={styles.detailValue}>{selected.raw_status || selected.status || '—'}</span>
+                    <span className={styles.detailValue}>{selected.raw_status || selected.status || '-'}</span>
                   </div>
                   <div className={styles.detailRow}>
                     <span className={styles.detailLabel}>Target Account</span>
-                    <span className={styles.detailValue}>{selected.account_name || '—'} ({selectedBreakdown.accountCurrency || '—'})</span>
+                    <span className={styles.detailValue}>{selected.account_name || '-'} ({selectedBreakdown.accountCurrency || '-'})</span>
                   </div>
                   <div className={styles.detailRow}>
                     <span className={styles.detailLabel}>Platform</span>
-                    <span className={styles.detailValue}>{selected.account_platform_label || '—'}</span>
+                    <span className={styles.detailValue}>{selected.account_platform_label || '-'}</span>
+                  </div>
+                  <div className={styles.detailRow}>
+                    <span className={styles.detailLabel}>Agency</span>
+                    <span className={styles.detailValue}>{selected.agency_name || (selected.agency_id ? `Agency #${selected.agency_id}` : 'Direct client')}</span>
                   </div>
                 </div>
 

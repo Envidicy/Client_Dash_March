@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+﻿from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Dict, List, Literal, Optional, Tuple
 from enum import Enum
@@ -646,8 +646,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "google_display_cpm": RateCard(
         key="google_display_cpm",
-        name="Google Display В· CPM",
-        tagline="Баннерная сеть (показы)",
+        name="Google Display Р’В· CPM",
+        tagline="Р‘Р°РЅРЅРµСЂРЅР°СЏ СЃРµС‚СЊ (РїРѕРєР°Р·С‹)",
         cpm=2.8,
         cpc=0.45,
         cpv=0.03,
@@ -660,8 +660,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "google_display_cpc": RateCard(
         key="google_display_cpc",
-        name="Google Display В· CPC",
-        tagline="Баннерная сеть (клики)",
+        name="Google Display Р’В· CPC",
+        tagline="Р‘Р°РЅРЅРµСЂРЅР°СЏ СЃРµС‚СЊ (РєР»РёРєРё)",
         cpm=3.1,
         cpc=0.28,
         cpv=0.03,
@@ -674,8 +674,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "google_search": RateCard(
         key="google_search",
-        name="Google Search · Контекст",
-        tagline="Поиск с намерением",
+        name="Google Search В· РљРѕРЅС‚РµРєСЃС‚",
+        tagline="РџРѕРёСЃРє СЃ РЅР°РјРµСЂРµРЅРёРµРј",
         cpm=4.2,
         cpc=0.55,
         cpv=0.04,
@@ -689,7 +689,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "google_shopping": RateCard(
         key="google_shopping",
         name="Google Shopping",
-        tagline="Товарные кампании",
+        tagline="РўРѕРІР°СЂРЅС‹Рµ РєР°РјРїР°РЅРёРё",
         cpm=3.6,
         cpc=0.42,
         cpv=0.04,
@@ -703,7 +703,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "youtube": RateCard(
         key="youtube",
         name="YouTube (Generic)",
-        tagline="Видео и бренд",
+        tagline="Р’РёРґРµРѕ Рё Р±СЂРµРЅРґ",
         cpm=2.4,
         cpc=0.48,
         cpv=0.015,
@@ -717,7 +717,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "youtube_6s": RateCard(
         key="youtube_6s",
         name="YouTube 6s Bumper",
-        tagline="Короткое видео (6s)",
+        tagline="РљРѕСЂРѕС‚РєРѕРµ РІРёРґРµРѕ (6s)",
         cpm=2.0,
         cpc=0.52,
         cpv=0.011,
@@ -731,7 +731,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "youtube_15s": RateCard(
         key="youtube_15s",
         name="YouTube 15s",
-        tagline="Средняя длительность (15s)",
+        tagline="РЎСЂРµРґРЅСЏСЏ РґР»РёС‚РµР»СЊРЅРѕСЃС‚СЊ (15s)",
         cpm=2.3,
         cpc=0.5,
         cpv=0.013,
@@ -745,7 +745,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "youtube_30s": RateCard(
         key="youtube_30s",
         name="YouTube 30s",
-        tagline="Длинное видео (30s)",
+        tagline="Р”Р»РёРЅРЅРѕРµ РІРёРґРµРѕ (30s)",
         cpm=2.6,
         cpc=0.46,
         cpv=0.017,
@@ -759,7 +759,7 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     "tiktok": RateCard(
         key="tiktok",
         name="TikTok",
-        tagline="UGC и вовлечение",
+        tagline="UGC Рё РІРѕРІР»РµС‡РµРЅРёРµ",
         cpm=1.9,
         cpc=0.3,
         cpv=0.01,
@@ -772,8 +772,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "telegrad_channels": RateCard(
         key="telegrad_channels",
-        name="Telegrad В· Channels",
-        tagline="Реклама в каналах",
+        name="Telegrad Р’В· Channels",
+        tagline="Р РµРєР»Р°РјР° РІ РєР°РЅР°Р»Р°С…",
         cpm=0.12,
         cpc=0.32,
         cpv=0.0,
@@ -786,8 +786,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "telegrad_users": RateCard(
         key="telegrad_users",
-        name="Telegrad В· Users",
-        tagline="Реклама на пользователя",
+        name="Telegrad Р’В· Users",
+        tagline="Р РµРєР»Р°РјР° РЅР° РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ",
         cpm=0.12,
         cpc=0.32,
         cpv=0.0,
@@ -800,8 +800,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "telegrad_bots": RateCard(
         key="telegrad_bots",
-        name="Telegrad В· Bots",
-        tagline="Боты / CPA-like",
+        name="Telegrad Р’В· Bots",
+        tagline="Р‘РѕС‚С‹ / CPA-like",
         cpm=0.10,
         cpc=0.3,
         cpv=0.0,
@@ -814,8 +814,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "telegrad_search": RateCard(
         key="telegrad_search",
-        name="Telegrad В· Search",
-        tagline="Поиск в мессенджере",
+        name="Telegrad Р’В· Search",
+        tagline="РџРѕРёСЃРє РІ РјРµСЃСЃРµРЅРґР¶РµСЂРµ",
         cpm=0.08,
         cpc=0.28,
         cpv=0.0,
@@ -828,8 +828,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "yandex_search": RateCard(
         key="yandex_search",
-        name="Яндекс Поиск",
-        tagline="Контекст, РСЯ/Поиск",
+        name="РЇРЅРґРµРєСЃ РџРѕРёСЃРє",
+        tagline="РљРѕРЅС‚РµРєСЃС‚, Р РЎРЇ/РџРѕРёСЃРє",
         cpm=3.9,
         cpc=0.5,
         cpv=0.0,
@@ -842,8 +842,8 @@ rate_cards: Dict[PlatformKey, RateCard] = {
     ),
     "yandex_display": RateCard(
         key="yandex_display",
-        name="Яндекс Директ · РСЯ",
-        tagline="Баннеры/смарт-баннеры",
+        name="РЇРЅРґРµРєСЃ Р”РёСЂРµРєС‚ В· Р РЎРЇ",
+        tagline="Р‘Р°РЅРЅРµСЂС‹/СЃРјР°СЂС‚-Р±Р°РЅРЅРµСЂС‹",
         cpm=2.6,
         cpc=0.36,
         cpv=0.0,
@@ -959,30 +959,30 @@ def smart_media_mix(goal: Goal, business_type: Optional[BusinessType]) -> Tuple[
             platforms = ["meta", "google_search", "google_display_cpc"]
             split = {"meta": 0.5, "google_search": 0.3, "google_display_cpc": 0.2}
             rationale = {
-                "meta": "Трафик + догрев",
-                "google_search": "Перехват горячего спроса",
-                "google_display_cpc": "Ремаркетинг и добор",
+                "meta": "РўСЂР°С„РёРє + РґРѕРіСЂРµРІ",
+                "google_search": "РџРµСЂРµС…РІР°С‚ РіРѕСЂСЏС‡РµРіРѕ СЃРїСЂРѕСЃР°",
+                "google_display_cpc": "Р РµРјР°СЂРєРµС‚РёРЅРі Рё РґРѕР±РѕСЂ",
             }
             return platforms, split, rationale
         platforms = ["meta", "google_search"]
         split = {"meta": 0.6, "google_search": 0.4}
-        rationale = {"meta": "Генерация спроса", "google_search": "Перехват спроса"}
+        rationale = {"meta": "Р“РµРЅРµСЂР°С†РёСЏ СЃРїСЂРѕСЃР°", "google_search": "РџРµСЂРµС…РІР°С‚ СЃРїСЂРѕСЃР°"}
         return platforms, split, rationale
     if goal == "traffic":
         platforms = ["meta", "telegrad_channels"]
         split = {"meta": 0.6, "telegrad_channels": 0.4}
-        rationale = {"meta": "Дешевый охват и клики", "telegrad_channels": "Доп. трафик и клики"}
+        rationale = {"meta": "Р”РµС€РµРІС‹Р№ РѕС…РІР°С‚ Рё РєР»РёРєРё", "telegrad_channels": "Р”РѕРї. С‚СЂР°С„РёРє Рё РєР»РёРєРё"}
         return platforms, split, rationale
     # leads / default
     platforms = ["meta", "google_search"]
     split = {"meta": 0.6, "google_search": 0.4}
-    rationale = {"meta": "Генерация спроса", "google_search": "Перехват спроса"}
+    rationale = {"meta": "Р“РµРЅРµСЂР°С†РёСЏ СЃРїСЂРѕСЃР°", "google_search": "РџРµСЂРµС…РІР°С‚ СЃРїСЂРѕСЃР°"}
     if bt in {"local", "services"}:
-        rationale["meta"] = "Генерация заявок"
-        rationale["google_search"] = "Горячий спрос"
+        rationale["meta"] = "Р“РµРЅРµСЂР°С†РёСЏ Р·Р°СЏРІРѕРє"
+        rationale["google_search"] = "Р“РѕСЂСЏС‡РёР№ СЃРїСЂРѕСЃ"
     if bt == "b2b":
-        rationale["meta"] = "Узкая аудитория + вовлечение"
-        rationale["google_search"] = "Спрос по запросам"
+        rationale["meta"] = "РЈР·РєР°СЏ Р°СѓРґРёС‚РѕСЂРёСЏ + РІРѕРІР»РµС‡РµРЅРёРµ"
+        rationale["google_search"] = "РЎРїСЂРѕСЃ РїРѕ Р·Р°РїСЂРѕСЃР°Рј"
     return platforms, split, rationale
 
 
@@ -1086,14 +1086,14 @@ def aggregate_weekly(plan: PlanResponse, facts: List[FactRow], strategy: str = "
 
 
 def estimate_audience_size(req: PlanRequest, platform: PlatformKey) -> Optional[float]:
-    """Fallback оценка объёма ЦА (reach cap) в условиях отсутствия API."""
+    """Fallback РѕС†РµРЅРєР° РѕР±СЉС‘РјР° Р¦Рђ (reach cap) РІ СѓСЃР»РѕРІРёСЏС… РѕС‚СЃСѓС‚СЃС‚РІРёСЏ API."""
     if req.country == "kz":
         base_population = 10_000_000
     elif req.country == "uz":
         base_population = 18_000_000
     else:
         base_population = 35_000_000
-    age_span = 52  # 65-13 базовый диапазон
+    age_span = 52  # 65-13 Р±Р°Р·РѕРІС‹Р№ РґРёР°РїР°Р·РѕРЅ
     age_min = req.age_min or 18
     age_max = req.age_max or 55
     age_factor = max(0.1, min(1.0, (age_max - age_min) / age_span))
@@ -1194,18 +1194,18 @@ def build_plan(req: PlanRequest) -> PlanResponse:
         effective_period = (req.date_end - req.date_start).days or req.period_days
 
     meta_placement_labels = {
-        "fb_feed": "Meta В· Feed",
-        "fb_video_feeds": "Meta В· Video Feeds",
-        "fb_instream": "Meta В· In-Stream",
-        "fb_reels": "Meta В· Reels",
-        "fb_stories": "Meta В· Stories",
-        "fb_search": "Meta В· Search",
-        "ig_feed": "Meta В· IG Feed",
-        "ig_profile_feed": "Meta В· Profile",
-        "ig_reels": "Meta В· IG Reels",
-        "ig_explore": "Meta В· Explore",
-        "ig_explore_home": "Meta В· Explore Home",
-        "ig_stories": "Meta В· IG Stories",
+        "fb_feed": "Meta Р’В· Feed",
+        "fb_video_feeds": "Meta Р’В· Video Feeds",
+        "fb_instream": "Meta Р’В· In-Stream",
+        "fb_reels": "Meta Р’В· Reels",
+        "fb_stories": "Meta Р’В· Stories",
+        "fb_search": "Meta Р’В· Search",
+        "ig_feed": "Meta Р’В· IG Feed",
+        "ig_profile_feed": "Meta Р’В· Profile",
+        "ig_reels": "Meta Р’В· IG Reels",
+        "ig_explore": "Meta Р’В· Explore",
+        "ig_explore_home": "Meta Р’В· Explore Home",
+        "ig_stories": "Meta Р’В· IG Stories",
     }
     meta_specific = [p for p in (req.placements or []) if p in meta_placement_labels]
 
@@ -1421,7 +1421,7 @@ def _extract_platform_facts(context: Optional[Dict[str, object]]) -> Tuple[Dict[
         date_from = context.get("date_from")
         date_to = context.get("date_to")
         if date_from and date_to:
-            facts_period = f"{date_from} — {date_to}"
+            facts_period = f"{date_from} вЂ” {date_to}"
     return facts_totals, facts_period, facts_used
 
 
@@ -1991,7 +1991,7 @@ def _build_assistant_response(
             source = "llm"
         else:
             recommendations.append(
-                f"Ответ LLM отклонен: confidence {round(confidence, 2)} ниже порога {round(confidence_min, 2)}."
+                f"РћС‚РІРµС‚ LLM РѕС‚РєР»РѕРЅРµРЅ: confidence {round(confidence, 2)} РЅРёР¶Рµ РїРѕСЂРѕРіР° {round(confidence_min, 2)}."
             )
 
     req_for_preview = req.model_copy(deep=True)
@@ -2056,24 +2056,24 @@ def _build_assistant_response(
             if source == "llm":
                 recommendations.insert(
                     0,
-                    "Сплит LLM нормализован и дополнительно скорректирован по blended-истории (client + global).",
+                    "РЎРїР»РёС‚ LLM РЅРѕСЂРјР°Р»РёР·РѕРІР°РЅ Рё РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅРѕ СЃРєРѕСЂСЂРµРєС‚РёСЂРѕРІР°РЅ РїРѕ blended-РёСЃС‚РѕСЂРёРё (client + global).",
                 )
             else:
                 recommendations.insert(
                     0,
-                    "Бюджетный сплит скорректирован по blended-истории: клиент + обезличенный global pool.",
+                    "Р‘СЋРґР¶РµС‚РЅС‹Р№ СЃРїР»РёС‚ СЃРєРѕСЂСЂРµРєС‚РёСЂРѕРІР°РЅ РїРѕ blended-РёСЃС‚РѕСЂРёРё: РєР»РёРµРЅС‚ + РѕР±РµР·Р»РёС‡РµРЅРЅС‹Р№ global pool.",
                 )
 
     if not recommendations:
         top = sorted(preview.lines, key=lambda x: x.share, reverse=True)[:3]
         if top:
             joined = ", ".join(f"{line.name} ({round(line.share * 100, 1)}%)" for line in top)
-            recommendations.append(f"Фокус по бюджету: {joined}.")
+            recommendations.append(f"Р¤РѕРєСѓСЃ РїРѕ Р±СЋРґР¶РµС‚Сѓ: {joined}.")
         if facts_used:
-            recommendations.append("Рекомендации скорректированы с учетом фактических данных подключенных аккаунтов.")
+            recommendations.append("Р РµРєРѕРјРµРЅРґР°С†РёРё СЃРєРѕСЂСЂРµРєС‚РёСЂРѕРІР°РЅС‹ СЃ СѓС‡РµС‚РѕРј С„Р°РєС‚РёС‡РµСЃРєРёС… РґР°РЅРЅС‹С… РїРѕРґРєР»СЋС‡РµРЅРЅС‹С… Р°РєРєР°СѓРЅС‚РѕРІ.")
         if global_facts_used:
-            recommendations.append("Для новых/пустых аккаунтов использован обезличенный global pool по всем активным кабинетам.")
-        recommendations.append("Через 7 дней загрузите фактические данные и пересчитайте план.")
+            recommendations.append("Р”Р»СЏ РЅРѕРІС‹С…/РїСѓСЃС‚С‹С… Р°РєРєР°СѓРЅС‚РѕРІ РёСЃРїРѕР»СЊР·РѕРІР°РЅ РѕР±РµР·Р»РёС‡РµРЅРЅС‹Р№ global pool РїРѕ РІСЃРµРј Р°РєС‚РёРІРЅС‹Рј РєР°Р±РёРЅРµС‚Р°Рј.")
+        recommendations.append("Р§РµСЂРµР· 7 РґРЅРµР№ Р·Р°РіСЂСѓР·РёС‚Рµ С„Р°РєС‚РёС‡РµСЃРєРёРµ РґР°РЅРЅС‹Рµ Рё РїРµСЂРµСЃС‡РёС‚Р°Р№С‚Рµ РїР»Р°РЅ.")
     if source == "llm" and rationale:
         if not any(str(r).strip() == rationale for r in recommendations):
             recommendations.insert(0, rationale)
@@ -2186,7 +2186,7 @@ def plan_to_workbook(
         ["Objective", req.goal if req else ""],
         ["Budget (net)", req.budget if req else ""],
         ["Currency", req.currency if req else ""],
-        ["FX rate (KZTв†’USD)", fx],
+        ["FX rate (KZTРІвЂ вЂ™USD)", fx],
         ["Flight start", req.date_start.isoformat() if req and req.date_start else ""],
         ["Flight end", req.date_end.isoformat() if req and req.date_end else ""],
         ["Period (days)", period_days],
@@ -2199,7 +2199,7 @@ def plan_to_workbook(
         ["KPI type", req.kpi_type if req else ""],
         ["KPI target", req.kpi_target if req and req.kpi_target else ""],
         ["UTM template", req.utm_template if req and req.utm_template else ""],
-        ["Pixels configured", "Да" if req and req.pixels_configured else "Нет"],
+        ["Pixels configured", "Р”Р°" if req and req.pixels_configured else "РќРµС‚"],
         ["Channel overrides", json.dumps(req.channel_inputs, ensure_ascii=False) if req and req.channel_inputs else ""],
         ["Prepared by", author],
     ]
@@ -2214,42 +2214,42 @@ def plan_to_workbook(
     vat = (req.vat_percent or 0) / 100 if req else 0
 
     headers = [
-        "Платформа",
-        "Доля, %",
-        "Бюджет план, $",
-        "Бюджет факт, $",
-        "Охват план",
-        "Охват факт",
-        "Показы план",
-        "Показы факт",
-        "Клики план",
-        "Клики факт",
-        "Лиды план",
-        "Лиды факт",
-        "Конверсии план",
-        "Конверсии факт",
-        "Просмотры план",
-        "Просмотры факт",
-        "Viewable план",
-        "Viewable факт",
-        "CPM план, $",
-        "CPM факт, $",
-        "CPC план, $",
-        "CPC факт, $",
-        "CPV план, $",
-        "CPV факт, $",
-        "CTR план",
-        "CTR факт",
-        "CVR план",
-        "CVR факт",
-        "Post-click план",
-        "Post-click факт",
-        "VTR план",
-        "VTR факт",
-        "LTV план",
-        "LTV факт",
-        "Дней открутки",
-        "Пополнение (gross), $",
+        "РџР»Р°С‚С„РѕСЂРјР°",
+        "Р”РѕР»СЏ, %",
+        "Р‘СЋРґР¶РµС‚ РїР»Р°РЅ, $",
+        "Р‘СЋРґР¶РµС‚ С„Р°РєС‚, $",
+        "РћС…РІР°С‚ РїР»Р°РЅ",
+        "РћС…РІР°С‚ С„Р°РєС‚",
+        "РџРѕРєР°Р·С‹ РїР»Р°РЅ",
+        "РџРѕРєР°Р·С‹ С„Р°РєС‚",
+        "РљР»РёРєРё РїР»Р°РЅ",
+        "РљР»РёРєРё С„Р°РєС‚",
+        "Р›РёРґС‹ РїР»Р°РЅ",
+        "Р›РёРґС‹ С„Р°РєС‚",
+        "РљРѕРЅРІРµСЂСЃРёРё РїР»Р°РЅ",
+        "РљРѕРЅРІРµСЂСЃРёРё С„Р°РєС‚",
+        "РџСЂРѕСЃРјРѕС‚СЂС‹ РїР»Р°РЅ",
+        "РџСЂРѕСЃРјРѕС‚СЂС‹ С„Р°РєС‚",
+        "Viewable РїР»Р°РЅ",
+        "Viewable С„Р°РєС‚",
+        "CPM РїР»Р°РЅ, $",
+        "CPM С„Р°РєС‚, $",
+        "CPC РїР»Р°РЅ, $",
+        "CPC С„Р°РєС‚, $",
+        "CPV РїР»Р°РЅ, $",
+        "CPV С„Р°РєС‚, $",
+        "CTR РїР»Р°РЅ",
+        "CTR С„Р°РєС‚",
+        "CVR РїР»Р°РЅ",
+        "CVR С„Р°РєС‚",
+        "Post-click РїР»Р°РЅ",
+        "Post-click С„Р°РєС‚",
+        "VTR РїР»Р°РЅ",
+        "VTR С„Р°РєС‚",
+        "LTV РїР»Р°РЅ",
+        "LTV С„Р°РєС‚",
+        "Р”РЅРµР№ РѕС‚РєСЂСѓС‚РєРё",
+        "РџРѕРїРѕР»РЅРµРЅРёРµ (gross), $",
     ]
     totals = plan.totals
     total_overhead = totals.budget * (fee + vat)
@@ -2261,24 +2261,24 @@ def plan_to_workbook(
     freq = (totals.impressions / totals.reach) if totals.reach else None
     flight = ""
     if req and req.date_start and req.date_end:
-        flight = f"{req.date_start.isoformat()} в†’ {req.date_end.isoformat()}"
+        flight = f"{req.date_start.isoformat()} РІвЂ вЂ™ {req.date_end.isoformat()}"
     elif req:
         flight = f"{req.period_days} days"
     summary_rows = [
-        ["Budget (net/client)", totals.budget, "Гарантия"],
-        ["Комиссия/VAT", total_overhead, "Гарантия"],
-        ["Budget (gross)", total_gross, "Гарантия"],
-        ["CPM", cpm, "Прогноз"],
-        ["CPC", cpc, "Прогноз"],
-        ["CPL", cpl, "Прогноз"],
-        ["CPA", cpa, "Прогноз"],
-        ["Impressions", totals.impressions, "Прогноз"],
-        ["Reach", totals.reach, "Прогноз"],
-        ["Clicks", totals.clicks, "Прогноз"],
-        ["Leads", totals.leads, "Прогноз"],
-        ["Purchases", totals.conversions, "Прогноз"],
-        ["Frequency", round(freq, 2) if freq else None, "Прогноз"],
-        ["Flight", flight, "Прогноз"],
+        ["Budget (net/client)", totals.budget, "Р“Р°СЂР°РЅС‚РёСЏ"],
+        ["РљРѕРјРёСЃСЃРёСЏ/VAT", total_overhead, "Р“Р°СЂР°РЅС‚РёСЏ"],
+        ["Budget (gross)", total_gross, "Р“Р°СЂР°РЅС‚РёСЏ"],
+        ["CPM", cpm, "РџСЂРѕРіРЅРѕР·"],
+        ["CPC", cpc, "РџСЂРѕРіРЅРѕР·"],
+        ["CPL", cpl, "РџСЂРѕРіРЅРѕР·"],
+        ["CPA", cpa, "РџСЂРѕРіРЅРѕР·"],
+        ["Impressions", totals.impressions, "РџСЂРѕРіРЅРѕР·"],
+        ["Reach", totals.reach, "РџСЂРѕРіРЅРѕР·"],
+        ["Clicks", totals.clicks, "РџСЂРѕРіРЅРѕР·"],
+        ["Leads", totals.leads, "РџСЂРѕРіРЅРѕР·"],
+        ["Purchases", totals.conversions, "РџСЂРѕРіРЅРѕР·"],
+        ["Frequency", round(freq, 2) if freq else None, "РџСЂРѕРіРЅРѕР·"],
+        ["Flight", flight, "РџСЂРѕРіРЅРѕР·"],
     ]
     outputs.append(["Outputs (standard)", "Value", "Type"])
     for row in summary_rows:
@@ -2334,7 +2334,7 @@ def plan_to_workbook(
                 round(line.budget * (1 + fee + vat), 2),  # Top-up with fee/VAT
             ]
         )
-        # Excel formulas so values обновляются цепочкой внутри файла
+        # Excel formulas so values РѕР±РЅРѕРІР»СЏСЋС‚СЃСЏ С†РµРїРѕС‡РєРѕР№ РІРЅСѓС‚СЂРё С„Р°Р№Р»Р°
         # Column mapping for readability:
         # C budget plan, D budget fact, E reach plan, F reach fact, G impr plan, H impr fact,
         # I clicks plan, J clicks fact, K leads plan, L leads fact, M conv plan, N conv fact,
@@ -2361,7 +2361,7 @@ def plan_to_workbook(
         last_data_row = start_row + len(plan.lines) - 1
         outputs.append(
             [
-                "Итого",
+                "РС‚РѕРіРѕ",
                 "",
                 f"=SUM(C{start_row}:C{last_data_row})",
                 f"=SUM(D{start_row}:D{last_data_row})",
@@ -2397,15 +2397,15 @@ def plan_to_workbook(
     # KPI block
     current_row = start_row + len(plan.lines) + 3
     if req and req.kpi_type and req.kpi_target:
-        outputs.cell(row=current_row, column=1, value="KPI контроль")
+        outputs.cell(row=current_row, column=1, value="KPI РєРѕРЅС‚СЂРѕР»СЊ")
         kpi_label = req.kpi_type.upper()
-        outputs.cell(row=current_row, column=2, value="Тип")
+        outputs.cell(row=current_row, column=2, value="РўРёРї")
         outputs.cell(row=current_row, column=3, value=kpi_label)
-        outputs.cell(row=current_row + 1, column=2, value="План")
+        outputs.cell(row=current_row + 1, column=2, value="РџР»Р°РЅ")
         outputs.cell(row=current_row + 1, column=3, value=plan.planned_kpi)
-        outputs.cell(row=current_row + 2, column=2, value="Цель")
+        outputs.cell(row=current_row + 2, column=2, value="Р¦РµР»СЊ")
         outputs.cell(row=current_row + 2, column=3, value=req.kpi_target)
-        outputs.cell(row=current_row + 3, column=2, value="Отклонение")
+        outputs.cell(row=current_row + 3, column=2, value="РћС‚РєР»РѕРЅРµРЅРёРµ")
         if plan.planned_kpi:
             outputs.cell(row=current_row + 3, column=3, value=plan.planned_kpi - req.kpi_target)
         current_row += 5
@@ -2438,9 +2438,9 @@ def plan_to_workbook(
         week_to_month.append(m_idx)
         weeks_in_month[m_idx] += 1
 
-    flight.append(["Месячный сплит по платформам"])
+    flight.append(["РњРµСЃСЏС‡РЅС‹Р№ СЃРїР»РёС‚ РїРѕ РїР»Р°С‚С„РѕСЂРјР°Рј"])
     flight.append([])
-    monthly_header = ["Платформа"] + [f"M{i+1}" for i in range(months)]
+    monthly_header = ["РџР»Р°С‚С„РѕСЂРјР°"] + [f"M{i+1}" for i in range(months)]
     flight.append(monthly_header)
     for line in plan.lines:
         weights = month_weights(line.key)
@@ -2448,8 +2448,8 @@ def plan_to_workbook(
         flight.append(row)
 
     flight.append([])
-    flight.append(["Недельный сплит по платформам"])
-    weekly_header = ["Платформа"] + [f"W{i+1}" for i in range(weeks)]
+    flight.append(["РќРµРґРµР»СЊРЅС‹Р№ СЃРїР»РёС‚ РїРѕ РїР»Р°С‚С„РѕСЂРјР°Рј"])
+    weekly_header = ["РџР»Р°С‚С„РѕСЂРјР°"] + [f"W{i+1}" for i in range(weeks)]
     flight.append(weekly_header)
     for line in plan.lines:
         weights = month_weights(line.key)
@@ -2464,18 +2464,18 @@ def plan_to_workbook(
 
     total_gross = sum(l.budget * (1 + fee + vat) for l in plan.lines)
     flight.append([])
-    flight.append(["Итого к оплате (с НДС/ком.)", round(total_gross, 2), f"{total_days} дней"])
+    flight.append(["РС‚РѕРіРѕ Рє РѕРїР»Р°С‚Рµ (СЃ РќР”РЎ/РєРѕРј.)", round(total_gross, 2), f"{total_days} РґРЅРµР№"])
 
     # Creatives sheet
     creatives = wb.create_sheet("Creatives")
-    creatives.append(["Платформа", "Форматы / размеры", "Текст", "Файлы / примечания"])
-    creatives.append(["Meta (FB/IG) Feed", "1080x1080 (1:1), 1080x1350 (4:5), 1200x628 (1.91:1)", "Заголовок 25–40 знаков, текст до 125", "PNG/JPG; текст на изображении <=20%"])
-    creatives.append(["Meta (FB/IG) Reels/Stories", "1080x1920 (9:16)", "Короткий текст", "Видео 9:16 или 4:5, MP4/MOV, до 4 ГБ"])
-    creatives.append(["Google Ads КМС", "1200x628, 1200x1200, 300x250, 728x90", "Заголовок до 30, описание до 90", "PNG/JPG; высокое разрешение"])
-    creatives.append(["Google Ads YouTube", "16:9", "Короткий заголовок", "Видео MP4, 16:9"])
-    creatives.append(["Яндекс Директ (РСЯ)", "16:9 от 450x257 до 1080x607; 1:1 от 450x450 до 1080x1080; 2:3", "Заголовок до 56, текст до 81", "PNG/JPG"])
-    creatives.append(["TikTok Ads", "9:16 (720x1280 или 1080x1920), 1:1, 16:9", "Заголовок до 100", "Видео MP4/MOV; рекоменд. 9:16"])
-    creatives.append(["Telegram Ads", "Только текст + ссылка", "Заголовок до 160, текст до 160", "Без баннеров"])
+    creatives.append(["РџР»Р°С‚С„РѕСЂРјР°", "Р¤РѕСЂРјР°С‚С‹ / СЂР°Р·РјРµСЂС‹", "РўРµРєСЃС‚", "Р¤Р°Р№Р»С‹ / РїСЂРёРјРµС‡Р°РЅРёСЏ"])
+    creatives.append(["Meta (FB/IG) Feed", "1080x1080 (1:1), 1080x1350 (4:5), 1200x628 (1.91:1)", "Р—Р°РіРѕР»РѕРІРѕРє 25вЂ“40 Р·РЅР°РєРѕРІ, С‚РµРєСЃС‚ РґРѕ 125", "PNG/JPG; С‚РµРєСЃС‚ РЅР° РёР·РѕР±СЂР°Р¶РµРЅРёРё <=20%"])
+    creatives.append(["Meta (FB/IG) Reels/Stories", "1080x1920 (9:16)", "РљРѕСЂРѕС‚РєРёР№ С‚РµРєСЃС‚", "Р’РёРґРµРѕ 9:16 РёР»Рё 4:5, MP4/MOV, РґРѕ 4 Р“Р‘"])
+    creatives.append(["Google Ads РљРњРЎ", "1200x628, 1200x1200, 300x250, 728x90", "Р—Р°РіРѕР»РѕРІРѕРє РґРѕ 30, РѕРїРёСЃР°РЅРёРµ РґРѕ 90", "PNG/JPG; РІС‹СЃРѕРєРѕРµ СЂР°Р·СЂРµС€РµРЅРёРµ"])
+    creatives.append(["Google Ads YouTube", "16:9", "РљРѕСЂРѕС‚РєРёР№ Р·Р°РіРѕР»РѕРІРѕРє", "Р’РёРґРµРѕ MP4, 16:9"])
+    creatives.append(["РЇРЅРґРµРєСЃ Р”РёСЂРµРєС‚ (Р РЎРЇ)", "16:9 РѕС‚ 450x257 РґРѕ 1080x607; 1:1 РѕС‚ 450x450 РґРѕ 1080x1080; 2:3", "Р—Р°РіРѕР»РѕРІРѕРє РґРѕ 56, С‚РµРєСЃС‚ РґРѕ 81", "PNG/JPG"])
+    creatives.append(["TikTok Ads", "9:16 (720x1280 РёР»Рё 1080x1920), 1:1, 16:9", "Р—Р°РіРѕР»РѕРІРѕРє РґРѕ 100", "Р’РёРґРµРѕ MP4/MOV; СЂРµРєРѕРјРµРЅРґ. 9:16"])
+    creatives.append(["Telegram Ads", "РўРѕР»СЊРєРѕ С‚РµРєСЃС‚ + СЃСЃС‹Р»РєР°", "Р—Р°РіРѕР»РѕРІРѕРє РґРѕ 160, С‚РµРєСЃС‚ РґРѕ 160", "Р‘РµР· Р±Р°РЅРЅРµСЂРѕРІ"])
 
     # Brand Metrics sheet removed
     # Scenarios sheet removed
@@ -2659,10 +2659,10 @@ except Exception:
 
 ADMIN_EMAILS = {"romant997@gmail.com", "kolyadov.denis@gmail.com"}
 BENEFICIARY = {
-    "name": "ИП Art Book Inc.",
+    "name": "РРџ Art Book Inc.",
     "bin": "960910300234",
     "iban": "KZ588562204108888284",
-    "bank": "АО Банк ЦентрКредит",
+    "bank": "РђРћ Р‘Р°РЅРє Р¦РµРЅС‚СЂРљСЂРµРґРёС‚",
     "bic": "KCJBKZKX",
     "kbe": "19",
     "currency": "KZT",
@@ -2672,18 +2672,18 @@ BENEFICIARY = {
 def _format_date_ru(dt: datetime) -> str:
     return (
         dt.strftime("%d %B %Y")
-        .replace("January", "января")
-        .replace("February", "февраля")
-        .replace("March", "марта")
-        .replace("April", "апреля")
-        .replace("May", "мая")
-        .replace("June", "июня")
-        .replace("July", "июля")
-        .replace("August", "августа")
-        .replace("September", "сентября")
-        .replace("October", "октября")
-        .replace("November", "ноября")
-        .replace("December", "декабря")
+        .replace("January", "СЏРЅРІР°СЂСЏ")
+        .replace("February", "С„РµРІСЂР°Р»СЏ")
+        .replace("March", "РјР°СЂС‚Р°")
+        .replace("April", "Р°РїСЂРµР»СЏ")
+        .replace("May", "РјР°СЏ")
+        .replace("June", "РёСЋРЅСЏ")
+        .replace("July", "РёСЋР»СЏ")
+        .replace("August", "Р°РІРіСѓСЃС‚Р°")
+        .replace("September", "СЃРµРЅС‚СЏР±СЂСЏ")
+        .replace("October", "РѕРєС‚СЏР±СЂСЏ")
+        .replace("November", "РЅРѕСЏР±СЂСЏ")
+        .replace("December", "РґРµРєР°Р±СЂСЏ")
     )
 
 
@@ -2705,30 +2705,30 @@ def _repair_mojibake_text(value: object) -> object:
 
 _CYR_TO_LAT_MAP = str.maketrans(
     {
-        "А": "A",
-        "В": "B",
-        "С": "C",
-        "Е": "E",
-        "Н": "H",
-        "К": "K",
-        "М": "M",
-        "О": "O",
-        "Р": "P",
-        "Т": "T",
-        "Х": "X",
-        "У": "Y",
-        "а": "A",
-        "в": "B",
-        "с": "C",
-        "е": "E",
-        "н": "H",
-        "к": "K",
-        "м": "M",
-        "о": "O",
-        "р": "P",
-        "т": "T",
-        "х": "X",
-        "у": "Y",
+        "\u0410": "A",
+        "\u0412": "B",
+        "\u0421": "C",
+        "\u0415": "E",
+        "\u041d": "H",
+        "\u041a": "K",
+        "\u041c": "M",
+        "\u041e": "O",
+        "\u0420": "P",
+        "\u0422": "T",
+        "\u0425": "X",
+        "\u0423": "Y",
+        "\u0430": "A",
+        "\u0432": "B",
+        "\u0441": "C",
+        "\u0435": "E",
+        "\u043d": "H",
+        "\u043a": "K",
+        "\u043c": "M",
+        "\u043e": "O",
+        "\u0440": "P",
+        "\u0442": "T",
+        "\u0445": "X",
+        "\u0443": "Y",
     }
 )
 
@@ -2771,9 +2771,9 @@ def _get_company_profile(conn) -> Dict[str, object]:
 
 def _normalize_issuer_type(value: object, default: str = "too") -> str:
     raw = str(value or "").strip().lower()
-    if raw in {"too", "тоо", "llp"}:
+    if raw in {"too", "С‚РѕРѕ", "llp"}:
         return "too"
-    if raw in {"ip", "ип", "sp"}:
+    if raw in {"ip", "РёРї", "sp"}:
         return "ip"
     return default
 
@@ -2841,9 +2841,9 @@ def _format_legal_entity_name(entity: Dict[str, object]) -> Optional[str]:
 
 def _normalize_tax_mode(value: object, default: str = "without_vat") -> str:
     raw = str(value or "").strip().lower()
-    if raw in {"with_vat", "vat", "with-nds", "nds", "с_ндс", "сндс"}:
+    if raw in {"with_vat", "vat", "with-nds", "nds", "СЃ_РЅРґСЃ", "СЃРЅРґСЃ"}:
         return "with_vat"
-    if raw in {"without_vat", "no_vat", "without-nds", "no_nds", "без_ндс", "безндс"}:
+    if raw in {"without_vat", "no_vat", "without-nds", "no_nds", "Р±РµР·_РЅРґСЃ", "Р±РµР·РЅРґСЃ"}:
         return "without_vat"
     return default
 
@@ -2869,7 +2869,7 @@ def _invoice_tax_breakdown(amount: float, tax_mode: str, vat_rate: float) -> Dic
             "net_amount": total,
             "vat_amount": 0.0,
             "total_amount": total,
-            "vat_note": "Услуги Исполнителя НДС не облагаются (п.п. 46 ст.394 Налогового кодекса Казахстана).",
+            "vat_note": "РЈСЃР»СѓРіРё РСЃРїРѕР»РЅРёС‚РµР»СЏ РќР”РЎ РЅРµ РѕР±Р»Р°РіР°СЋС‚СЃСЏ (Рї.Рї. 46 СЃС‚.394 РќР°Р»РѕРіРѕРІРѕРіРѕ РєРѕРґРµРєСЃР° РљР°Р·Р°С…СЃС‚Р°РЅР°).",
         }
     denom = 1.0 + (vat_rate / 100.0)
     net = round(total / denom, 2) if denom > 0 else total
@@ -2880,7 +2880,7 @@ def _invoice_tax_breakdown(amount: float, tax_mode: str, vat_rate: float) -> Dic
         "net_amount": net,
         "vat_amount": vat_amount,
         "total_amount": total,
-        "vat_note": f"В том числе НДС {vat_rate:g}%: {_format_amount(vat_amount)}.",
+        "vat_note": f"Р’ С‚РѕРј С‡РёСЃР»Рµ РќР”РЎ {vat_rate:g}%: {_format_amount(vat_amount)}.",
     }
 
 
@@ -2901,22 +2901,22 @@ def _format_amount(amount: float) -> str:
 
 def _amount_to_words_ru(amount: float) -> str:
     def _triad_to_words(n: int, feminine: bool = False) -> str:
-        units_m = ["", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"]
-        units_f = ["", "одна", "две", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"]
+        units_m = ["", "РѕРґРёРЅ", "РґРІР°", "С‚СЂРё", "С‡РµС‚С‹СЂРµ", "РїСЏС‚СЊ", "С€РµСЃС‚СЊ", "СЃРµРјСЊ", "РІРѕСЃРµРјСЊ", "РґРµРІСЏС‚СЊ"]
+        units_f = ["", "РѕРґРЅР°", "РґРІРµ", "С‚СЂРё", "С‡РµС‚С‹СЂРµ", "РїСЏС‚СЊ", "С€РµСЃС‚СЊ", "СЃРµРјСЊ", "РІРѕСЃРµРјСЊ", "РґРµРІСЏС‚СЊ"]
         teens = [
-            "десять",
-            "одиннадцать",
-            "двенадцать",
-            "тринадцать",
-            "четырнадцать",
-            "пятнадцать",
-            "шестнадцать",
-            "семнадцать",
-            "восемнадцать",
-            "девятнадцать",
+            "РґРµСЃСЏС‚СЊ",
+            "РѕРґРёРЅРЅР°РґС†Р°С‚СЊ",
+            "РґРІРµРЅР°РґС†Р°С‚СЊ",
+            "С‚СЂРёРЅР°РґС†Р°С‚СЊ",
+            "С‡РµС‚С‹СЂРЅР°РґС†Р°С‚СЊ",
+            "РїСЏС‚РЅР°РґС†Р°С‚СЊ",
+            "С€РµСЃС‚РЅР°РґС†Р°С‚СЊ",
+            "СЃРµРјРЅР°РґС†Р°С‚СЊ",
+            "РІРѕСЃРµРјРЅР°РґС†Р°С‚СЊ",
+            "РґРµРІСЏС‚РЅР°РґС†Р°С‚СЊ",
         ]
-        tens = ["", "", "двадцать", "тридцать", "сорок", "пятьдесят", "шестьдесят", "семьдесят", "восемьдесят", "девяносто"]
-        hundreds = ["", "сто", "двести", "триста", "четыреста", "пятьсот", "шестьсот", "семьсот", "восемьсот", "девятьсот"]
+        tens = ["", "", "РґРІР°РґС†Р°С‚СЊ", "С‚СЂРёРґС†Р°С‚СЊ", "СЃРѕСЂРѕРє", "РїСЏС‚СЊРґРµСЃСЏС‚", "С€РµСЃС‚СЊРґРµСЃСЏС‚", "СЃРµРјСЊРґРµСЃСЏС‚", "РІРѕСЃРµРјСЊРґРµСЃСЏС‚", "РґРµРІСЏРЅРѕСЃС‚Рѕ"]
+        hundreds = ["", "СЃС‚Рѕ", "РґРІРµСЃС‚Рё", "С‚СЂРёСЃС‚Р°", "С‡РµС‚С‹СЂРµСЃС‚Р°", "РїСЏС‚СЊСЃРѕС‚", "С€РµСЃС‚СЊСЃРѕС‚", "СЃРµРјСЊСЃРѕС‚", "РІРѕСЃРµРјСЊСЃРѕС‚", "РґРµРІСЏС‚СЊСЃРѕС‚"]
         words = []
         words.append(hundreds[n // 100])
         n = n % 100
@@ -2948,23 +2948,23 @@ def _amount_to_words_ru(amount: float) -> str:
     remainder = rub % 1_000
     if millions:
         parts.append(_triad_to_words(millions))
-        parts.append(_group_word(millions, ("миллион", "миллиона", "миллионов")))
+        parts.append(_group_word(millions, ("РјРёР»Р»РёРѕРЅ", "РјРёР»Р»РёРѕРЅР°", "РјРёР»Р»РёРѕРЅРѕРІ")))
     if thousands:
         parts.append(_triad_to_words(thousands, feminine=True))
-        parts.append(_group_word(thousands, ("тысяча", "тысячи", "тысяч")))
+        parts.append(_group_word(thousands, ("С‚С‹СЃСЏС‡Р°", "С‚С‹СЃСЏС‡Рё", "С‚С‹СЃСЏС‡")))
     if remainder or not parts:
         parts.append(_triad_to_words(remainder))
     words = " ".join(p for p in parts if p).strip()
     if words:
         words = words[0].upper() + words[1:]
-    return f"{words} тенге {kop:02d} тиын"
+    return f"{words} С‚РµРЅРіРµ {kop:02d} С‚РёС‹РЅ"
 
 
 def _invoice_1c_html(payload: Dict[str, object]) -> str:
     amount = payload.get("amount", "0.00")
     currency = payload.get("currency", "KZT")
-    number = payload.get("number", "—")
-    date = payload.get("date", "—")
+    number = payload.get("number", "вЂ”")
+    date = payload.get("date", "вЂ”")
     beneficiary_name = payload.get("beneficiary_name", "")
     beneficiary_bin = payload.get("beneficiary_bin", "")
     beneficiary_bank = payload.get("beneficiary_bank", "")
@@ -2995,7 +2995,7 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Счет на оплату</title>
+    <title>РЎС‡РµС‚ РЅР° РѕРїР»Р°С‚Сѓ</title>
     <style>
       @page {{
         size: A4;
@@ -3086,81 +3086,81 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
   </head>
   <body>
     <div class="wrap">
-      <a class="print-btn" href="{pdf_url}">Скачать PDF</a>
+      <a class="print-btn" href="{pdf_url}">РЎРєР°С‡Р°С‚СЊ PDF</a>
       <table class="bank-table">
         <tr>
           <td>
-            <strong>Образец платежного поручения</strong><br />
-            Бенефициар: {beneficiary_name}<br />
-            БИН/ИИН: {beneficiary_bin}
+            <strong>РћР±СЂР°Р·РµС† РїР»Р°С‚РµР¶РЅРѕРіРѕ РїРѕСЂСѓС‡РµРЅРёСЏ</strong><br />
+            Р‘РµРЅРµС„РёС†РёР°СЂ: {beneficiary_name}<br />
+            Р‘РРќ/РРРќ: {beneficiary_bin}
           </td>
           <td>
-            ИИК<br />
+            РРРљ<br />
             <strong>{beneficiary_iban}</strong>
           </td>
           <td class="center">
-            КБе<br />
+            РљР‘Рµ<br />
             <strong>{beneficiary_kbe}</strong>
           </td>
         </tr>
         <tr>
-          <td>Банк бенефициара:<br />{beneficiary_bank}</td>
+          <td>Р‘Р°РЅРє Р±РµРЅРµС„РёС†РёР°СЂР°:<br />{beneficiary_bank}</td>
           <td>
-            БИК<br />
+            Р‘РРљ<br />
             <strong>{beneficiary_bic}</strong>
           </td>
           <td class="center">
-            Код назначения платежа<br />
+            РљРѕРґ РЅР°Р·РЅР°С‡РµРЅРёСЏ РїР»Р°С‚РµР¶Р°<br />
             <strong>{payment_code}</strong>
           </td>
         </tr>
       </table>
 
-      <p class="note">Счет действителен в течение 5 рабочих дней</p>
+      <p class="note">РЎС‡РµС‚ РґРµР№СЃС‚РІРёС‚РµР»РµРЅ РІ С‚РµС‡РµРЅРёРµ 5 СЂР°Р±РѕС‡РёС… РґРЅРµР№</p>
 
-      <h1>Счет на оплату № {number} от {date}</h1>
+      <h1>РЎС‡РµС‚ РЅР° РѕРїР»Р°С‚Сѓ в„– {number} РѕС‚ {date}</h1>
       <div class="title-line"></div>
 
       <table class="no-border">
         <tr>
-          <td>Исполнитель</td>
+          <td>РСЃРїРѕР»РЅРёС‚РµР»СЊ</td>
           <td><strong>
-            БИН/ИИН {beneficiary_bin}, {beneficiary_name}
-            {f", {beneficiary_address}" if beneficiary_address else ""}{f", тел.: {beneficiary_phone}" if beneficiary_phone else ""}
+            Р‘РРќ/РРРќ {beneficiary_bin}, {beneficiary_name}
+            {f", {beneficiary_address}" if beneficiary_address else ""}{f", С‚РµР».: {beneficiary_phone}" if beneficiary_phone else ""}
           </strong></td>
         </tr>
         <tr>
-          <td>Заказчик</td>
-          <td><strong>БИН/ИИН {payer_bin}, {payer_name}, {payer_address}</strong></td>
+          <td>Р—Р°РєР°Р·С‡РёРє</td>
+          <td><strong>Р‘РРќ/РРРќ {payer_bin}, {payer_name}, {payer_address}</strong></td>
         </tr>
         <tr>
-          <td>Договор</td>
+          <td>Р”РѕРіРѕРІРѕСЂ</td>
           <td><strong>{contract_note}</strong></td>
         </tr>
       </table>
 
-      <div class="alert-line">Внимание! В назначение платежа скопируйте данные, указанные ниже.</div>
+      <div class="alert-line">Р’РЅРёРјР°РЅРёРµ! Р’ РЅР°Р·РЅР°С‡РµРЅРёРµ РїР»Р°С‚РµР¶Р° СЃРєРѕРїРёСЂСѓР№С‚Рµ РґР°РЅРЅС‹Рµ, СѓРєР°Р·Р°РЅРЅС‹Рµ РЅРёР¶Рµ.</div>
       <div class="warning">{description}</div>
       <div class="alert-line">
-        Если назначение платежа будет указано некорректно, платеж может быть возвращен как ошибочный либо время поступления денег на счет может занять до 3-х рабочих дней
+        Р•СЃР»Рё РЅР°Р·РЅР°С‡РµРЅРёРµ РїР»Р°С‚РµР¶Р° Р±СѓРґРµС‚ СѓРєР°Р·Р°РЅРѕ РЅРµРєРѕСЂСЂРµРєС‚РЅРѕ, РїР»Р°С‚РµР¶ РјРѕР¶РµС‚ Р±С‹С‚СЊ РІРѕР·РІСЂР°С‰РµРЅ РєР°Рє РѕС€РёР±РѕС‡РЅС‹Р№ Р»РёР±Рѕ РІСЂРµРјСЏ РїРѕСЃС‚СѓРїР»РµРЅРёСЏ РґРµРЅРµРі РЅР° СЃС‡РµС‚ РјРѕР¶РµС‚ Р·Р°РЅСЏС‚СЊ РґРѕ 3-С… СЂР°Р±РѕС‡РёС… РґРЅРµР№
       </div>
 
       <table>
         <thead>
           <tr>
-            <th class="center">№</th>
-            <th>Наименование</th>
-            <th class="center">Ед.</th>
-            <th class="center">Кол-во</th>
-            <th class="right nowrap">Цена</th>
-            <th class="right nowrap">Сумма</th>
+            <th class="center">в„–</th>
+            <th>РќР°РёРјРµРЅРѕРІР°РЅРёРµ</th>
+            <th class="center">Р•Рґ.</th>
+            <th class="center">РљРѕР»-РІРѕ</th>
+            <th class="right nowrap">Р¦РµРЅР°</th>
+            <th class="right nowrap">РЎСѓРјРјР°</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td class="center">1</td>
             <td>{description}</td>
-            <td class="center">услуга</td>
+            <td class="center">СѓСЃР»СѓРіР°</td>
             <td class="center">1</td>
             <td class="right nowrap">{amount}</td>
             <td class="right nowrap">{amount}</td>
@@ -3171,22 +3171,22 @@ def _invoice_1c_html(payload: Dict[str, object]) -> str:
       <table class="no-border">
         {f'''
         <tr>
-          <td class="right">Стоимость без НДС:</td>
+          <td class="right">РЎС‚РѕРёРјРѕСЃС‚СЊ Р±РµР· РќР”РЎ:</td>
           <td class="right nowrap" style="width:160px;">{amount_net}</td>
         </tr>
         <tr>
-          <td class="right">НДС {vat_rate:g}%:</td>
+          <td class="right">РќР”РЎ {vat_rate:g}%:</td>
           <td class="right nowrap" style="width:160px;">{vat_amount}</td>
         </tr>
         ''' if tax_mode == "with_vat" else ""}
         <tr>
-          <td class="right"><strong>Итого:</strong></td>
+          <td class="right"><strong>РС‚РѕРіРѕ:</strong></td>
           <td class="right nowrap" style="width:160px;"><strong>{amount}</strong></td>
         </tr>
       </table>
 
-      <p class="small">Всего наименований 1, на сумму {amount} {currency}</p>
-      <p class="small"><strong>Всего к оплате:</strong> {amount_words}. {vat_note}</p>
+      <p class="small">Р’СЃРµРіРѕ РЅР°РёРјРµРЅРѕРІР°РЅРёР№ 1, РЅР° СЃСѓРјРјСѓ {amount} {currency}</p>
+      <p class="small"><strong>Р’СЃРµРіРѕ Рє РѕРїР»Р°С‚Рµ:</strong> {amount_words}. {vat_note}</p>
     </div>
   </body>
 </html>
@@ -3213,7 +3213,7 @@ def _invoice_html(payload: Dict[str, object]) -> str:
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Счет на оплату {payload["number"]}</title>
+    <title>РЎС‡РµС‚ РЅР° РѕРїР»Р°С‚Сѓ {payload["number"]}</title>
     <style>
       body {{
         font-family: "Times New Roman", serif;
@@ -3279,69 +3279,69 @@ def _invoice_html(payload: Dict[str, object]) -> str:
         <table class="bank-table">
           <tr>
             <td rowspan="2">
-              Банк получателя<br />
+              Р‘Р°РЅРє РїРѕР»СѓС‡Р°С‚РµР»СЏ<br />
               {payload["beneficiary_bank"]}
             </td>
-            <td>БИК</td>
+            <td>Р‘РРљ</td>
             <td>{payload["beneficiary_bic"]}</td>
           </tr>
           <tr>
-            <td>ИИК</td>
+            <td>РРРљ</td>
             <td>{payload["beneficiary_iban"]}</td>
           </tr>
           <tr>
             <td>
-              Бенефициар<br />
+              Р‘РµРЅРµС„РёС†РёР°СЂ<br />
               {payload["beneficiary_name"]}
             </td>
-            <td>БИН</td>
+            <td>Р‘РРќ</td>
             <td>{payload["beneficiary_bin"]}</td>
           </tr>
           <tr>
-            <td>КБе</td>
+            <td>РљР‘Рµ</td>
             <td colspan="2">{payload["beneficiary_kbe"]}</td>
           </tr>
         </table>
 
-        <h1>Счет на оплату № {payload["number"]} от {payload["date"]}</h1>
+        <h1>РЎС‡РµС‚ РЅР° РѕРїР»Р°С‚Сѓ в„– {payload["number"]} РѕС‚ {payload["date"]}</h1>
 
         <div class="section">
-          <strong>Поставщик:</strong> {payload["beneficiary_name"]}, ИИН/БИН {payload["beneficiary_bin"]}
+          <strong>РџРѕСЃС‚Р°РІС‰РёРє:</strong> {payload["beneficiary_name"]}, РРРќ/Р‘РРќ {payload["beneficiary_bin"]}
         </div>
         <div class="section">
-          <strong>Покупатель:</strong> {payload["payer_name"]}, {payload["payer_bin"]}, {payload["payer_address"]}
+          <strong>РџРѕРєСѓРїР°С‚РµР»СЊ:</strong> {payload["payer_name"]}, {payload["payer_bin"]}, {payload["payer_address"]}
         </div>
 
         <table>
           <thead>
             <tr>
-              <th>№</th>
-              <th>Наименование</th>
-              <th>Кол-во</th>
-              <th>Ед.</th>
-              <th>Цена</th>
-              <th>Сумма</th>
+              <th>в„–</th>
+              <th>РќР°РёРјРµРЅРѕРІР°РЅРёРµ</th>
+              <th>РљРѕР»-РІРѕ</th>
+              <th>Р•Рґ.</th>
+              <th>Р¦РµРЅР°</th>
+              <th>РЎСѓРјРјР°</th>
             </tr>
           </thead>
           <tbody>
             {items_html}
             <tr>
-              <td colspan="5" class="right"><strong>Итого</strong></td>
+              <td colspan="5" class="right"><strong>РС‚РѕРіРѕ</strong></td>
               <td class="right"><strong>{payload["amount"]} {payload["currency"]}</strong></td>
             </tr>
             <tr>
-              <td colspan="5" class="right">НДС</td>
-              <td class="right">Без НДС</td>
+              <td colspan="5" class="right">РќР”РЎ</td>
+              <td class="right">Р‘РµР· РќР”РЎ</td>
             </tr>
             <tr>
-              <td colspan="5" class="right"><strong>Всего к оплате</strong></td>
+              <td colspan="5" class="right"><strong>Р’СЃРµРіРѕ Рє РѕРїР»Р°С‚Рµ</strong></td>
               <td class="right"><strong>{payload["amount"]} {payload["currency"]}</strong></td>
             </tr>
           </tbody>
         </table>
 
         <div class="section">
-          Всего наименований {payload["items_count"]}, на сумму {payload["amount"]} {payload["currency"]}.
+          Р’СЃРµРіРѕ РЅР°РёРјРµРЅРѕРІР°РЅРёР№ {payload["items_count"]}, РЅР° СЃСѓРјРјСѓ {payload["amount"]} {payload["currency"]}.
         </div>
       </div>
     </body>
@@ -4203,6 +4203,104 @@ def _ensure_agency_account_mapping(conn, agency_id: int, ad_account_id: int, lab
     return int(row["id"]) if row else None
 
 
+def _get_or_create_agency_wallet(conn, agency_id: int, currency: str = "KZT") -> Dict[str, object]:
+    row = conn.execute("SELECT * FROM agency_wallets WHERE agency_id=?", (agency_id,)).fetchone()
+    if row:
+        return dict(row)
+    conn.execute(
+        "INSERT INTO agency_wallets (agency_id, balance, currency, low_threshold) VALUES (?, ?, ?, ?)",
+        (agency_id, 0.0, currency, 50000),
+    )
+    row = conn.execute("SELECT * FROM agency_wallets WHERE agency_id=?", (agency_id,)).fetchone()
+    return dict(row) if row else {"agency_id": agency_id, "balance": 0.0, "currency": currency}
+
+
+def _active_agency_client_context(conn, client_user_id: int, platform: Optional[str] = None) -> Optional[Dict[str, object]]:
+    row = conn.execute(
+        """
+        SELECT
+          ac.*,
+          a.name as agency_name,
+          acr.platform_fee_percent,
+          acr.rebate_percent as platform_rebate_percent
+        FROM agency_clients ac
+        JOIN agencies a ON a.id = ac.agency_id
+        LEFT JOIN agency_client_rates acr
+          ON acr.agency_id = ac.agency_id
+         AND acr.client_user_id = ac.client_user_id
+         AND acr.platform = ?
+        WHERE ac.client_user_id=?
+          AND COALESCE(ac.status, 'active')='active'
+          AND COALESCE(a.status, 'active')='active'
+        ORDER BY ac.id DESC
+        LIMIT 1
+        """,
+        (str(platform or "").lower(), client_user_id),
+    ).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    rebate = data.get("platform_rebate_percent")
+    if rebate is None:
+        rebate = data.get("default_rebate_percent")
+    data["rebate_percent"] = float(rebate if rebate is not None else 3)
+    if data.get("platform_fee_percent") is not None:
+        data["platform_fee_percent"] = float(data["platform_fee_percent"])
+    return data
+
+
+def _record_agency_wallet_transaction(
+    conn,
+    *,
+    agency_id: int,
+    amount: float,
+    currency: str = "KZT",
+    tx_type: str,
+    client_user_id: Optional[int] = None,
+    account_id: Optional[int] = None,
+    source_type: Optional[str] = None,
+    source_id: Optional[object] = None,
+    note: Optional[str] = None,
+    created_by: Optional[str] = None,
+    initiated_by_user_id: Optional[int] = None,
+    acting_as_user_id: Optional[int] = None,
+) -> Optional[int]:
+    source_key = f"{source_type}:{source_id}" if source_type and source_id is not None else None
+    if source_key:
+        existing = conn.execute("SELECT id FROM agency_wallet_transactions WHERE source_key=?", (source_key,)).fetchone()
+        if existing:
+            return int(existing["id"])
+    wallet = _get_or_create_agency_wallet(conn, agency_id, currency)
+    next_balance = float(wallet.get("balance") or 0) + float(amount or 0)
+    conn.execute(
+        "UPDATE agency_wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE agency_id=?",
+        (next_balance, agency_id),
+    )
+    cur = conn.execute(
+        """
+        INSERT INTO agency_wallet_transactions
+          (agency_id, client_user_id, account_id, amount, currency, type, source_type, source_id, source_key, note, created_by, initiated_by_user_id, acting_as_user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            agency_id,
+            client_user_id,
+            account_id,
+            float(amount or 0),
+            str(currency or "KZT").upper(),
+            tx_type,
+            source_type,
+            source_id,
+            source_key,
+            note,
+            created_by,
+            initiated_by_user_id,
+            acting_as_user_id,
+        ),
+    )
+    return int(cur.lastrowid) if cur.lastrowid is not None else None
+
+
 def _get_or_create_default_agency(conn, user_id: int) -> Optional[Dict[str, object]]:
     row = conn.execute(
         """
@@ -4293,6 +4391,130 @@ def _list_user_agency_memberships(conn, user_id: int) -> List[Dict[str, object]]
     except Exception:
         logging.exception("Failed to list agency memberships for user_id=%s", user_id)
         return []
+
+
+def _current_agency_membership(conn, current_user, agency_id: Optional[int] = None) -> Dict[str, object]:
+    params: List[object] = [current_user["id"]]
+    agency_filter = ""
+    if agency_id is not None:
+        agency_filter = " AND m.agency_id=?"
+        params.append(agency_id)
+    row = conn.execute(
+        f"""
+        SELECT
+          m.*,
+          a.name as agency_name,
+          a.slug as agency_slug,
+          a.owner_user_id,
+          a.status as agency_status
+        FROM agency_members m
+        JOIN agencies a ON a.id = m.agency_id
+        WHERE m.user_id=?
+          {agency_filter}
+          AND COALESCE(m.status, 'active')='active'
+          AND COALESCE(a.status, 'active')='active'
+        ORDER BY
+          CASE m.role
+            WHEN 'owner' THEN 1
+            WHEN 'agency_admin' THEN 2
+            WHEN 'manager' THEN 3
+            ELSE 4
+          END,
+          m.id ASC
+        LIMIT 1
+        """,
+        tuple(params),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=403, detail="Agency access denied")
+    data = dict(row)
+    role = data.get("role") or "client_viewer"
+    data["can_manage"] = role in {"owner", "agency_admin"}
+    data["can_impersonate"] = role in {"owner", "agency_admin", "manager"}
+    return data
+
+
+def _agency_dashboard_payload(conn, agency_id: int, membership: Dict[str, object]) -> Dict[str, object]:
+    agency = conn.execute(
+        """
+        SELECT a.*, u.email as owner_email
+        FROM agencies a
+        LEFT JOIN users u ON u.id = a.owner_user_id
+        WHERE a.id=?
+        """,
+        (agency_id,),
+    ).fetchone()
+    if not agency:
+        raise HTTPException(status_code=404, detail="Agency not found")
+    clients = conn.execute(
+        """
+        SELECT
+          ac.*,
+          u.email,
+          w.balance as wallet_balance,
+          w.currency as wallet_currency
+        FROM agency_clients ac
+        JOIN users u ON u.id = ac.client_user_id
+        LEFT JOIN wallets w ON w.user_id = ac.client_user_id
+        WHERE ac.agency_id=? AND COALESCE(ac.status, 'active')='active'
+        ORDER BY u.email ASC
+        """,
+        (agency_id,),
+    ).fetchall()
+    own_accounts = conn.execute(
+        """
+        SELECT *
+        FROM ad_accounts
+        WHERE owner_type='agency' AND agency_id=?
+        ORDER BY created_at DESC, id DESC
+        """,
+        (agency_id,),
+    ).fetchall()
+    wallet = _get_or_create_agency_wallet(conn, agency_id)
+    ledger = conn.execute(
+        """
+        SELECT awt.*, u.email as client_email, a.name as account_name, a.platform as account_platform
+        FROM agency_wallet_transactions awt
+        LEFT JOIN users u ON u.id = awt.client_user_id
+        LEFT JOIN ad_accounts a ON a.id = awt.account_id
+        WHERE awt.agency_id=?
+        ORDER BY awt.created_at DESC, awt.id DESC
+        LIMIT 100
+        """,
+        (agency_id,),
+    ).fetchall()
+    summary_rows = conn.execute(
+        """
+        SELECT
+          type,
+          COALESCE(SUM(amount), 0) as amount
+        FROM agency_wallet_transactions
+        WHERE agency_id=?
+        GROUP BY type
+        """,
+        (agency_id,),
+    ).fetchall()
+    summary_by_type = {str(row["type"] or ""): float(row["amount"] or 0) for row in summary_rows}
+    rebate_earned = summary_by_type.get("rebate_accrual", 0.0) + summary_by_type.get("rebate_reversal", 0.0)
+    transferred_to_clients = -summary_by_type.get("transfer_to_client", 0.0)
+    own_account_funding = -summary_by_type.get("own_account_funding", 0.0)
+    platform_fees_paid = -summary_by_type.get("platform_fee", 0.0)
+    return {
+        "agency": dict(agency),
+        "membership": membership,
+        "wallet": dict(wallet),
+        "summary": {
+            "balance": float(wallet["balance"] or 0),
+            "currency": wallet["currency"] or "KZT",
+            "rebate_earned": round(rebate_earned, 2),
+            "transferred_to_clients": round(transferred_to_clients, 2),
+            "own_account_funding": round(own_account_funding, 2),
+            "platform_fees_paid": round(platform_fees_paid, 2),
+        },
+        "clients": [dict(row) for row in clients],
+        "own_accounts": [dict(row) for row in own_accounts],
+        "ledger": [dict(row) for row in ledger],
+    }
 
 
 def _list_accessible_accounts(conn, current_user) -> List[Dict[str, object]]:
@@ -4686,6 +4908,47 @@ class AgencyAccountAttachPayload(BaseModel):
 class AgencyAccountAccessPayload(BaseModel):
     user_id: int
     access_level: Literal["viewer", "manager", "admin"] = "viewer"
+
+
+class AgencyClientPayload(BaseModel):
+    client_user_id: int
+    default_rebate_percent: float = 3.0
+    status: Optional[str] = "active"
+
+
+class AgencyClientRatePayload(BaseModel):
+    platform: Literal["meta", "google", "tiktok", "yandex", "telegram", "monochrome"]
+    platform_fee_percent: Optional[float] = None
+    rebate_percent: float = 3.0
+
+
+class AgencyClientTransferPayload(BaseModel):
+    amount: float = Field(..., gt=0)
+    currency: str = "KZT"
+    note: Optional[str] = None
+
+
+class AgencyWalletAdjustPayload(BaseModel):
+    amount: float
+    currency: str = "KZT"
+    note: Optional[str] = None
+    type: Optional[str] = "manual_adjustment"
+
+
+class AgencyOwnAccountPayload(BaseModel):
+    platform: Literal["meta", "google", "tiktok", "yandex", "telegram", "monochrome"]
+    name: str
+    external_id: Optional[str] = None
+    account_code: Optional[str] = None
+    currency: str = "USD"
+    status: Optional[str] = "active"
+
+
+class AgencyOwnAccountFundingPayload(BaseModel):
+    amount: float = Field(..., gt=0)
+    currency: str = "KZT"
+    platform_fee_percent: float = 3.0
+    note: Optional[str] = None
 
 
 class FeeConfigPayload(BaseModel):
@@ -5309,7 +5572,7 @@ def _google_fetch_account_billing(customer_id: str, force_refresh: bool = False)
             "spend": None,
             "limit": None,
             "balance": None,
-            "error": "Google customer ID не задан или указан неверно",
+            "error": "Google customer ID РЅРµ Р·Р°РґР°РЅ РёР»Рё СѓРєР°Р·Р°РЅ РЅРµРІРµСЂРЅРѕ",
             "source": "google_ads_api",
             "updated_at": datetime.utcnow().isoformat() + "Z",
         }
@@ -5402,7 +5665,7 @@ def _tiktok_fetch_account_billing(advertiser_id: str, force_refresh: bool = Fals
             "spend": None,
             "limit": None,
             "balance": None,
-            "error": "TikTok advertiser_id не задан или указан неверно",
+            "error": "TikTok advertiser_id РЅРµ Р·Р°РґР°РЅ РёР»Рё СѓРєР°Р·Р°РЅ РЅРµРІРµСЂРЅРѕ",
             "source": "tiktok_api",
             "updated_at": datetime.utcnow().isoformat() + "Z",
         }
@@ -5886,6 +6149,19 @@ def _attach_topup_account_amount(rows: List[Dict[str, object]], include_rates: b
         amount_account_value = _num(payload.get("amount_account"), 0.0) or 0.0
         fx_rate_value = _num(payload.get("fx_rate"), None)
         fee_percent_value = _num(payload.get("fee_percent"), 0.0) or 0.0
+        platform_fee_percent_value = _num(payload.get("platform_fee_percent"), None)
+        if platform_fee_percent_value is None:
+            platform_fee_percent_value = fee_percent_value
+        agency_rebate_percent_value = _num(payload.get("agency_rebate_percent"), 0.0) or 0.0
+        total_fee_percent_value = fee_percent_value
+        if total_fee_percent_value <= 0 and (platform_fee_percent_value or agency_rebate_percent_value):
+            total_fee_percent_value = (platform_fee_percent_value or 0.0) + agency_rebate_percent_value
+        agency_rebate_amount_value = _num(payload.get("agency_rebate_amount"), None)
+        if agency_rebate_amount_value is None:
+            agency_rebate_amount_value = amount_input_value * (agency_rebate_percent_value / 100.0)
+        platform_fee_amount_value = amount_input_value * ((platform_fee_percent_value or 0.0) / 100.0)
+        total_fee_amount_value = amount_input_value * (total_fee_percent_value / 100.0)
+        vat_amount_value = amount_input_value * ((_num(payload.get("vat_percent"), 0.0) or 0.0) / 100.0)
         amount_account_kzt_value = _num(payload.get("amount_account_kzt"), 0.0) or 0.0
         input_currency = str(payload.get("currency") or "KZT").upper()
 
@@ -5910,8 +6186,17 @@ def _attach_topup_account_amount(rows: List[Dict[str, object]], include_rates: b
             elif amount_account_kzt_value > 0:
                 fee_base_kzt = amount_account_kzt_value
 
-        fee_amount_kzt = fee_base_kzt * (fee_percent_value / 100.0) if fee_base_kzt > 0 and fee_percent_value > 0 else 0.0
+        fee_amount_kzt = fee_base_kzt * ((platform_fee_percent_value or 0.0) / 100.0) if fee_base_kzt > 0 and (platform_fee_percent_value or 0.0) > 0 else 0.0
         payload["our_rate"] = our_rate
+        payload["platform_fee_percent"] = round(platform_fee_percent_value or 0.0, 4)
+        payload["agency_rebate_percent"] = round(agency_rebate_percent_value, 4)
+        payload["agency_rebate_amount"] = round(agency_rebate_amount_value or 0.0, 2)
+        payload["total_fee_percent"] = round(total_fee_percent_value, 4)
+        payload["platform_fee_amount"] = round(platform_fee_amount_value, 2)
+        payload["total_fee_amount"] = round(total_fee_amount_value, 2)
+        payload["vat_amount"] = round(vat_amount_value, 2)
+        payload["total_wallet_debit"] = round(amount_input_value + total_fee_amount_value + vat_amount_value, 2)
+        payload["topup_owner_type"] = "agency_client" if payload.get("agency_id") else "direct_client"
         payload["fee_base_kzt"] = round(fee_base_kzt, 2)
         payload["fx_profit_kzt"] = round(fx_profit_kzt, 2)
         payload["fee_amount_kzt"] = round(fee_amount_kzt, 2)
@@ -6177,12 +6462,12 @@ def _google_fetch_audience_age_gender(customer_id: str, date_from: str, date_to:
         503004: "45-54",
         503005: "55-64",
         503006: "65+",
-        503999: "Не определен",
+        503999: "РќРµ РѕРїСЂРµРґРµР»РµРЅ",
     }
     gender_labels = {
-        10: "Мужчины",
-        11: "Женщины",
-        20: "Не определен",
+        10: "РњСѓР¶С‡РёРЅС‹",
+        11: "Р–РµРЅС‰РёРЅС‹",
+        20: "РќРµ РѕРїСЂРµРґРµР»РµРЅ",
     }
 
     age_query = f"""
@@ -6245,11 +6530,11 @@ def _google_fetch_audience_device(customer_id: str, date_from: str, date_to: str
     client = _google_ads_client()
     ga_service = client.get_service("GoogleAdsService")
     device_labels = {
-        2: "Мобильные",
-        3: "Планшеты",
-        4: "Компьютеры",
+        2: "РњРѕР±РёР»СЊРЅС‹Рµ",
+        3: "РџР»Р°РЅС€РµС‚С‹",
+        4: "РљРѕРјРїСЊСЋС‚РµСЂС‹",
         5: "Connected TV",
-        6: "Прочие",
+        6: "РџСЂРѕС‡РёРµ",
     }
     query = f"""
         SELECT
@@ -6511,20 +6796,20 @@ def _format_ru_date(date_str: str) -> str:
     except Exception:
         return date_str
     months = [
-        "января",
-        "февраля",
-        "марта",
-        "апреля",
-        "мая",
-        "июня",
-        "июля",
-        "августа",
-        "сентября",
-        "октября",
-        "ноября",
-        "декабря",
+        "СЏРЅРІР°СЂСЏ",
+        "С„РµРІСЂР°Р»СЏ",
+        "РјР°СЂС‚Р°",
+        "Р°РїСЂРµР»СЏ",
+        "РјР°СЏ",
+        "РёСЋРЅСЏ",
+        "РёСЋР»СЏ",
+        "Р°РІРіСѓСЃС‚Р°",
+        "СЃРµРЅС‚СЏР±СЂСЏ",
+        "РѕРєС‚СЏР±СЂСЏ",
+        "РЅРѕСЏР±СЂСЏ",
+        "РґРµРєР°Р±СЂСЏ",
     ]
-    return f"{dt.day} {months[dt.month - 1]} {dt.year} г."
+    return f"{dt.day} {months[dt.month - 1]} {dt.year} Рі."
 
 
 def _wallet_invoice_page_html(
@@ -6539,22 +6824,22 @@ def _wallet_invoice_page_html(
     currency = request_row.get("currency") or "KZT"
     amount_words = _amount_to_words_ru(amount_val)
     date_ru = _format_ru_date(invoice_date)
-    company_name = company.get("name") or "—"
-    company_bin = company.get("bin") or "—"
+    company_name = company.get("name") or "вЂ”"
+    company_bin = company.get("bin") or "вЂ”"
     company_iin = company.get("iin") or ""
     company_address = company.get("legal_address") or company.get("factual_address") or ""
-    company_bank = company.get("bank") or "—"
-    company_iban = company.get("iban") or "—"
-    company_bic = company.get("bic") or "—"
-    company_kbe = company.get("kbe") or "—"
+    company_bank = company.get("bank") or "вЂ”"
+    company_iban = company.get("iban") or "вЂ”"
+    company_bic = company.get("bic") or "вЂ”"
+    company_kbe = company.get("kbe") or "вЂ”"
 
-    customer_name = customer.get("name") or "—"
-    customer_bin = customer.get("bin") or "—"
-    customer_address = customer.get("address") or "—"
+    customer_name = customer.get("name") or "вЂ”"
+    customer_bin = customer.get("bin") or "вЂ”"
+    customer_address = customer.get("address") or "вЂ”"
 
     purpose = (
-        f"За услуги по использованию Программного обеспечения Исполнителя \"{company_name}\" "
-        f"по счету {invoice_number} от {date_ru}, согласно Публичному договору возмездного оказания услуг от 22.04.2025 г."
+        f"Р—Р° СѓСЃР»СѓРіРё РїРѕ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЋ РџСЂРѕРіСЂР°РјРјРЅРѕРіРѕ РѕР±РµСЃРїРµС‡РµРЅРёСЏ РСЃРїРѕР»РЅРёС‚РµР»СЏ \"{company_name}\" "
+        f"РїРѕ СЃС‡РµС‚Сѓ {invoice_number} РѕС‚ {date_ru}, СЃРѕРіР»Р°СЃРЅРѕ РџСѓР±Р»РёС‡РЅРѕРјСѓ РґРѕРіРѕРІРѕСЂСѓ РІРѕР·РјРµР·РґРЅРѕРіРѕ РѕРєР°Р·Р°РЅРёСЏ СѓСЃР»СѓРі РѕС‚ 22.04.2025 Рі."
     )
 
     return f"""
@@ -6563,7 +6848,7 @@ def _wallet_invoice_page_html(
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Счет на оплату</title>
+    <title>РЎС‡РµС‚ РЅР° РѕРїР»Р°С‚Сѓ</title>
     <style>
       body {{
         font-family: "Arial", sans-serif;
@@ -6647,57 +6932,57 @@ def _wallet_invoice_page_html(
   </head>
   <body>
     <div class="page">
-      <div class="header">Образец платежного поручения</div>
+      <div class="header">РћР±СЂР°Р·РµС† РїР»Р°С‚РµР¶РЅРѕРіРѕ РїРѕСЂСѓС‡РµРЅРёСЏ</div>
       <table class="bank-table">
         <tr>
           <td rowspan="2">
-            Бенефициар:<br />
+            Р‘РµРЅРµС„РёС†РёР°СЂ:<br />
             {company_name}<br />
-            БИН: {company_bin}
+            Р‘РРќ: {company_bin}
           </td>
-          <td>ИИК<br />{company_iban}</td>
-          <td>КБе<br />{company_kbe}</td>
+          <td>РРРљ<br />{company_iban}</td>
+          <td>РљР‘Рµ<br />{company_kbe}</td>
         </tr>
         <tr>
-          <td>БИК<br />{company_bic}</td>
-          <td>Код назначения платежа<br />853</td>
+          <td>Р‘РРљ<br />{company_bic}</td>
+          <td>РљРѕРґ РЅР°Р·РЅР°С‡РµРЅРёСЏ РїР»Р°С‚РµР¶Р°<br />853</td>
         </tr>
         <tr>
-          <td colspan="3">Банк бенефициара: {company_bank}</td>
+          <td colspan="3">Р‘Р°РЅРє Р±РµРЅРµС„РёС†РёР°СЂР°: {company_bank}</td>
         </tr>
       </table>
 
-      <div class="subline">Счет действителен в течение 5 рабочих дней</div>
+      <div class="subline">РЎС‡РµС‚ РґРµР№СЃС‚РІРёС‚РµР»РµРЅ РІ С‚РµС‡РµРЅРёРµ 5 СЂР°Р±РѕС‡РёС… РґРЅРµР№</div>
 
-      <div class="section-title">Счет на оплату № {invoice_number} от {date_ru}</div>
+      <div class="section-title">РЎС‡РµС‚ РЅР° РѕРїР»Р°С‚Сѓ в„– {invoice_number} РѕС‚ {date_ru}</div>
 
       <div class="subline">
-        Исполнитель: БИН / ИИН {company_bin}{f", {company_iin}" if company_iin else ""}, {company_name}, {company_address}
+        РСЃРїРѕР»РЅРёС‚РµР»СЊ: Р‘РРќ / РРРќ {company_bin}{f", {company_iin}" if company_iin else ""}, {company_name}, {company_address}
       </div>
       <div class="subline">
-        Заказчик: БИН / ИИН {customer_bin}, {customer_name}, {customer_address}
+        Р—Р°РєР°Р·С‡РёРє: Р‘РРќ / РРРќ {customer_bin}, {customer_name}, {customer_address}
       </div>
-      <div class="subline">Договор: Публичный договор возмездного оказания услуг от 22.04.2025 г.</div>
+      <div class="subline">Р”РѕРіРѕРІРѕСЂ: РџСѓР±Р»РёС‡РЅС‹Р№ РґРѕРіРѕРІРѕСЂ РІРѕР·РјРµР·РґРЅРѕРіРѕ РѕРєР°Р·Р°РЅРёСЏ СѓСЃР»СѓРі РѕС‚ 22.04.2025 Рі.</div>
 
-      <div class="alert">Внимание! В назначение платежа скопируйте данные, указанные ниже.</div>
+      <div class="alert">Р’РЅРёРјР°РЅРёРµ! Р’ РЅР°Р·РЅР°С‡РµРЅРёРµ РїР»Р°С‚РµР¶Р° СЃРєРѕРїРёСЂСѓР№С‚Рµ РґР°РЅРЅС‹Рµ, СѓРєР°Р·Р°РЅРЅС‹Рµ РЅРёР¶Рµ.</div>
       <div class="purpose">{purpose}</div>
 
       <table class="items">
         <thead>
           <tr>
-            <th>№</th>
-            <th>Наименование</th>
-            <th>Ед.</th>
-            <th>Кол-во</th>
-            <th>Цена</th>
-            <th>Сумма</th>
+            <th>в„–</th>
+            <th>РќР°РёРјРµРЅРѕРІР°РЅРёРµ</th>
+            <th>Р•Рґ.</th>
+            <th>РљРѕР»-РІРѕ</th>
+            <th>Р¦РµРЅР°</th>
+            <th>РЎСѓРјРјР°</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td>1</td>
-            <td>За услуги по использованию Программного обеспечения Исполнителя "{company_name}"</td>
-            <td>услуга</td>
+            <td>Р—Р° СѓСЃР»СѓРіРё РїРѕ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЋ РџСЂРѕРіСЂР°РјРјРЅРѕРіРѕ РѕР±РµСЃРїРµС‡РµРЅРёСЏ РСЃРїРѕР»РЅРёС‚РµР»СЏ "{company_name}"</td>
+            <td>СѓСЃР»СѓРіР°</td>
             <td>1</td>
             <td>{amount}</td>
             <td>{amount}</td>
@@ -6705,11 +6990,11 @@ def _wallet_invoice_page_html(
         </tbody>
       </table>
 
-      <div class="total">Итого: {amount} {currency}</div>
+      <div class="total">РС‚РѕРіРѕ: {amount} {currency}</div>
 
       <div class="footnote">
-        Всего наименований 1, на сумму {amount} {currency}<br />
-        Всего к оплате: {amount_words} {currency}. Услуги Исполнителя НДС не облагаются (п.п. 46 ст. 394 Налогового кодекса Казахстана).
+        Р’СЃРµРіРѕ РЅР°РёРјРµРЅРѕРІР°РЅРёР№ 1, РЅР° СЃСѓРјРјСѓ {amount} {currency}<br />
+        Р’СЃРµРіРѕ Рє РѕРїР»Р°С‚Рµ: {amount_words} {currency}. РЈСЃР»СѓРіРё РСЃРїРѕР»РЅРёС‚РµР»СЏ РќР”РЎ РЅРµ РѕР±Р»Р°РіР°СЋС‚СЃСЏ (Рї.Рї. 46 СЃС‚. 394 РќР°Р»РѕРіРѕРІРѕРіРѕ РєРѕРґРµРєСЃР° РљР°Р·Р°С…СЃС‚Р°РЅР°).
       </div>
 
       <div class="sign"></div>
@@ -7081,7 +7366,7 @@ def list_notifications(current_user=Depends(get_current_user)):
                 "type": "topup",
                 "id": row["id"],
                 "created_at": row["created_at"],
-                "title": "Пополнение",
+                "title": "РџРѕРїРѕР»РЅРµРЅРёРµ",
                 "status": row["status"],
                 "amount": row["amount_net"] or row["amount_input"],
                 "currency": row["currency"],
@@ -7093,7 +7378,7 @@ def list_notifications(current_user=Depends(get_current_user)):
                 "type": "account_request",
                 "id": row["id"],
                 "created_at": row["created_at"],
-                "title": "Аккаунт открыт",
+                "title": "РђРєРєР°СѓРЅС‚ РѕС‚РєСЂС‹С‚",
                 "status": row["status"],
                 "platform": row["platform"],
                 "name": row["name"],
@@ -7156,7 +7441,7 @@ def admin_notifications(admin_user=Depends(get_admin_user)):
                 "type": "account_request",
                 "id": row["id"],
                 "created_at": row["created_at"],
-                "title": "Новая заявка",
+                "title": "РќРѕРІР°СЏ Р·Р°СЏРІРєР°",
                 "status": row["status"],
                 "platform": row["platform"],
                 "name": row["name"],
@@ -7169,7 +7454,7 @@ def admin_notifications(admin_user=Depends(get_admin_user)):
                 "type": "topup",
                 "id": row["id"],
                 "created_at": row["created_at"],
-                "title": "Новая заявка на пополнение",
+                "title": "РќРѕРІР°СЏ Р·Р°СЏРІРєР° РЅР° РїРѕРїРѕР»РЅРµРЅРёРµ",
                 "status": row["status"],
                 "amount": row["amount_net"] or row["amount_input"],
                 "currency": row["currency"],
@@ -7569,11 +7854,11 @@ def meta_insights(
         "clicks": total_clicks,
         "currency": currency or "USD",
     }
-    status = "Данные обновлены."
+    status = "Р”Р°РЅРЅС‹Рµ РѕР±РЅРѕРІР»РµРЅС‹."
     if errors and not campaigns:
         status = "Meta token expired or Meta API is unavailable."
     elif errors:
-        status = f"Часть Meta аккаунтов недоступна: {len(errors)}"
+        status = f"Р§Р°СЃС‚СЊ Meta Р°РєРєР°СѓРЅС‚РѕРІ РЅРµРґРѕСЃС‚СѓРїРЅР°: {len(errors)}"
     return {"summary": summary, "campaigns": campaigns, "status": status}
 
 
@@ -7644,11 +7929,11 @@ def google_insights(
         "conversions": total_conversions,
         "currency": currency or "USD",
     }
-    status = "Данные обновлены."
+    status = "Р”Р°РЅРЅС‹Рµ РѕР±РЅРѕРІР»РµРЅС‹."
     if errors and not campaigns:
         status = "Google token expired or Google Ads API is unavailable."
     elif errors:
-        status = f"Часть Google аккаунтов недоступна: {len(errors)}"
+        status = f"Р§Р°СЃС‚СЊ Google Р°РєРєР°СѓРЅС‚РѕРІ РЅРµРґРѕСЃС‚СѓРїРЅР°: {len(errors)}"
     return {"summary": summary, "campaigns": campaigns, "status": status}
 
 
@@ -7702,7 +7987,7 @@ def tiktok_insights(
             if account_id:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Для аккаунта TikTok id={acc.get('id')} не указан advertiser id (external_id/account_code).",
+                    detail=f"Р”Р»СЏ Р°РєРєР°СѓРЅС‚Р° TikTok id={acc.get('id')} РЅРµ СѓРєР°Р·Р°РЅ advertiser id (external_id/account_code).",
                 )
             continue
         summary_currency = summary_currency or acc.get("currency")
@@ -8292,9 +8577,9 @@ def _dashboard_export_collect_audience_rows(payload: Dict[str, object], group: s
                 if not isinstance(row, dict):
                     continue
                 if platform == "meta":
-                    label = f"{row.get('age') or '—'} / {row.get('gender') or '—'}"
+                    label = f"{row.get('age') or 'вЂ”'} / {row.get('gender') or 'вЂ”'}"
                 else:
-                    label = f"{row.get('age_range') or '—'} / {row.get('gender') or '—'}"
+                    label = f"{row.get('age_range') or 'вЂ”'} / {row.get('gender') or 'вЂ”'}"
                 rows.append(
                     {
                         "platform": platform,
@@ -8308,20 +8593,20 @@ def _dashboard_export_collect_audience_rows(payload: Dict[str, object], group: s
             if platform == "meta":
                 for row in account.get("country") or []:
                     if isinstance(row, dict):
-                        rows.append({"platform": platform, "segment": f"Country: {row.get('country') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                        rows.append({"platform": platform, "segment": f"Country: {row.get('country') or 'вЂ”'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
                 for row in account.get("region") or []:
                     if isinstance(row, dict):
-                        rows.append({"platform": platform, "segment": f"Region: {row.get('region') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                        rows.append({"platform": platform, "segment": f"Region: {row.get('region') or 'вЂ”'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
             else:
                 for row in account.get("country") or []:
                     if isinstance(row, dict):
-                        rows.append({"platform": platform, "segment": f"Country: {row.get('geo') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                        rows.append({"platform": platform, "segment": f"Country: {row.get('geo') or 'вЂ”'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
                 for row in account.get("region") or []:
                     if isinstance(row, dict):
-                        rows.append({"platform": platform, "segment": f"Region: {row.get('geo') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                        rows.append({"platform": platform, "segment": f"Region: {row.get('geo') or 'вЂ”'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
                 for row in account.get("city") or []:
                     if isinstance(row, dict):
-                        rows.append({"platform": platform, "segment": f"City: {row.get('geo') or '—'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
+                        rows.append({"platform": platform, "segment": f"City: {row.get('geo') or 'вЂ”'}", "impressions": row.get("impressions") or 0, "clicks": row.get("clicks") or 0, "spend": row.get("spend") or 0})
         elif group == "device":
             source_rows = []
             if platform == "meta":
@@ -8332,7 +8617,7 @@ def _dashboard_export_collect_audience_rows(payload: Dict[str, object], group: s
             for row in source_rows:
                 if not isinstance(row, dict):
                     continue
-                segment = row.get("impression_device") or row.get("device_platform") or row.get("device") or "—"
+                segment = row.get("impression_device") or row.get("device_platform") or row.get("device") or "вЂ”"
                 rows.append(
                     {
                         "platform": platform,
@@ -8386,7 +8671,7 @@ def _dashboard_export_bar_rows(rows: List[Dict[str, object]], metric: str) -> Li
             value = float(row.get(metric) or 0)
         except Exception:
             value = 0.0
-        points.append({"date": row.get("date") or "—", "value": value})
+        points.append({"date": row.get("date") or "вЂ”", "value": value})
     max_value = max([point["value"] for point in points], default=0.0) or 1.0
     for point in points:
         point["width"] = (point["value"] / max_value) * 100.0
@@ -8427,7 +8712,7 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
         for row in campaigns[:8]:
             rows_html += f"""
             <tr>
-              <td>{html.escape(str(row.get('campaign_name') or row.get('campaign_id') or '—'))}</td>
+              <td>{html.escape(str(row.get('campaign_name') or row.get('campaign_id') or 'вЂ”'))}</td>
               <td>{html.escape(_dashboard_export_fmt_money(row.get('spend') or 0, row.get('currency') or row.get('account_currency') or summary.get('currency') or currency_default))}</td>
               <td>{html.escape(_dashboard_export_fmt_int(row.get('impressions') or 0))}</td>
               <td>{html.escape(_dashboard_export_fmt_int(row.get('clicks') or 0))}</td>
@@ -8435,26 +8720,26 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
             </tr>
             """
         if not rows_html:
-            rows_html = '<tr><td colspan="5">Нет данных</td></tr>'
+            rows_html = '<tr><td colspan="5">РќРµС‚ РґР°РЅРЅС‹С…</td></tr>'
         return f"""
         <section class="section">
           <div class="section-head">
             <h2>{html.escape(title)}</h2>
-            <div class="section-note">{html.escape(str(error or 'Данные обновлены.'))}</div>
+            <div class="section-note">{html.escape(str(error or 'Р”Р°РЅРЅС‹Рµ РѕР±РЅРѕРІР»РµРЅС‹.'))}</div>
           </div>
           <div class="mini-kpis">
-            {summary_card('Расход', _dashboard_export_fmt_money(summary.get('spend') or 0, summary.get('currency') or currency_default), 'Итог по платформе')}
-            {summary_card('Показы', _dashboard_export_fmt_int(summary.get('impressions') or 0), 'За выбранный период')}
-            {summary_card('Клики', _dashboard_export_fmt_int(summary.get('clicks') or 0), 'Клики и переходы')}
-            {summary_card('CTR', _dashboard_export_fmt_pct(summary.get('ctr') or 0), 'Средний CTR')}
+            {summary_card('Р Р°СЃС…РѕРґ', _dashboard_export_fmt_money(summary.get('spend') or 0, summary.get('currency') or currency_default), 'РС‚РѕРі РїРѕ РїР»Р°С‚С„РѕСЂРјРµ')}
+            {summary_card('РџРѕРєР°Р·С‹', _dashboard_export_fmt_int(summary.get('impressions') or 0), 'Р—Р° РІС‹Р±СЂР°РЅРЅС‹Р№ РїРµСЂРёРѕРґ')}
+            {summary_card('РљР»РёРєРё', _dashboard_export_fmt_int(summary.get('clicks') or 0), 'РљР»РёРєРё Рё РїРµСЂРµС…РѕРґС‹')}
+            {summary_card('CTR', _dashboard_export_fmt_pct(summary.get('ctr') or 0), 'РЎСЂРµРґРЅРёР№ CTR')}
           </div>
           <table class="report-table">
             <thead>
               <tr>
-                <th>Кампания</th>
-                <th>Расход</th>
-                <th>Показы</th>
-                <th>Клики</th>
+                <th>РљР°РјРїР°РЅРёСЏ</th>
+                <th>Р Р°СЃС…РѕРґ</th>
+                <th>РџРѕРєР°Р·С‹</th>
+                <th>РљР»РёРєРё</th>
                 <th>CTR</th>
               </tr>
             </thead>
@@ -8471,14 +8756,14 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
             content += f"""
             <div class="segment-row">
               <div class="segment-head">
-                <span>{html.escape(str(row.get('label') or '—'))}</span>
-                <strong>{html.escape(value_text)} · {html.escape(f"{float(row.get('share') or 0) * 100:.1f}%")}</strong>
+                <span>{html.escape(str(row.get('label') or 'вЂ”'))}</span>
+                <strong>{html.escape(value_text)} В· {html.escape(f"{float(row.get('share') or 0) * 100:.1f}%")}</strong>
               </div>
               <div class="segment-bar"><span style="width:{width:.2f}%"></span></div>
             </div>
             """
         if not content:
-            content = '<div class="empty">Нет данных</div>'
+            content = '<div class="empty">РќРµС‚ РґР°РЅРЅС‹С…</div>'
         return f"""
         <section class="section section-half">
           <div class="section-head">
@@ -8492,29 +8777,29 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
     for row in daily_points[:18]:
         daily_rows_html += f"""
         <tr>
-          <td>{html.escape(str(row.get('date') or '—'))}</td>
+          <td>{html.escape(str(row.get('date') or 'вЂ”'))}</td>
           <td>{html.escape(_dashboard_export_fmt_money(row.get('spend') or 0, 'USD'))}</td>
           <td>{html.escape(_dashboard_export_fmt_int(row.get('impressions') or 0))}</td>
           <td>{html.escape(_dashboard_export_fmt_int(row.get('clicks') or 0))}</td>
         </tr>
         """
     if not daily_rows_html:
-        daily_rows_html = '<tr><td colspan="4">Нет данных</td></tr>'
+        daily_rows_html = '<tr><td colspan="4">РќРµС‚ РґР°РЅРЅС‹С…</td></tr>'
 
-    trend_metric = str(account_trend.get("metric_label") or "Показы")
+    trend_metric = str(account_trend.get("metric_label") or "РџРѕРєР°Р·С‹")
     trend_rows_html = ""
     for row in account_trend.get("points") or []:
         value = row.get("value") or 0
         value_text = _dashboard_export_fmt_money(value, "USD") if account_trend.get("metric") == "spend" else _dashboard_export_fmt_int(value)
         trend_rows_html += f"""
         <div class="trend-row">
-          <span>{html.escape(str(row.get('date') or '—'))}</span>
+          <span>{html.escape(str(row.get('date') or 'вЂ”'))}</span>
           <div class="trend-bar"><span style="width:{float(row.get('width') or 0):.2f}%"></span></div>
           <strong>{html.escape(value_text)}</strong>
         </div>
         """
     if not trend_rows_html:
-        trend_rows_html = '<div class="empty">Нет данных</div>'
+        trend_rows_html = '<div class="empty">РќРµС‚ РґР°РЅРЅС‹С…</div>'
 
     return f"""
     <!doctype html>
@@ -8675,19 +8960,19 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
       <body>
         <div class="page">
           <section class="hero">
-            <div class="eyebrow">Envidicy · Dashboard Export</div>
-            <h1>Отчет по эффективности кампаний</h1>
+            <div class="eyebrow">Envidicy В· Dashboard Export</div>
+            <h1>РћС‚С‡РµС‚ РїРѕ СЌС„С„РµРєС‚РёРІРЅРѕСЃС‚Рё РєР°РјРїР°РЅРёР№</h1>
             <div class="hero-meta">
-              <span class="pill">Период: {html.escape(str(payload.get('date_from') or '—'))} — {html.escape(str(payload.get('date_to') or '—'))}</span>
-              <span class="pill">Сформирован: {html.escape(str(generated_at))}</span>
+              <span class="pill">РџРµСЂРёРѕРґ: {html.escape(str(payload.get('date_from') or 'вЂ”'))} вЂ” {html.escape(str(payload.get('date_to') or 'вЂ”'))}</span>
+              <span class="pill">РЎС„РѕСЂРјРёСЂРѕРІР°РЅ: {html.escape(str(generated_at))}</span>
             </div>
           </section>
 
           <div class="kpi-grid">
-            {summary_card('Расход', _dashboard_export_fmt_money(total_spend, 'USD'), 'По всем подключенным платформам')}
-            {summary_card('Показы', _dashboard_export_fmt_int(total_impressions), 'Суммарный delivery')}
-            {summary_card('Клики', _dashboard_export_fmt_int(total_clicks), 'Суммарный clickstream')}
-            {summary_card('Аккаунты', _dashboard_export_fmt_int(payload.get('account_count') or 0), 'Активные кабинеты в отчете')}
+            {summary_card('Р Р°СЃС…РѕРґ', _dashboard_export_fmt_money(total_spend, 'USD'), 'РџРѕ РІСЃРµРј РїРѕРґРєР»СЋС‡РµРЅРЅС‹Рј РїР»Р°С‚С„РѕСЂРјР°Рј')}
+            {summary_card('РџРѕРєР°Р·С‹', _dashboard_export_fmt_int(total_impressions), 'РЎСѓРјРјР°СЂРЅС‹Р№ delivery')}
+            {summary_card('РљР»РёРєРё', _dashboard_export_fmt_int(total_clicks), 'РЎСѓРјРјР°СЂРЅС‹Р№ clickstream')}
+            {summary_card('РђРєРєР°СѓРЅС‚С‹', _dashboard_export_fmt_int(payload.get('account_count') or 0), 'РђРєС‚РёРІРЅС‹Рµ РєР°Р±РёРЅРµС‚С‹ РІ РѕС‚С‡РµС‚Рµ')}
           </div>
 
           {platform_block('Meta Insights', meta, 'USD')}
@@ -8696,15 +8981,15 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
 
           <section class="section">
             <div class="section-head">
-              <h2>Динамика по дням</h2>
+              <h2>Р”РёРЅР°РјРёРєР° РїРѕ РґРЅСЏРј</h2>
             </div>
             <table class="report-table">
               <thead>
                 <tr>
-                  <th>Дата</th>
-                  <th>Расход</th>
-                  <th>Показы</th>
-                  <th>Клики</th>
+                  <th>Р”Р°С‚Р°</th>
+                  <th>Р Р°СЃС…РѕРґ</th>
+                  <th>РџРѕРєР°Р·С‹</th>
+                  <th>РљР»РёРєРё</th>
                 </tr>
               </thead>
               <tbody>{daily_rows_html}</tbody>
@@ -8713,17 +8998,17 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
 
           <section class="section">
             <div class="section-head">
-              <h2>Динамика по аккаунту</h2>
-              <div class="section-note">{html.escape(str(account_trend.get('title') or 'Выбранный аккаунт'))}</div>
+              <h2>Р”РёРЅР°РјРёРєР° РїРѕ Р°РєРєР°СѓРЅС‚Сѓ</h2>
+              <div class="section-note">{html.escape(str(account_trend.get('title') or 'Р’С‹Р±СЂР°РЅРЅС‹Р№ Р°РєРєР°СѓРЅС‚'))}</div>
             </div>
-            <div class="section-note" style="margin-bottom:10px;">Метрика: {html.escape(trend_metric)}</div>
+            <div class="section-note" style="margin-bottom:10px;">РњРµС‚СЂРёРєР°: {html.escape(trend_metric)}</div>
             {trend_rows_html}
           </section>
 
           <div class="section-grid">
-            {segment_block('Аудитория · Возраст / Пол', age_items)}
-            {segment_block('Аудитория · Гео', geo_items)}
-            {segment_block('Аудитория · Девайсы', device_items)}
+            {segment_block('РђСѓРґРёС‚РѕСЂРёСЏ В· Р’РѕР·СЂР°СЃС‚ / РџРѕР»', age_items)}
+            {segment_block('РђСѓРґРёС‚РѕСЂРёСЏ В· Р“РµРѕ', geo_items)}
+            {segment_block('РђСѓРґРёС‚РѕСЂРёСЏ В· Р”РµРІР°Р№СЃС‹', device_items)}
           </div>
         </div>
       </body>
@@ -8856,8 +9141,8 @@ def dashboard_export_pdf(
             "daily_points": daily_points,
             "account_trend": {
                 "metric": account_trend_metric,
-                "metric_label": "Клики" if account_trend_metric == "clicks" else "Расход" if account_trend_metric == "spend" else "Показы",
-                "title": selected_trend.get("name") if isinstance(selected_trend, dict) else "Нет данных",
+                "metric_label": "РљР»РёРєРё" if account_trend_metric == "clicks" else "Р Р°СЃС…РѕРґ" if account_trend_metric == "spend" else "РџРѕРєР°Р·С‹",
+                "title": selected_trend.get("name") if isinstance(selected_trend, dict) else "РќРµС‚ РґР°РЅРЅС‹С…",
                 "points": trend_points[:20],
             },
             "audience_age": _dashboard_export_aggregate_segments(age_rows, audience_age_platform),
@@ -9318,13 +9603,13 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
         _send_telegram_alert(
             "\n".join(
                 [
-                    "🧾 <b>Запрос на пополнение кошелька</b>",
+                    "рџ§ѕ <b>Р—Р°РїСЂРѕСЃ РЅР° РїРѕРїРѕР»РЅРµРЅРёРµ РєРѕС€РµР»СЊРєР°</b>",
                     f"ID: <code>{request_id}</code>",
-                    f"Пользователь: <code>{current_user['email']}</code> (id={current_user['id']})",
-                    f"Сумма: <b>{payload.amount:.2f} {payload.currency}</b>",
-                    f"Контрагент: <b>{client_name or '—'}</b>",
-                    f"БИН/ИИН: <code>{client_bin or '—'}</code>",
-                    f"Order Ref: <code>{payload.order_ref or '—'}</code>",
+                    f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ: <code>{current_user['email']}</code> (id={current_user['id']})",
+                    f"РЎСѓРјРјР°: <b>{payload.amount:.2f} {payload.currency}</b>",
+                    f"РљРѕРЅС‚СЂР°РіРµРЅС‚: <b>{client_name or 'вЂ”'}</b>",
+                    f"Р‘РРќ/РРРќ: <code>{client_bin or 'вЂ”'}</code>",
+                    f"Order Ref: <code>{payload.order_ref or 'вЂ”'}</code>",
                 ]
             )
         )
@@ -9411,7 +9696,7 @@ def wallet_topup_invoice_page(
         amount = _format_amount(amount_val)
         currency = req.get("currency") or "KZT"
         amount_words = _amount_to_words_ru(amount_val)
-        date_str = f"{date_str} г."
+        date_str = f"{date_str} Рі."
         tax_mode = _normalize_tax_mode(req.get("tax_mode"), "without_vat")
         vat_rate = _normalize_vat_rate_for_mode(tax_mode, req.get("vat_rate"))
         tax = _invoice_tax_breakdown(amount_val, tax_mode, vat_rate)
@@ -9420,18 +9705,18 @@ def wallet_topup_invoice_page(
         company = _request_issuer_snapshot(req, issuer_profile)
         company_name = company.get("name") or BENEFICIARY["name"]
         description = (
-            f"За услуги по использованию Программного обеспечения Исполнителя "
-            f"\"{company_name}\" по счету {number} от {dt.strftime('%d.%m.%Y')} г."
+            f"Р—Р° СѓСЃР»СѓРіРё РїРѕ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЋ РџСЂРѕРіСЂР°РјРјРЅРѕРіРѕ РѕР±РµСЃРїРµС‡РµРЅРёСЏ РСЃРїРѕР»РЅРёС‚РµР»СЏ "
+            f"\"{company_name}\" РїРѕ СЃС‡РµС‚Сѓ {number} РѕС‚ {dt.strftime('%d.%m.%Y')} Рі."
         )
         contract_number = (req.get("contract_number") or "").strip()
         contract_date = (req.get("contract_date") or "").strip()
-        contract_note = "Публичный договор возмездного оказания услуг от 22.04.2025 г."
+        contract_note = "РџСѓР±Р»РёС‡РЅС‹Р№ РґРѕРіРѕРІРѕСЂ РІРѕР·РјРµР·РґРЅРѕРіРѕ РѕРєР°Р·Р°РЅРёСЏ СѓСЃР»СѓРі РѕС‚ 22.04.2025 Рі."
         if contract_number and contract_date:
-            contract_note = f"Договор № {contract_number} от {contract_date}"
+            contract_note = f"Р”РѕРіРѕРІРѕСЂ в„– {contract_number} РѕС‚ {contract_date}"
         elif contract_number:
-            contract_note = f"Договор № {contract_number}"
+            contract_note = f"Р”РѕРіРѕРІРѕСЂ в„– {contract_number}"
         elif contract_date:
-            contract_note = f"Договор от {contract_date}"
+            contract_note = f"Р”РѕРіРѕРІРѕСЂ РѕС‚ {contract_date}"
         beneficiary_bin = company.get("bin") or company.get("iin") or BENEFICIARY["bin"]
         payload = {
             "request_id": request_id,
@@ -9445,9 +9730,9 @@ def wallet_topup_invoice_page(
             "beneficiary_kbe": company.get("kbe") or BENEFICIARY["kbe"],
             "beneficiary_address": company.get("legal_address") or company.get("factual_address") or "",
             "payment_code": "853",
-            "payer_name": req.get("client_name") or "Плательщик не указан",
-            "payer_bin": req.get("client_bin") or "ИИН/БИН не указан",
-            "payer_address": req.get("client_address") or "Адрес не указан",
+            "payer_name": req.get("client_name") or "РџР»Р°С‚РµР»СЊС‰РёРє РЅРµ СѓРєР°Р·Р°РЅ",
+            "payer_bin": req.get("client_bin") or "РРРќ/Р‘РРќ РЅРµ СѓРєР°Р·Р°РЅ",
+            "payer_address": req.get("client_address") or "РђРґСЂРµСЃ РЅРµ СѓРєР°Р·Р°РЅ",
             "description": description,
             "contract_note": contract_note,
             "amount": amount,
@@ -9530,7 +9815,7 @@ def wallet_topup_invoice_generated_pdf(
                 dt = datetime.utcnow()
         else:
             dt = datetime.utcnow()
-        date_str = _format_ru_date(dt.isoformat()) + " г."
+        date_str = _format_ru_date(dt.isoformat()) + " Рі."
         amount_val = float(req.get("amount") or 0)
         amount = _format_amount(amount_val)
         currency = req.get("currency") or "KZT"
@@ -9543,18 +9828,18 @@ def wallet_topup_invoice_generated_pdf(
         company = _request_issuer_snapshot(req, issuer_profile)
         beneficiary_bin = company.get("bin") or company.get("iin") or BENEFICIARY["bin"]
         description = (
-            f"За услуги по использованию Программного обеспечения Исполнителя "
-            f"\"{company.get('name') or BENEFICIARY['name']}\" по счету {number} от {dt.strftime('%d.%m.%Y')} г."
+            f"Р—Р° СѓСЃР»СѓРіРё РїРѕ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЋ РџСЂРѕРіСЂР°РјРјРЅРѕРіРѕ РѕР±РµСЃРїРµС‡РµРЅРёСЏ РСЃРїРѕР»РЅРёС‚РµР»СЏ "
+            f"\"{company.get('name') or BENEFICIARY['name']}\" РїРѕ СЃС‡РµС‚Сѓ {number} РѕС‚ {dt.strftime('%d.%m.%Y')} Рі."
         )
         contract_number = (req.get("contract_number") or "").strip()
         contract_date = (req.get("contract_date") or "").strip()
-        contract_note = "Публичный договор возмездного оказания услуг от 22.04.2025 г."
+        contract_note = "РџСѓР±Р»РёС‡РЅС‹Р№ РґРѕРіРѕРІРѕСЂ РІРѕР·РјРµР·РґРЅРѕРіРѕ РѕРєР°Р·Р°РЅРёСЏ СѓСЃР»СѓРі РѕС‚ 22.04.2025 Рі."
         if contract_number and contract_date:
-            contract_note = f"Договор № {contract_number} от {contract_date}"
+            contract_note = f"Р”РѕРіРѕРІРѕСЂ в„– {contract_number} РѕС‚ {contract_date}"
         elif contract_number:
-            contract_note = f"Договор № {contract_number}"
+            contract_note = f"Р”РѕРіРѕРІРѕСЂ в„– {contract_number}"
         elif contract_date:
-            contract_note = f"Договор от {contract_date}"
+            contract_note = f"Р”РѕРіРѕРІРѕСЂ РѕС‚ {contract_date}"
         payload = {
             "request_id": request_id,
             "number": number,
@@ -9567,9 +9852,9 @@ def wallet_topup_invoice_generated_pdf(
             "beneficiary_kbe": company.get("kbe") or BENEFICIARY["kbe"],
             "beneficiary_address": company.get("legal_address") or company.get("factual_address") or "",
             "payment_code": "853",
-            "payer_name": req.get("client_name") or "Плательщик не указан",
-            "payer_bin": req.get("client_bin") or "ИИН/БИН не указан",
-            "payer_address": req.get("client_address") or "Адрес не указан",
+            "payer_name": req.get("client_name") or "РџР»Р°С‚РµР»СЊС‰РёРє РЅРµ СѓРєР°Р·Р°РЅ",
+            "payer_bin": req.get("client_bin") or "РРРќ/Р‘РРќ РЅРµ СѓРєР°Р·Р°РЅ",
+            "payer_address": req.get("client_address") or "РђРґСЂРµСЃ РЅРµ СѓРєР°Р·Р°РЅ",
             "description": description,
             "contract_note": contract_note,
             "amount": amount,
@@ -9919,11 +10204,11 @@ def create_account_request(payload: AccountRequestCreate, current_user=Depends(g
         _send_telegram_alert(
             "\n".join(
                 [
-                    "🆕 <b>Заявка на открытие аккаунта</b>",
+                    "рџ†• <b>Р—Р°СЏРІРєР° РЅР° РѕС‚РєСЂС‹С‚РёРµ Р°РєРєР°СѓРЅС‚Р°</b>",
                     f"ID: <code>{request_id}</code>",
-                    f"Пользователь: <code>{current_user['email']}</code> (id={current_user['id']})",
-                    f"Платформа: <b>{payload.platform}</b>",
-                    f"Название: <b>{payload.name}</b>",
+                    f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ: <code>{current_user['email']}</code> (id={current_user['id']})",
+                    f"РџР»Р°С‚С„РѕСЂРјР°: <b>{payload.platform}</b>",
+                    f"РќР°Р·РІР°РЅРёРµ: <b>{payload.name}</b>",
                 ]
             )
         )
@@ -10158,6 +10443,15 @@ def admin_get_agency_detail(agency_id: int, admin_user=Depends(get_admin_user)):
             """,
             (agency_id,),
         ).fetchall()
+        own_accounts = conn.execute(
+            """
+            SELECT *
+            FROM ad_accounts
+            WHERE owner_type='agency' AND agency_id=?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (agency_id,),
+        ).fetchall()
         accesses = conn.execute(
             """
             SELECT
@@ -10175,11 +10469,54 @@ def admin_get_agency_detail(agency_id: int, admin_user=Depends(get_admin_user)):
             """,
             (agency_id,),
         ).fetchall()
+        clients = conn.execute(
+            """
+            SELECT
+              ac.*,
+              u.email,
+              w.balance as wallet_balance,
+              w.currency as wallet_currency
+            FROM agency_clients ac
+            JOIN users u ON u.id = ac.client_user_id
+            LEFT JOIN wallets w ON w.user_id = ac.client_user_id
+            WHERE ac.agency_id=?
+            ORDER BY ac.created_at DESC, ac.id DESC
+            """,
+            (agency_id,),
+        ).fetchall()
+        rates = conn.execute(
+            """
+            SELECT acr.*, u.email
+            FROM agency_client_rates acr
+            JOIN users u ON u.id = acr.client_user_id
+            WHERE acr.agency_id=?
+            ORDER BY u.email ASC, acr.platform ASC
+            """,
+            (agency_id,),
+        ).fetchall()
+        wallet = _get_or_create_agency_wallet(conn, agency_id)
+        ledger = conn.execute(
+            """
+            SELECT awt.*, u.email as client_email, a.name as account_name, a.platform as account_platform
+            FROM agency_wallet_transactions awt
+            LEFT JOIN users u ON u.id = awt.client_user_id
+            LEFT JOIN ad_accounts a ON a.id = awt.account_id
+            WHERE awt.agency_id=?
+            ORDER BY awt.created_at DESC, awt.id DESC
+            LIMIT 100
+            """,
+            (agency_id,),
+        ).fetchall()
         return {
             "agency": dict(agency),
             "members": [dict(row) for row in members],
             "accounts": [dict(row) for row in accounts],
+            "own_accounts": [dict(row) for row in own_accounts],
             "accesses": [dict(row) for row in accesses],
+            "clients": [dict(row) for row in clients],
+            "rates": [dict(row) for row in rates],
+            "wallet": dict(wallet),
+            "ledger": [dict(row) for row in ledger],
         }
 
 
@@ -10201,6 +10538,323 @@ def admin_add_agency_member(agency_id: int, payload: AgencyMemberCreatePayload, 
         )
         conn.commit()
         return {"status": "ok", "agency_id": agency_id, "user_id": payload.user_id, "role": payload.role}
+
+
+@app.post("/admin/agencies/{agency_id}/clients")
+def admin_add_agency_client(agency_id: int, payload: AgencyClientPayload, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        agency = conn.execute("SELECT id FROM agencies WHERE id=?", (agency_id,)).fetchone()
+        if not agency:
+            raise HTTPException(status_code=404, detail="Agency not found")
+        user = conn.execute("SELECT id FROM users WHERE id=?", (payload.client_user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="Client user not found")
+        existing = conn.execute(
+            """
+            SELECT agency_id
+            FROM agency_clients
+            WHERE client_user_id=? AND COALESCE(status, 'active')='active' AND agency_id<>?
+            LIMIT 1
+            """,
+            (payload.client_user_id, agency_id),
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="Client is already attached to another active agency")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO agency_clients (agency_id, client_user_id, status, default_rebate_percent)
+            VALUES (?, ?, ?, ?)
+            """,
+            (agency_id, payload.client_user_id, payload.status or "active", payload.default_rebate_percent),
+        )
+        conn.execute(
+            """
+            UPDATE agency_clients
+            SET status=?, default_rebate_percent=?, updated_at=CURRENT_TIMESTAMP
+            WHERE agency_id=? AND client_user_id=?
+            """,
+            (payload.status or "active", payload.default_rebate_percent, agency_id, payload.client_user_id),
+        )
+        _get_or_create_wallet(conn, payload.client_user_id)
+        conn.execute("UPDATE users SET is_client=1 WHERE id=?", (payload.client_user_id,))
+        conn.commit()
+        return {"status": "ok", "agency_id": agency_id, "client_user_id": payload.client_user_id}
+
+
+@app.post("/admin/agencies/{agency_id}/clients/{client_user_id}/rates")
+def admin_set_agency_client_rate(
+    agency_id: int,
+    client_user_id: int,
+    payload: AgencyClientRatePayload,
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        relation = conn.execute(
+            "SELECT id FROM agency_clients WHERE agency_id=? AND client_user_id=?",
+            (agency_id, client_user_id),
+        ).fetchone()
+        if not relation:
+            raise HTTPException(status_code=404, detail="Agency client relation not found")
+        platform = str(payload.platform).lower()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO agency_client_rates
+              (agency_id, client_user_id, platform, platform_fee_percent, rebate_percent)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (agency_id, client_user_id, platform, payload.platform_fee_percent, payload.rebate_percent),
+        )
+        conn.execute(
+            """
+            UPDATE agency_client_rates
+            SET platform_fee_percent=?, rebate_percent=?, updated_at=CURRENT_TIMESTAMP
+            WHERE agency_id=? AND client_user_id=? AND platform=?
+            """,
+            (payload.platform_fee_percent, payload.rebate_percent, agency_id, client_user_id, platform),
+        )
+        conn.commit()
+        return {
+            "status": "ok",
+            "agency_id": agency_id,
+            "client_user_id": client_user_id,
+            "platform": platform,
+            "platform_fee_percent": payload.platform_fee_percent,
+            "rebate_percent": payload.rebate_percent,
+        }
+
+
+@app.post("/admin/agencies/{agency_id}/clients/{client_user_id}/transfer")
+def admin_transfer_agency_balance_to_client(
+    agency_id: int,
+    client_user_id: int,
+    payload: AgencyClientTransferPayload,
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    currency = str(payload.currency or "KZT").upper()
+    with get_conn() as conn:
+        relation = conn.execute(
+            """
+            SELECT id
+            FROM agency_clients
+            WHERE agency_id=? AND client_user_id=? AND COALESCE(status, 'active')='active'
+            """,
+            (agency_id, client_user_id),
+        ).fetchone()
+        if not relation:
+            raise HTTPException(status_code=404, detail="Active agency client relation not found")
+        agency_wallet = _get_or_create_agency_wallet(conn, agency_id, currency)
+        if str(agency_wallet.get("currency") or currency).upper() != currency:
+            raise HTTPException(status_code=400, detail="Agency wallet currency mismatch")
+        amount = float(payload.amount)
+        if float(agency_wallet.get("balance") or 0) < amount:
+            raise HTTPException(status_code=400, detail="Insufficient agency balance")
+        client_wallet = _get_or_create_wallet(conn, client_user_id)
+        if str(client_wallet.get("currency") or currency).upper() != currency:
+            raise HTTPException(status_code=400, detail="Client wallet currency mismatch")
+        _record_agency_wallet_transaction(
+            conn,
+            agency_id=agency_id,
+            client_user_id=client_user_id,
+            amount=-amount,
+            currency=currency,
+            tx_type="transfer_to_client",
+            source_type="agency_to_client_transfer",
+            note=payload.note or f"Transfer to client #{client_user_id}",
+            created_by=admin_user.get("email"),
+            acting_as_user_id=client_user_id,
+        )
+        next_client_balance = float(client_wallet.get("balance") or 0) + amount
+        conn.execute(
+            "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+            (next_client_balance, client_user_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (client_user_id, None, amount, currency, "agency_transfer", payload.note or f"Transfer from agency #{agency_id}"),
+        )
+        conn.commit()
+        return {"status": "ok", "agency_id": agency_id, "client_user_id": client_user_id, "amount": amount, "currency": currency}
+
+
+@app.post("/admin/agencies/{agency_id}/wallet/adjust")
+def admin_adjust_agency_wallet(agency_id: int, payload: AgencyWalletAdjustPayload, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    currency = str(payload.currency or "KZT").upper()
+    with get_conn() as conn:
+        agency = conn.execute("SELECT id FROM agencies WHERE id=?", (agency_id,)).fetchone()
+        if not agency:
+            raise HTTPException(status_code=404, detail="Agency not found")
+        wallet = _get_or_create_agency_wallet(conn, agency_id, currency)
+        if str(wallet.get("currency") or currency).upper() != currency:
+            raise HTTPException(status_code=400, detail="Agency wallet currency mismatch")
+        tx_type = payload.type or ("deposit" if payload.amount >= 0 else "manual_adjustment")
+        _record_agency_wallet_transaction(
+            conn,
+            agency_id=agency_id,
+            amount=float(payload.amount),
+            currency=currency,
+            tx_type=tx_type,
+            source_type="admin_agency_wallet_adjustment",
+            note=payload.note,
+            created_by=admin_user.get("email"),
+        )
+        conn.commit()
+        next_wallet = _get_or_create_agency_wallet(conn, agency_id, currency)
+        return {"status": "ok", "agency_id": agency_id, "balance": next_wallet.get("balance"), "currency": currency}
+
+
+@app.post("/admin/agencies/{agency_id}/own-accounts")
+def admin_create_agency_own_account(agency_id: int, payload: AgencyOwnAccountPayload, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    normalized_currency = "KZT" if payload.platform == "yandex" else payload.currency
+    with get_conn() as conn:
+        agency = conn.execute("SELECT id, owner_user_id FROM agencies WHERE id=?", (agency_id,)).fetchone()
+        if not agency:
+            raise HTTPException(status_code=404, detail="Agency not found")
+        agency = dict(agency)
+        technical_user_id = agency.get("owner_user_id") or admin_user.get("id")
+        if not technical_user_id:
+            raise HTTPException(status_code=400, detail="Agency owner user is required for compatibility")
+        existing = conn.execute(
+            """
+            SELECT *
+            FROM ad_accounts
+            WHERE owner_type='agency'
+              AND agency_id=?
+              AND LOWER(TRIM(platform))=?
+              AND LOWER(TRIM(name))=?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (agency_id, str(payload.platform).lower(), payload.name.strip().lower()),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE ad_accounts
+                SET external_id=?, account_code=?, currency=?, status=?
+                WHERE id=?
+                """,
+                (payload.external_id, payload.account_code, normalized_currency, payload.status or "active", existing["id"]),
+            )
+            conn.commit()
+            return {"id": existing["id"], "status": "updated", "agency_id": agency_id}
+        cur = conn.execute(
+            """
+            INSERT INTO ad_accounts
+              (user_id, owner_type, agency_id, platform, name, external_id, account_code, visible_to_client, currency, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(technical_user_id),
+                "agency",
+                agency_id,
+                payload.platform,
+                payload.name.strip(),
+                payload.external_id,
+                payload.account_code,
+                0,
+                normalized_currency,
+                payload.status or "active",
+            ),
+        )
+        conn.commit()
+        return {"id": cur.lastrowid, "status": "created", "agency_id": agency_id}
+
+
+@app.post("/admin/agencies/{agency_id}/own-accounts/{account_id}/fund")
+def admin_fund_agency_own_account(
+    agency_id: int,
+    account_id: int,
+    payload: AgencyOwnAccountFundingPayload,
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    currency = str(payload.currency or "KZT").upper()
+    with get_conn() as conn:
+        account = conn.execute(
+            """
+            SELECT *
+            FROM ad_accounts
+            WHERE id=? AND owner_type='agency' AND agency_id=?
+            """,
+            (account_id, agency_id),
+        ).fetchone()
+        if not account:
+            raise HTTPException(status_code=404, detail="Agency-owned account not found")
+        account = dict(account)
+        wallet = _get_or_create_agency_wallet(conn, agency_id, currency)
+        if str(wallet.get("currency") or currency).upper() != currency:
+            raise HTTPException(status_code=400, detail="Agency wallet currency mismatch")
+        amount = float(payload.amount)
+        fee_percent = float(payload.platform_fee_percent or 0)
+        fee_amount = amount * (fee_percent / 100.0)
+        total_debit = amount + fee_amount
+        if float(wallet.get("balance") or 0) < total_debit:
+            raise HTTPException(status_code=400, detail="Insufficient agency balance")
+        _record_agency_wallet_transaction(
+            conn,
+            agency_id=agency_id,
+            account_id=account_id,
+            amount=-amount,
+            currency=currency,
+            tx_type="own_account_funding",
+            source_type="agency_own_account_funding",
+            note=payload.note or f"Own account funding #{account_id}",
+            created_by=admin_user.get("email"),
+        )
+        if fee_amount > 0:
+            _record_agency_wallet_transaction(
+                conn,
+                agency_id=agency_id,
+                account_id=account_id,
+                amount=-fee_amount,
+                currency=currency,
+                tx_type="platform_fee",
+                source_type="agency_own_account_platform_fee",
+                note=f"Platform fee {fee_percent:.2f}% for own account funding #{account_id}",
+                created_by=admin_user.get("email"),
+            )
+        current_total = float(account.get("budget_total") or 0)
+        conn.execute(
+            "UPDATE ad_accounts SET budget_total=? WHERE id=?",
+            (current_total + amount, account_id),
+        )
+        _record_account_funding_event(
+            conn,
+            account_id=account_id,
+            user_id=int(account.get("user_id") or admin_user.get("id")),
+            platform=str(account.get("platform") or ""),
+            amount=amount,
+            currency=str(account.get("currency") or currency),
+            source_type="agency_own_funding",
+            note=payload.note or f"Agency own account funding #{account_id}",
+            created_by=admin_user.get("email"),
+        )
+        conn.commit()
+        next_wallet = _get_or_create_agency_wallet(conn, agency_id, currency)
+        return {
+            "status": "ok",
+            "agency_id": agency_id,
+            "account_id": account_id,
+            "amount": amount,
+            "platform_fee_percent": fee_percent,
+            "platform_fee_amount": fee_amount,
+            "total_debit": total_debit,
+            "agency_balance": next_wallet.get("balance"),
+        }
 
 
 @app.post("/admin/agencies/{agency_id}/accounts/{account_id}")
@@ -10453,10 +11107,11 @@ def admin_list_topups(
         if not request.query_params:
             rows = conn.execute(
                 """
-                SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+                SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email, ag.name as agency_name
                 FROM topups t
                 JOIN ad_accounts a ON a.id = t.account_id
                 JOIN users u ON u.id = t.user_id
+                LEFT JOIN agencies ag ON ag.id = t.agency_id
                 ORDER BY t.created_at DESC
                 """
             ).fetchall()
@@ -10492,6 +11147,7 @@ def admin_list_topups(
             FROM topups t
             JOIN ad_accounts a ON a.id = t.account_id
             JOIN users u ON u.id = t.user_id
+            LEFT JOIN agencies ag ON ag.id = t.agency_id
             {where_sql}
         """
 
@@ -10502,7 +11158,7 @@ def admin_list_topups(
                 if where:
                     page_rows = conn.execute(
                         f"""
-                        SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+                        SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email, ag.name as agency_name
                         {base_sql}
                         ORDER BY t.id DESC
                         LIMIT ? OFFSET ?
@@ -10531,6 +11187,7 @@ def admin_list_topups(
                     user_ids = sorted({int(row["user_id"]) for row in topup_items if row.get("user_id") is not None})
                     account_map = {}
                     user_map = {}
+                    agency_map = {}
                     if account_ids:
                         accounts_started_at = time.time()
                         placeholders = ",".join(["?"] * len(account_ids))
@@ -10557,17 +11214,34 @@ def admin_list_topups(
                             time.time() - users_started_at,
                         )
                         user_map = {int(row["id"]): dict(row) for row in user_rows}
+                    agency_ids = sorted({int(row["agency_id"]) for row in topup_items if row.get("agency_id") is not None})
+                    if agency_ids:
+                        agencies_started_at = time.time()
+                        placeholders = ",".join(["?"] * len(agency_ids))
+                        agency_rows = conn.execute(
+                            f"SELECT id, name FROM agencies WHERE id IN ({placeholders})",
+                            tuple(agency_ids),
+                        ).fetchall()
+                        logging.info(
+                            "admin topups fast selected agencies=%s elapsed=%.3fs",
+                            len(agency_rows),
+                            time.time() - agencies_started_at,
+                        )
+                        agency_map = {int(row["id"]): dict(row) for row in agency_rows}
                     page_items = []
                     for row in topup_items:
                         payload = dict(row)
                         account = account_map.get(int(payload["account_id"])) if payload.get("account_id") is not None else None
                         user = user_map.get(int(payload["user_id"])) if payload.get("user_id") is not None else None
+                        agency = agency_map.get(int(payload["agency_id"])) if payload.get("agency_id") is not None else None
                         if account:
                             payload["account_name"] = account.get("name")
                             payload["account_platform"] = account.get("platform")
                             payload["account_currency"] = account.get("currency")
                         if user:
                             payload["user_email"] = user.get("email")
+                        if agency:
+                            payload["agency_name"] = agency.get("name")
                         page_items.append(payload)
                     page_items = _attach_topup_account_amount(page_items, include_rates=False)
                 stats = {"total": safe_offset + len(page_items), "pending": 0, "completed": 0, "failed": 0, "completedGross": 0}
@@ -10617,7 +11291,7 @@ def admin_list_topups(
             ).fetchone()
             page_rows = conn.execute(
                 f"""
-                SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+                SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email, ag.name as agency_name
                 {base_sql}
                 ORDER BY t.created_at DESC
                 LIMIT ? OFFSET ?
@@ -10637,7 +11311,7 @@ def admin_list_topups(
 
         all_rows = conn.execute(
             f"""
-            SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email
+            SELECT t.*, a.name as account_name, a.platform as account_platform, a.currency as account_currency, u.email as user_email, ag.name as agency_name
             {base_sql}
             ORDER BY t.created_at DESC
             """,
@@ -11116,7 +11790,7 @@ def admin_export_requests(admin_user=Depends(get_admin_user)):
     wb = Workbook()
     ws = wb.active
     ws.title = "Account Requests"
-    ws.append(["Дата", "Клиент", "Платформа", "Название", "Статус", "Менеджер"])
+    ws.append(["Р”Р°С‚Р°", "РљР»РёРµРЅС‚", "РџР»Р°С‚С„РѕСЂРјР°", "РќР°Р·РІР°РЅРёРµ", "РЎС‚Р°С‚СѓСЃ", "РњРµРЅРµРґР¶РµСЂ"])
     with get_conn() as conn:
         rows = conn.execute(
             """
@@ -11155,7 +11829,7 @@ def admin_export_accounts(admin_user=Depends(get_admin_user)):
     wb = Workbook()
     ws = wb.active
     ws.title = "Accounts"
-    ws.append(["Дата", "Клиент", "Платформа", "Название", "Договор/код", "External ID"])
+    ws.append(["Р”Р°С‚Р°", "РљР»РёРµРЅС‚", "РџР»Р°С‚С„РѕСЂРјР°", "РќР°Р·РІР°РЅРёРµ", "Р”РѕРіРѕРІРѕСЂ/РєРѕРґ", "External ID"])
     with get_conn() as conn:
         rows = conn.execute(
             """
@@ -11196,36 +11870,48 @@ def admin_export_topups(admin_user=Depends(get_admin_user)):
     ws.title = "Topups"
     ws.append(
         [
-            "Дата",
-            "Клиент",
-            "Платформа",
-            "Аккаунт",
-            "Сумма",
-            "Комиссия",
-            "НДС",
-            "К оплате",
-            "Валюта",
-            "Статус",
+            "Date",
+            "Client",
+            "Platform",
+            "Account",
+            "Amount",
+            "Total fee %",
+            "Platform fee %",
+            "Platform fee amount",
+            "Agency",
+            "Agency rebate %",
+            "Agency rebate amount",
+            "VAT",
+            "Total wallet debit",
+            "Currency",
+            "Status",
         ]
     )
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT t.*, a.name as account_name, a.platform as account_platform, u.email as user_email
+            SELECT t.*, a.name as account_name, a.platform as account_platform, u.email as user_email, ag.name as agency_name
             FROM topups t
             JOIN ad_accounts a ON a.id = t.account_id
             JOIN users u ON u.id = t.user_id
+            LEFT JOIN agencies ag ON ag.id = t.agency_id
             ORDER BY t.created_at DESC
             """
         ).fetchall()
         for row in rows:
             payload = dict(row)
             amount_input = float(payload.get("amount_input") or 0)
-            fee_percent = float(payload.get("fee_percent") or 0)
+            total_fee_percent = float(payload.get("fee_percent") or 0)
+            platform_fee_percent = float(payload.get("platform_fee_percent") if payload.get("platform_fee_percent") is not None else total_fee_percent)
+            agency_rebate_percent = float(payload.get("agency_rebate_percent") or 0)
+            if total_fee_percent <= 0:
+                total_fee_percent = platform_fee_percent + agency_rebate_percent
             vat_percent = float(payload.get("vat_percent") or 0)
-            fee = amount_input * fee_percent / 100.0
+            platform_fee = amount_input * platform_fee_percent / 100.0
+            agency_rebate = float(payload.get("agency_rebate_amount") or (amount_input * agency_rebate_percent / 100.0))
+            total_fee = amount_input * total_fee_percent / 100.0
             vat = amount_input * vat_percent / 100.0
-            gross = amount_input + fee + vat
+            gross = amount_input + total_fee + vat
             ws.append(
                 [
                     payload.get("created_at"),
@@ -11233,7 +11919,12 @@ def admin_export_topups(admin_user=Depends(get_admin_user)):
                     payload.get("account_platform"),
                     payload.get("account_name"),
                     amount_input,
-                    round(fee, 2),
+                    round(total_fee_percent, 4),
+                    round(platform_fee_percent, 4),
+                    round(platform_fee, 2),
+                    payload.get("agency_name") or "",
+                    round(agency_rebate_percent, 4),
+                    round(agency_rebate, 2),
                     round(vat, 2),
                     round(gross, 2),
                     payload.get("currency"),
@@ -11250,18 +11941,24 @@ def admin_export_topups(admin_user=Depends(get_admin_user)):
         headers=headers,
     )
 
-
 @app.post("/admin/topups/{topup_id}/status")
 def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Depends(get_admin_user)):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT id, status, account_id, amount_input, amount_net, fee_percent, vat_percent, currency, user_id, hold_applied FROM topups WHERE id=?",
+            """
+            SELECT
+              id, status, account_id, amount_input, amount_net, fee_percent, platform_fee_percent,
+              agency_id, agency_rebate_percent, agency_rebate_amount, vat_percent, currency, user_id, hold_applied
+            FROM topups
+            WHERE id=?
+            """,
             (topup_id,),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Topup not found")
+        row = dict(row)
 
         previous_status = row["status"]
         next_status = status.value
@@ -11279,7 +11976,7 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
             else:
                 wallet = _get_or_create_wallet(conn, row["user_id"])
                 if float(wallet["balance"]) < gross_amount:
-                    raise HTTPException(status_code=400, detail="Недостаточно средств на кошельке для завершения пополнения")
+                    raise HTTPException(status_code=400, detail="РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ СЃСЂРµРґСЃС‚РІ РЅР° РєРѕС€РµР»СЊРєРµ РґР»СЏ Р·Р°РІРµСЂС€РµРЅРёСЏ РїРѕРїРѕР»РЅРµРЅРёСЏ")
                 new_balance = float(wallet["balance"]) - gross_amount
                 conn.execute(
                     "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
@@ -11315,17 +12012,32 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                 note=f"Completed topup #{topup_id}",
                 update_existing=True,
             )
+            if row.get("agency_id") and float(row.get("agency_rebate_amount") or 0) > 0:
+                _record_agency_wallet_transaction(
+                    conn,
+                    agency_id=int(row["agency_id"]),
+                    client_user_id=int(row["user_id"]),
+                    account_id=int(row["account_id"]),
+                    amount=float(row["agency_rebate_amount"] or 0),
+                    currency=str(row["currency"] or "KZT"),
+                    tx_type="rebate_accrual",
+                    source_type="topup_rebate",
+                    source_id=topup_id,
+                    note=f"Agency rebate for completed topup #{topup_id}",
+                    created_by=admin_user.get("email"),
+                    acting_as_user_id=int(row["user_id"]),
+                )
             conn.execute("UPDATE users SET is_client=1 WHERE id=?", (row["user_id"],))
             user_row = conn.execute("SELECT email FROM users WHERE id=?", (row["user_id"],)).fetchone()
             _send_telegram_alert(
                 "\n".join(
                     [
-                        "✅ <b>Пополнение оплачено/завершено</b>",
+                        "вњ… <b>РџРѕРїРѕР»РЅРµРЅРёРµ РѕРїР»Р°С‡РµРЅРѕ/Р·Р°РІРµСЂС€РµРЅРѕ</b>",
                         f"Topup ID: <code>{topup_id}</code>",
-                        f"Пользователь: <code>{user_row['email'] if user_row else row['user_id']}</code>",
-                        f"Платформа: <b>{account_row['platform'] if account_row else '—'}</b>",
-                        f"Аккаунт: <b>{account_row['name'] if account_row else row['account_id']}</b>",
-                        f"Сумма: <b>{(row['amount_net'] or row['amount_input'] or 0):.2f} {row['currency']}</b>",
+                        f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ: <code>{user_row['email'] if user_row else row['user_id']}</code>",
+                        f"РџР»Р°С‚С„РѕСЂРјР°: <b>{account_row['platform'] if account_row else 'вЂ”'}</b>",
+                        f"РђРєРєР°СѓРЅС‚: <b>{account_row['name'] if account_row else row['account_id']}</b>",
+                        f"РЎСѓРјРјР°: <b>{(row['amount_net'] or row['amount_input'] or 0):.2f} {row['currency']}</b>",
                     ]
                 )
             )
@@ -11360,6 +12072,21 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                 """,
                 (datetime.utcnow().isoformat(), admin_user.get("email"), topup_id),
             )
+            if row.get("agency_id") and float(row.get("agency_rebate_amount") or 0) > 0:
+                _record_agency_wallet_transaction(
+                    conn,
+                    agency_id=int(row["agency_id"]),
+                    client_user_id=int(row["user_id"]),
+                    account_id=int(row["account_id"]),
+                    amount=-float(row["agency_rebate_amount"] or 0),
+                    currency=str(row["currency"] or "KZT"),
+                    tx_type="rebate_reversal",
+                    source_type="topup_rebate_reversal",
+                    source_id=topup_id,
+                    note=f"Reverse agency rebate for topup #{topup_id}",
+                    created_by=admin_user.get("email"),
+                    acting_as_user_id=int(row["user_id"]),
+                )
             conn.execute("UPDATE topups SET status=?, hold_applied=0 WHERE id=?", (next_status, topup_id))
         elif previous_status == "pending" and next_status == "failed":
             if hold_applied:
@@ -11397,7 +12124,7 @@ def admin_topups_profit_summary(admin_user=Depends(get_admin_user)):
               t.currency as currency,
               COUNT(*) as completed_count,
               COALESCE(SUM(t.amount_input), 0) as amount_input_total,
-              COALESCE(SUM((t.amount_input * t.fee_percent) / 100.0), 0) as fee_total
+              COALESCE(SUM((t.amount_input * COALESCE(t.platform_fee_percent, t.fee_percent, 0)) / 100.0), 0) as fee_total
             FROM topups t
             JOIN ad_accounts a ON a.id = t.account_id
             WHERE t.status='completed'
@@ -11413,7 +12140,7 @@ def admin_topups_profit_summary(admin_user=Depends(get_admin_user)):
               t.currency as currency,
               COUNT(*) as completed_count,
               COALESCE(SUM(t.amount_input), 0) as amount_input_total,
-              COALESCE(SUM((t.amount_input * t.fee_percent) / 100.0), 0) as fee_total
+              COALESCE(SUM((t.amount_input * COALESCE(t.platform_fee_percent, t.fee_percent, 0)) / 100.0), 0) as fee_total
             FROM topups t
             WHERE t.status='completed'
             GROUP BY t.currency
@@ -11683,17 +12410,17 @@ def invoice_preview():
         "beneficiary_iban": company.get("iban") or BENEFICIARY["iban"],
         "beneficiary_bic": company.get("bic") or BENEFICIARY["bic"],
         "beneficiary_kbe": company.get("kbe") or BENEFICIARY["kbe"],
-        "payer_name": "ООО Клиент",
-        "payer_bin": "ИИН/БИН не указан",
-        "payer_address": "Адрес не указан",
-        "description": "Пополнение рекламного аккаунта",
+        "payer_name": "РћРћРћ РљР»РёРµРЅС‚",
+        "payer_bin": "РРРќ/Р‘РРќ РЅРµ СѓРєР°Р·Р°РЅ",
+        "payer_address": "РђРґСЂРµСЃ РЅРµ СѓРєР°Р·Р°РЅ",
+        "description": "РџРѕРїРѕР»РЅРµРЅРёРµ СЂРµРєР»Р°РјРЅРѕРіРѕ Р°РєРєР°СѓРЅС‚Р°",
         "amount": _format_amount(150000),
         "currency": company.get("currency") or BENEFICIARY["currency"],
         "items": [
             {
-                "description": "Пополнение рекламного аккаунта",
+                "description": "РџРѕРїРѕР»РЅРµРЅРёРµ СЂРµРєР»Р°РјРЅРѕРіРѕ Р°РєРєР°СѓРЅС‚Р°",
                 "qty": "1",
-                "unit": "усл.",
+                "unit": "СѓСЃР».",
                 "price": _format_amount(150000),
                 "amount": _format_amount(150000),
             }
@@ -11728,6 +12455,111 @@ def list_my_agencies(current_user=Depends(get_current_user)):
             memberships = _list_user_agency_memberships(conn, current_user["id"])
         conn.commit()
         return {"items": memberships}
+
+
+@app.get("/agency/me")
+def agency_me(agency_id: Optional[int] = None, current_user=Depends(get_current_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        membership = _current_agency_membership(conn, current_user, agency_id=agency_id)
+        return _agency_dashboard_payload(conn, int(membership["agency_id"]), membership)
+
+
+@app.post("/agency/clients/{client_user_id}/transfer")
+def agency_transfer_to_client(
+    client_user_id: int,
+    payload: AgencyClientTransferPayload,
+    agency_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    currency = str(payload.currency or "KZT").upper()
+    with get_conn() as conn:
+        membership = _current_agency_membership(conn, current_user, agency_id=agency_id)
+        if not membership.get("can_manage"):
+            raise HTTPException(status_code=403, detail="Agency manager access required")
+        active_client = conn.execute(
+            """
+            SELECT id
+            FROM agency_clients
+            WHERE agency_id=? AND client_user_id=? AND COALESCE(status, 'active')='active'
+            """,
+            (membership["agency_id"], client_user_id),
+        ).fetchone()
+        if not active_client:
+            raise HTTPException(status_code=404, detail="Active agency client relation not found")
+        agency_wallet = _get_or_create_agency_wallet(conn, int(membership["agency_id"]), currency)
+        if str(agency_wallet.get("currency") or currency).upper() != currency:
+            raise HTTPException(status_code=400, detail="Agency wallet currency mismatch")
+        amount = float(payload.amount)
+        if float(agency_wallet.get("balance") or 0) < amount:
+            raise HTTPException(status_code=400, detail="Insufficient agency balance")
+        client_wallet = _get_or_create_wallet(conn, client_user_id)
+        if str(client_wallet.get("currency") or currency).upper() != currency:
+            raise HTTPException(status_code=400, detail="Client wallet currency mismatch")
+        _record_agency_wallet_transaction(
+            conn,
+            agency_id=int(membership["agency_id"]),
+            client_user_id=client_user_id,
+            amount=-amount,
+            currency=currency,
+            tx_type="transfer_to_client",
+            source_type="agency_self_service_transfer",
+            note=payload.note or f"Transfer to client #{client_user_id}",
+            created_by=current_user.get("email"),
+            initiated_by_user_id=int(current_user["id"]),
+            acting_as_user_id=client_user_id,
+        )
+        next_client_balance = float(client_wallet.get("balance") or 0) + amount
+        conn.execute(
+            "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+            (next_client_balance, client_user_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (client_user_id, None, amount, currency, "agency_transfer", payload.note or f"Transfer from agency #{membership['agency_id']}"),
+        )
+        conn.commit()
+        return {"status": "ok", "agency_id": membership["agency_id"], "client_user_id": client_user_id, "amount": amount, "currency": currency}
+
+
+@app.post("/agency/clients/{client_user_id}/impersonate")
+def agency_impersonate_client(
+    client_user_id: int,
+    agency_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        membership = _current_agency_membership(conn, current_user, agency_id=agency_id)
+        if not membership.get("can_impersonate"):
+            raise HTTPException(status_code=403, detail="Agency impersonation access denied")
+        client = conn.execute(
+            """
+            SELECT u.id, u.email
+            FROM agency_clients ac
+            JOIN users u ON u.id = ac.client_user_id
+            WHERE ac.agency_id=? AND ac.client_user_id=? AND COALESCE(ac.status, 'active')='active'
+            """,
+            (membership["agency_id"], client_user_id),
+        ).fetchone()
+        if not client:
+            raise HTTPException(status_code=404, detail="Agency client not found")
+        token = _issue_user_token(conn, int(client["id"]), login_email=current_user.get("email"))
+        conn.commit()
+        return {
+            "id": int(client["id"]),
+            "email": client["email"],
+            "token": token,
+            "agency_id": int(membership["agency_id"]),
+            "initiated_by_user_id": int(current_user["id"]),
+        }
 
 
 @app.get("/accounts/spend")
@@ -12303,7 +13135,14 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
         platform_fee = fee_config.get(acc["platform"])
         if platform_fee is None:
             raise HTTPException(status_code=400, detail="Commission is not set for this platform")
-        fee_percent = float(platform_fee)
+        platform_fee_percent = float(platform_fee)
+        agency_context = _active_agency_client_context(conn, resolved_user_id, acc["platform"])
+        if agency_context and agency_context.get("platform_fee_percent") is not None:
+            platform_fee_percent = float(agency_context["platform_fee_percent"])
+        agency_id = int(agency_context["agency_id"]) if agency_context else None
+        agency_rebate_percent = float(agency_context.get("rebate_percent") or 0) if agency_context else 0.0
+        agency_rebate_amount = amount_input * (agency_rebate_percent / 100.0)
+        fee_percent = platform_fee_percent + agency_rebate_percent
         wallet = _get_or_create_wallet(conn, resolved_user_id)
         wallet_balance = float(wallet["balance"] or 0)
         gross_amount = _topup_gross_amount(amount_input, fee_percent, vat_percent)
@@ -12313,9 +13152,9 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"Недостаточно средств на кошельке: требуется {gross_amount:.2f} {currency}, "
-                    f"доступно {wallet_balance:.2f} {currency}. "
-                    f"Максимальная сумма пополнения при текущей комиссии: {max_input:.2f} {currency}."
+                    f"РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ СЃСЂРµРґСЃС‚РІ РЅР° РєРѕС€РµР»СЊРєРµ: С‚СЂРµР±СѓРµС‚СЃСЏ {gross_amount:.2f} {currency}, "
+                    f"РґРѕСЃС‚СѓРїРЅРѕ {wallet_balance:.2f} {currency}. "
+                    f"РњР°РєСЃРёРјР°Р»СЊРЅР°СЏ СЃСѓРјРјР° РїРѕРїРѕР»РЅРµРЅРёСЏ РїСЂРё С‚РµРєСѓС‰РµР№ РєРѕРјРёСЃСЃРёРё: {max_input:.2f} {currency}."
                 ),
             )
         account_currency = str(acc["currency"] or currency).upper()
@@ -12334,10 +13173,27 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
             amount_net = amount_input
         cur = conn.execute(
             """
-            INSERT INTO topups (account_id, user_id, amount_input, fee_percent, vat_percent, amount_net, currency, fx_rate, hold_applied, status, seen_by_admin)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO topups
+              (account_id, user_id, amount_input, fee_percent, platform_fee_percent, agency_id, agency_rebate_percent, agency_rebate_amount, vat_percent, amount_net, currency, fx_rate, hold_applied, status, seen_by_admin)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (account_id, resolved_user_id, amount_input, fee_percent, vat_percent, amount_net, currency, fx_rate, 1, "pending", 0),
+            (
+                account_id,
+                resolved_user_id,
+                amount_input,
+                fee_percent,
+                platform_fee_percent,
+                agency_id,
+                agency_rebate_percent,
+                agency_rebate_amount,
+                vat_percent,
+                amount_net,
+                currency,
+                fx_rate,
+                1,
+                "pending",
+                0,
+            ),
         )
         topup_id = cur.lastrowid
         new_balance = wallet_balance - gross_amount
@@ -12357,14 +13213,14 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
         _send_telegram_alert(
             "\n".join(
                 [
-                    "💳 <b>Новая заявка на пополнение</b>",
+                    "рџ’і <b>РќРѕРІР°СЏ Р·Р°СЏРІРєР° РЅР° РїРѕРїРѕР»РЅРµРЅРёРµ</b>",
                     f"ID: <code>{topup_id}</code>",
-                    f"Пользователь: <code>{current_user['email']}</code> (id={resolved_user_id})",
-                    f"Платформа: <b>{acc['platform']}</b>",
-                    f"Аккаунт: <b>{account_name['name'] if account_name else account_id}</b> (id={account_id})",
-                    f"Сумма: <b>{amount_input:.2f} {currency}</b>",
-                    f"Комиссия: <b>{fee_percent:.2f}%</b>",
-                    f"Холд в кошельке: <b>{gross_amount:.2f} {currency}</b>",
+                    f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ: <code>{current_user['email']}</code> (id={resolved_user_id})",
+                    f"РџР»Р°С‚С„РѕСЂРјР°: <b>{acc['platform']}</b>",
+                    f"РђРєРєР°СѓРЅС‚: <b>{account_name['name'] if account_name else account_id}</b> (id={account_id})",
+                    f"РЎСѓРјРјР°: <b>{amount_input:.2f} {currency}</b>",
+                    f"РљРѕРјРёСЃСЃРёСЏ: <b>{fee_percent:.2f}%</b>",
+                    f"РҐРѕР»Рґ РІ РєРѕС€РµР»СЊРєРµ: <b>{gross_amount:.2f} {currency}</b>",
                 ]
             )
         )
@@ -12374,6 +13230,10 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
             "user_id": resolved_user_id,
             "amount_input": amount_input,
             "fee_percent": fee_percent,
+            "platform_fee_percent": platform_fee_percent,
+            "agency_id": agency_id,
+            "agency_rebate_percent": agency_rebate_percent,
+            "agency_rebate_amount": agency_rebate_amount,
             "vat_percent": vat_percent,
             "amount_net": amount_net,
             "currency": currency,
@@ -12419,17 +13279,17 @@ def invoice_by_topup(
             "beneficiary_iban": company.get("iban") or BENEFICIARY["iban"],
             "beneficiary_bic": company.get("bic") or BENEFICIARY["bic"],
             "beneficiary_kbe": company.get("kbe") or BENEFICIARY["kbe"],
-            "payer_name": "Плательщик не указан",
-            "payer_bin": "ИИН/БИН не указан",
-            "payer_address": "Адрес не указан",
-            "description": f"Пополнение аккаунта {row['account_name']}",
+            "payer_name": "РџР»Р°С‚РµР»СЊС‰РёРє РЅРµ СѓРєР°Р·Р°РЅ",
+            "payer_bin": "РРРќ/Р‘РРќ РЅРµ СѓРєР°Р·Р°РЅ",
+            "payer_address": "РђРґСЂРµСЃ РЅРµ СѓРєР°Р·Р°РЅ",
+            "description": f"РџРѕРїРѕР»РЅРµРЅРёРµ Р°РєРєР°СѓРЅС‚Р° {row['account_name']}",
             "amount": _format_amount(row["amount_input"]),
             "currency": company.get("currency") or BENEFICIARY["currency"],
             "items": [
                 {
-                    "description": f"Пополнение аккаунта {row['account_name']}",
+                    "description": f"РџРѕРїРѕР»РЅРµРЅРёРµ Р°РєРєР°СѓРЅС‚Р° {row['account_name']}",
                     "qty": "1",
-                    "unit": "усл.",
+                    "unit": "СѓСЃР».",
                     "price": _format_amount(row["amount_input"]),
                     "amount": _format_amount(row["amount_input"]),
                 }

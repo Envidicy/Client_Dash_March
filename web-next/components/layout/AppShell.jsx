@@ -83,10 +83,11 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
       { key: 'client-topup-accounts', label: t('shell.nav.topupAccounts'), href: '/funds' },
       { key: 'client-finance', label: t('shell.nav.finance'), href: '/funds' },
       { key: 'client-dashboard', label: t('shell.nav.dashboard'), href: '/dashboard' },
+      { key: 'agency-workspace', label: locale === 'ru' ? 'Агентство' : 'Agency', href: '/agency' },
       { key: 'client-tools', label: t('shell.nav.tools'), href: '/tools' },
       { key: 'client-settings', label: t('shell.nav.settings'), href: '/settings' },
     ]
-  }, [area, t])
+  }, [area, locale, t])
 
   useEffect(() => {
     setImpersonationActive(isImpersonating())
