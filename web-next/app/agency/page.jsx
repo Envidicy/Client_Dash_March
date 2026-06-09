@@ -203,7 +203,7 @@ export default function AgencyPage() {
           <table className="table">
             <thead>
               <tr>
-                <th>Email</th><th>Balance</th><th>Rebate</th><th>Status</th><th>Action</th>
+                <th>Email</th><th>Balance</th><th>Rebate</th><th>Status</th><th>Вход</th>
               </tr>
             </thead>
             <tbody>
@@ -219,7 +219,7 @@ export default function AgencyPage() {
                     <td>
                       {canImpersonate ? (
                         <button className="btn ghost small" type="button" onClick={() => impersonateClient(row.client_user_id, row.email)}>
-                          Open client
+                          Войти
                         </button>
                       ) : '-'}
                     </td>
