@@ -56,6 +56,7 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
   const [supportOpen, setSupportOpen] = useState(false)
   const [impersonationActive, setImpersonationActive] = useState(false)
   const [impersonationLabel, setImpersonationLabel] = useState('')
+  const [hasAgencyAccess, setHasAgencyAccess] = useState(false)
   const profileMenuRef = useRef(null)
   const notificationsRef = useRef(null)
   const supportRef = useRef(null)
@@ -79,15 +80,18 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
         { key: 'admin-entities', label: t('shell.nav.adminEntities'), href: '/admin/legal-entities' },
       ]
     }
-    return [
+    const clientItems = [
       { key: 'client-topup-accounts', label: t('shell.nav.topupAccounts'), href: '/funds' },
       { key: 'client-finance', label: t('shell.nav.finance'), href: '/funds' },
       { key: 'client-dashboard', label: t('shell.nav.dashboard'), href: '/dashboard' },
-      { key: 'agency-workspace', label: locale === 'ru' ? 'Агентство' : 'Agency', href: '/agency' },
       { key: 'client-tools', label: t('shell.nav.tools'), href: '/tools' },
       { key: 'client-settings', label: t('shell.nav.settings'), href: '/settings' },
     ]
-  }, [area, locale, t])
+    if (hasAgencyAccess) {
+      clientItems.splice(3, 0, { key: 'agency-workspace', label: locale === 'ru' ? 'Агентство' : 'Agency', href: '/agency' })
+    }
+    return clientItems
+  }, [area, hasAgencyAccess, locale, t])
 
   useEffect(() => {
     setImpersonationActive(isImpersonating())
@@ -130,8 +134,20 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
       }
     }
 
+    async function loadAgencyAccess() {
+      if (area !== 'client') return
+      try {
+        const res = await apiFetch('/agencies/mine', { headers: authHeaders() })
+        const data = res.ok ? await res.json() : null
+        setHasAgencyAccess(Array.isArray(data?.items) && data.items.length > 0)
+      } catch {
+        setHasAgencyAccess(false)
+      }
+    }
+
     loadProfile()
     loadWalletAndRates()
+    loadAgencyAccess()
   }, [area, locale, t])
 
   useEffect(() => {

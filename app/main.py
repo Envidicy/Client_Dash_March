@@ -4537,13 +4537,6 @@ def _list_accessible_accounts(conn, current_user) -> List[Dict[str, object]]:
         return [dict(row) for row in rows]
 
     memberships = _list_user_agency_memberships(conn, user_id)
-    if not memberships:
-        try:
-            _get_or_create_default_agency(conn, user_id)
-            memberships = _list_user_agency_memberships(conn, user_id)
-        except Exception:
-            logging.exception("Agency bootstrap failed for user_id=%s; fallback to direct accounts", user_id)
-            memberships = []
 
     if not memberships:
         return fallback_visible
@@ -4556,14 +4549,25 @@ def _list_accessible_accounts(conn, current_user) -> List[Dict[str, object]]:
                 f"""
                 SELECT DISTINCT a.*
                 FROM ad_accounts a
-                JOIN agency_ad_accounts aa ON aa.ad_account_id = a.id
+                LEFT JOIN agency_ad_accounts aa
+                  ON aa.ad_account_id = a.id
+                 AND COALESCE(aa.status, 'active')='active'
+                LEFT JOIN agency_clients ac
+                  ON ac.client_user_id = a.user_id
+                 AND COALESCE(ac.status, 'active')='active'
                 WHERE aa.agency_id IN ({placeholders})
+                   OR ac.agency_id IN ({placeholders})
+                   OR (a.owner_type='agency' AND a.agency_id IN ({placeholders}))
                 ORDER BY a.created_at DESC
                 """,
-                admin_agency_ids,
+                admin_agency_ids + admin_agency_ids + admin_agency_ids,
             ).fetchall()
             out = [dict(row) for row in rows]
-            return [row for row in out if _is_client_visible(row)]
+            return [
+                row
+                for row in out
+                if str(row.get("owner_type") or "client") == "agency" or _is_client_visible(row)
+            ]
         except Exception:
             logging.exception("Failed to list agency admin accounts for user_id=%s; fallback to direct accounts", user_id)
             return fallback_visible
@@ -10934,7 +10938,6 @@ def admin_create_account(payload: AdminAccountCreate, admin_user=Depends(get_adm
             name=payload.name,
         )
         if existing:
-            agency = _get_or_create_default_agency(conn, payload.user_id)
             conn.execute(
                 """
                 UPDATE ad_accounts
@@ -10954,14 +10957,6 @@ def admin_create_account(payload: AdminAccountCreate, admin_user=Depends(get_adm
                     existing["id"],
                 ),
             )
-            if agency:
-                _ensure_agency_account_mapping(
-                    conn,
-                    int(agency["id"]),
-                    int(existing["id"]),
-                    label=payload.name,
-                    status=payload.status or "pending",
-                )
             conn.commit()
             return {
                 "id": existing["id"],
@@ -10990,15 +10985,6 @@ def admin_create_account(payload: AdminAccountCreate, admin_user=Depends(get_adm
                 payload.status or "pending",
             ),
         )
-        agency = _get_or_create_default_agency(conn, payload.user_id)
-        if agency:
-            _ensure_agency_account_mapping(
-                conn,
-                int(agency["id"]),
-                int(cur.lastrowid),
-                label=payload.name,
-                status=payload.status or "pending",
-            )
         conn.commit()
         return {
             "id": cur.lastrowid,
@@ -12292,24 +12278,6 @@ def admin_update_account_request_status(
                 else:
                     ensured_account_id = int(existing["id"])
 
-            if ensured_account_id:
-                try:
-                    agency = _get_or_create_default_agency(conn, request_user_id)
-                    if agency:
-                        _ensure_agency_account_mapping(
-                            conn,
-                            int(agency["id"]),
-                            int(ensured_account_id),
-                            label=request_name,
-                            status=payload.status or request_status,
-                        )
-                except Exception as agency_exc:
-                    logging.exception(
-                        "Failed to sync agency mapping request_id=%s account_id=%s: %s",
-                        request_id,
-                        ensured_account_id,
-                        agency_exc,
-                    )
             conn.execute("UPDATE account_requests SET status=? WHERE id=?", (payload.status, request_id))
             _insert_request_event(
                 conn,
@@ -12450,10 +12418,6 @@ def list_my_agencies(current_user=Depends(get_current_user)):
         return {"items": []}
     with get_conn() as conn:
         memberships = _list_user_agency_memberships(conn, current_user["id"])
-        if not memberships:
-            _get_or_create_default_agency(conn, current_user["id"])
-            memberships = _list_user_agency_memberships(conn, current_user["id"])
-        conn.commit()
         return {"items": memberships}
 
 
@@ -12881,20 +12845,11 @@ def create_account(
             platform=platform,
             name=name,
         )
-        agency = _get_or_create_default_agency(conn, int(current_user["id"]))
         if existing:
             conn.execute(
                 "UPDATE ad_accounts SET external_id=?, currency=? WHERE id=?",
                 (external_id, currency, existing["id"]),
             )
-            if agency:
-                _ensure_agency_account_mapping(
-                    conn,
-                    int(agency["id"]),
-                    int(existing["id"]),
-                    label=name,
-                    status=str(existing.get("status") or "active"),
-                )
             conn.commit()
             return {
                 "id": existing["id"],
@@ -12908,14 +12863,6 @@ def create_account(
             "INSERT INTO ad_accounts (user_id, platform, name, external_id, currency) VALUES (?, ?, ?, ?, ?)",
             (current_user["id"], platform, name, external_id, currency),
         )
-        if agency:
-            _ensure_agency_account_mapping(
-                conn,
-                int(agency["id"]),
-                int(cur.lastrowid),
-                label=name,
-                status="active",
-            )
         conn.commit()
         return {
             "id": cur.lastrowid,
