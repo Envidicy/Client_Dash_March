@@ -18,7 +18,7 @@ def should_auto_apply_schema_on_startup() -> bool:
     raw = os.getenv("AUTO_APPLY_SCHEMA_ON_STARTUP")
     if raw is not None:
         return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-    return not _is_postgres(DB_URL)
+    return True
 
 
 def _extract_search_path(url: str) -> Optional[str]:

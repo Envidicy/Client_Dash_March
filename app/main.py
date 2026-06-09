@@ -10395,6 +10395,11 @@ def admin_create_agency(payload: AgencyCreatePayload, admin_user=Depends(get_adm
             (payload.name.strip(), slug, owner_user_id, "active"),
         )
         agency_id = cur.lastrowid
+        if agency_id is None:
+            row = conn.execute("SELECT id FROM agencies WHERE slug=?", (slug,)).fetchone()
+            agency_id = row["id"] if row else None
+        if agency_id is None:
+            raise HTTPException(status_code=500, detail="Failed to create agency")
         if owner_user_id is not None:
             _ensure_agency_member(conn, int(agency_id), owner_user_id, role="owner", status="active")
         conn.commit()
