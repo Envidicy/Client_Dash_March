@@ -58,6 +58,57 @@ CREATE TABLE IF NOT EXISTS agency_members (
   UNIQUE(agency_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS agency_clients (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+  client_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT DEFAULT 'active',
+  default_rebate_percent DOUBLE PRECISION DEFAULT 3,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(agency_id, client_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS agency_client_rates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+  client_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL,
+  platform_fee_percent DOUBLE PRECISION,
+  rebate_percent DOUBLE PRECISION DEFAULT 3,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(agency_id, client_user_id, platform)
+);
+
+CREATE TABLE IF NOT EXISTS agency_wallets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+  balance DOUBLE PRECISION DEFAULT 0,
+  currency TEXT DEFAULT 'KZT',
+  low_threshold DOUBLE PRECISION DEFAULT 50000,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(agency_id)
+);
+
+CREATE TABLE IF NOT EXISTS agency_wallet_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agency_id INTEGER REFERENCES agencies(id) ON DELETE CASCADE,
+  client_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  account_id INTEGER REFERENCES ad_accounts(id) ON DELETE SET NULL,
+  amount DOUBLE PRECISION NOT NULL,
+  currency TEXT DEFAULT 'KZT',
+  type TEXT NOT NULL,
+  source_type TEXT,
+  source_id INTEGER,
+  source_key TEXT UNIQUE,
+  note TEXT,
+  created_by TEXT,
+  initiated_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  acting_as_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS user_profiles (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   name TEXT,
@@ -75,6 +126,8 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 CREATE TABLE IF NOT EXISTS ad_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER REFERENCES users(id),
+  owner_type TEXT DEFAULT 'client',
+  agency_id INTEGER REFERENCES agencies(id) ON DELETE SET NULL,
   platform TEXT NOT NULL,
   external_id TEXT,
   name TEXT NOT NULL,
@@ -195,6 +248,10 @@ CREATE TABLE IF NOT EXISTS topups (
   user_id INTEGER REFERENCES users(id),
   amount_input DOUBLE PRECISION NOT NULL,
   fee_percent DOUBLE PRECISION DEFAULT 0,
+  platform_fee_percent DOUBLE PRECISION DEFAULT 0,
+  agency_id INTEGER REFERENCES agencies(id) ON DELETE SET NULL,
+  agency_rebate_percent DOUBLE PRECISION DEFAULT 0,
+  agency_rebate_amount DOUBLE PRECISION DEFAULT 0,
   vat_percent DOUBLE PRECISION DEFAULT 0,
   amount_net DOUBLE PRECISION NOT NULL,
   currency TEXT DEFAULT 'USD',

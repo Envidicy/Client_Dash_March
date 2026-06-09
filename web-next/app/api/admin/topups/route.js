@@ -40,6 +40,13 @@ function normalizeStatus(status) {
 
 function normalizeTopup(row, index) {
   const breakdown = getTopupBreakdown(row)
+  const platformFeePercent = Number(row?.platform_fee_percent ?? row?.fee_percent ?? breakdown.feePercent ?? 0)
+  const agencyRebatePercent = Number(row?.agency_rebate_percent || 0)
+  const totalFeePercent = Number(row?.total_fee_percent ?? row?.fee_percent ?? platformFeePercent + agencyRebatePercent)
+  const platformFeeAmount = Number(row?.platform_fee_amount ?? breakdown.inputAmount * (platformFeePercent / 100))
+  const agencyRebateAmount = Number(row?.agency_rebate_amount ?? breakdown.inputAmount * (agencyRebatePercent / 100))
+  const totalFeeAmount = Number(row?.total_fee_amount ?? breakdown.inputAmount * (totalFeePercent / 100))
+  const totalWalletDebit = Number(row?.total_wallet_debit ?? breakdown.inputAmount + totalFeeAmount + breakdown.vatAmount)
   return {
     id: row?.id ?? `topup-${index}`,
     created_at: row?.created_at || '',
@@ -54,16 +61,27 @@ function normalizeTopup(row, index) {
     reference_id: row?.reference_id || row?.invoice_number || null,
     amount_input: breakdown.inputAmount,
     currency: breakdown.inputCurrency,
-    fee_percent: breakdown.feePercent,
+    fee_percent: totalFeePercent,
+    total_fee_percent: totalFeePercent,
+    platform_fee_percent: platformFeePercent,
+    platform_fee_amount: platformFeeAmount,
+    agency_id: row?.agency_id || null,
+    agency_name: row?.agency_name || '',
+    agency_rebate_percent: agencyRebatePercent,
+    agency_rebate_amount: agencyRebateAmount,
+    total_fee_amount: totalFeeAmount,
+    topup_owner_type: row?.topup_owner_type || (row?.agency_id ? 'agency_client' : 'direct_client'),
     vat_percent: breakdown.vatPercent,
     fx_rate: breakdown.fxRate,
-    total_wallet_debit: breakdown.totalWalletDebit,
+    total_wallet_debit: totalWalletDebit,
     net_account_funding: breakdown.netAccountFunding,
     breakdown: {
       clientFunding: breakdown.inputAmount,
-      acquiringFee: breakdown.feeAmount,
+      acquiringFee: totalFeeAmount,
+      platformFee: platformFeeAmount,
+      agencyRebate: agencyRebateAmount,
       vat: breakdown.vatAmount,
-      totalWalletDebit: breakdown.totalWalletDebit,
+      totalWalletDebit,
       netAccountFunding: breakdown.netAccountFunding,
       accountCurrency: breakdown.accountCurrency,
       inputCurrency: breakdown.inputCurrency,
