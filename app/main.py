@@ -5062,7 +5062,7 @@ def register(payload: AuthPayload):
         _send_telegram_alert(
             "\n".join(
                 [
-                    "?? <b>????? ???????????</b>",
+                    "🆕 <b>Новая регистрация</b>",
                     f"ID: <code>{user_id}</code>",
                     f"Email: <code>{email}</code>",
                 ]
@@ -9608,13 +9608,13 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
         _send_telegram_alert(
             "\n".join(
                 [
-                    "рџ§ѕ <b>Р—Р°РїСЂРѕСЃ РЅР° РїРѕРїРѕР»РЅРµРЅРёРµ РєРѕС€РµР»СЊРєР°</b>",
+                    "🧾 <b>Запрос на пополнение кошелька</b>",
                     f"ID: <code>{request_id}</code>",
-                    f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ: <code>{current_user['email']}</code> (id={current_user['id']})",
-                    f"РЎСѓРјРјР°: <b>{payload.amount:.2f} {payload.currency}</b>",
-                    f"РљРѕРЅС‚СЂР°РіРµРЅС‚: <b>{client_name or 'вЂ”'}</b>",
-                    f"Р‘РРќ/РРРќ: <code>{client_bin or 'вЂ”'}</code>",
-                    f"Order Ref: <code>{payload.order_ref or 'вЂ”'}</code>",
+                    f"Пользователь: <code>{current_user['email']}</code> (id={current_user['id']})",
+                    f"Сумма: <b>{payload.amount:.2f} {payload.currency}</b>",
+                    f"Контрагент: <b>{client_name or '—'}</b>",
+                    f"БИН/ИИН: <code>{client_bin or '—'}</code>",
+                    f"Order Ref: <code>{payload.order_ref or '—'}</code>",
                 ]
             )
         )
@@ -10209,11 +10209,11 @@ def create_account_request(payload: AccountRequestCreate, current_user=Depends(g
         _send_telegram_alert(
             "\n".join(
                 [
-                    "рџ†• <b>Р—Р°СЏРІРєР° РЅР° РѕС‚РєСЂС‹С‚РёРµ Р°РєРєР°СѓРЅС‚Р°</b>",
+                    "🆕 <b>Заявка на открытие аккаунта</b>",
                     f"ID: <code>{request_id}</code>",
-                    f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ: <code>{current_user['email']}</code> (id={current_user['id']})",
-                    f"РџР»Р°С‚С„РѕСЂРјР°: <b>{payload.platform}</b>",
-                    f"РќР°Р·РІР°РЅРёРµ: <b>{payload.name}</b>",
+                    f"Пользователь: <code>{current_user['email']}</code> (id={current_user['id']})",
+                    f"Платформа: <b>{payload.platform}</b>",
+                    f"Название: <b>{payload.name}</b>",
                 ]
             )
         )
@@ -12024,12 +12024,12 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
             _send_telegram_alert(
                 "\n".join(
                     [
-                        "вњ… <b>РџРѕРїРѕР»РЅРµРЅРёРµ РѕРїР»Р°С‡РµРЅРѕ/Р·Р°РІРµСЂС€РµРЅРѕ</b>",
+                        "✅ <b>Пополнение оплачено/завершено</b>",
                         f"Topup ID: <code>{topup_id}</code>",
-                        f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ: <code>{user_row['email'] if user_row else row['user_id']}</code>",
-                        f"РџР»Р°С‚С„РѕСЂРјР°: <b>{account_row['platform'] if account_row else 'вЂ”'}</b>",
-                        f"РђРєРєР°СѓРЅС‚: <b>{account_row['name'] if account_row else row['account_id']}</b>",
-                        f"РЎСѓРјРјР°: <b>{(row['amount_net'] or row['amount_input'] or 0):.2f} {row['currency']}</b>",
+                        f"Пользователь: <code>{user_row['email'] if user_row else row['user_id']}</code>",
+                        f"Платформа: <b>{account_row['platform'] if account_row else '—'}</b>",
+                        f"Аккаунт: <b>{account_row['name'] if account_row else row['account_id']}</b>",
+                        f"Сумма: <b>{(row['amount_net'] or row['amount_input'] or 0):.2f} {row['currency']}</b>",
                     ]
                 )
             )
@@ -13166,14 +13166,14 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
         _send_telegram_alert(
             "\n".join(
                 [
-                    "рџ’і <b>РќРѕРІР°СЏ Р·Р°СЏРІРєР° РЅР° РїРѕРїРѕР»РЅРµРЅРёРµ</b>",
+                    "💳 <b>Новая заявка на пополнение</b>",
                     f"ID: <code>{topup_id}</code>",
-                    f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ: <code>{current_user['email']}</code> (id={resolved_user_id})",
-                    f"РџР»Р°С‚С„РѕСЂРјР°: <b>{acc['platform']}</b>",
-                    f"РђРєРєР°СѓРЅС‚: <b>{account_name['name'] if account_name else account_id}</b> (id={account_id})",
-                    f"РЎСѓРјРјР°: <b>{amount_input:.2f} {currency}</b>",
-                    f"РљРѕРјРёСЃСЃРёСЏ: <b>{fee_percent:.2f}%</b>",
-                    f"РҐРѕР»Рґ РІ РєРѕС€РµР»СЊРєРµ: <b>{gross_amount:.2f} {currency}</b>",
+                    f"Пользователь: <code>{current_user['email']}</code> (id={resolved_user_id})",
+                    f"Платформа: <b>{acc['platform']}</b>",
+                    f"Аккаунт: <b>{account_name['name'] if account_name else account_id}</b> (id={account_id})",
+                    f"Сумма: <b>{amount_input:.2f} {currency}</b>",
+                    f"Комиссия: <b>{fee_percent:.2f}%</b>",
+                    f"Холд в кошельке: <b>{gross_amount:.2f} {currency}</b>",
                 ]
             )
         )
