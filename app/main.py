@@ -4187,6 +4187,14 @@ def _ensure_agency_member(conn, agency_id: int, user_id: int, role: str = "clien
         """,
         (agency_id, user_id, role, status),
     )
+    conn.execute(
+        """
+        UPDATE agency_members
+        SET role=?, status=?
+        WHERE agency_id=? AND user_id=?
+        """,
+        (role, status, agency_id, user_id),
+    )
 
 
 def _ensure_agency_account_mapping(conn, agency_id: int, ad_account_id: int, label: Optional[str] = None, status: str = "active") -> Optional[int]:
@@ -10423,6 +10431,10 @@ def admin_get_agency_detail(agency_id: int, admin_user=Depends(get_admin_user)):
         ).fetchone()
         if not agency:
             raise HTTPException(status_code=404, detail="Agency not found")
+        agency_data = dict(agency)
+        if agency_data.get("owner_user_id") is not None:
+            _ensure_agency_member(conn, agency_id, int(agency_data["owner_user_id"]), role="owner", status="active")
+            conn.commit()
 
         members = conn.execute(
             """
@@ -10518,7 +10530,7 @@ def admin_get_agency_detail(agency_id: int, admin_user=Depends(get_admin_user)):
             (agency_id,),
         ).fetchall()
         return {
-            "agency": dict(agency),
+            "agency": agency_data,
             "members": [dict(row) for row in members],
             "accounts": [dict(row) for row in accounts],
             "own_accounts": [dict(row) for row in own_accounts],
