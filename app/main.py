@@ -11343,15 +11343,6 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
             conn.execute("SET LOCAL statement_timeout TO '15000ms'")
         except Exception:
             pass
-        try:
-            _sync_completed_topup_funding_events(conn)
-            conn.commit()
-        except Exception:
-            logging.exception("Failed to sync completed topup funding events before admin client list")
-            try:
-                conn.rollback()
-            except Exception:
-                logging.exception("Rollback failed after funding sync error")
         clients: List[Dict[str, object]] = []
         try:
             try:
@@ -11363,25 +11354,11 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                         COALESCE(SUM(CASE WHEN seen_by_admin=0 THEN 1 ELSE 0 END), 0) as unread_topups,
                         COALESCE(SUM(CASE WHEN t.status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
                         COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
+                        COALESCE(SUM(CASE WHEN t.status='completed' THEN COALESCE(t.amount_input, 0) ELSE 0 END), 0) as completed_total_kzt,
                         MAX(t.created_at) as last_topup_at
                       FROM topups t
                       JOIN ad_accounts a ON a.id = t.account_id
                       GROUP BY a.user_id
-                    ),
-                    funding_stats AS (
-                      SELECT
-                        user_id,
-                        COALESCE(SUM(COALESCE(amount_kzt, 0)), 0) as completed_total_kzt
-                      FROM account_funding_events
-                      WHERE source_type='topup'
-                        AND voided_at IS NULL
-                        AND EXISTS (
-                          SELECT 1
-                          FROM topups t
-                          WHERE t.id = account_funding_events.source_id
-                            AND t.status='completed'
-                        )
-                      GROUP BY user_id
                     ),
                     wallet_stats AS (
                       SELECT
@@ -11396,12 +11373,11 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                       u.email,
                       COALESCE(ts.unread_topups, 0) as unread_topups,
                       COALESCE(ts.pending_requests, 0) as pending_requests,
-                      COALESCE(fs.completed_total_kzt, 0) as completed_total,
+                      COALESCE(ts.completed_total_kzt, 0) as completed_total,
                       COALESCE(ts.completed_count, 0) as completed_count,
                       COALESCE(ts.last_topup_at, ws.last_funding_at) as last_activity
                     FROM users u
                     LEFT JOIN topup_stats ts ON ts.user_id = u.id
-                    LEFT JOIN funding_stats fs ON fs.user_id = u.id
                     LEFT JOIN wallet_stats ws ON ws.user_id = u.id
                     WHERE COALESCE(ts.completed_count, 0) > 0 OR COALESCE(u.is_client, 0) = 1
                     ORDER BY unread_topups DESC, u.email ASC
@@ -11425,25 +11401,11 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                         a.user_id as user_id,
                         COALESCE(SUM(CASE WHEN t.status!='completed' THEN 1 ELSE 0 END), 0) as pending_requests,
                         COALESCE(SUM(CASE WHEN t.status='completed' THEN 1 ELSE 0 END), 0) as completed_count,
+                        COALESCE(SUM(CASE WHEN t.status='completed' THEN COALESCE(t.amount_input, 0) ELSE 0 END), 0) as completed_total_kzt,
                         MAX(t.created_at) as last_topup_at
                       FROM topups t
                       JOIN ad_accounts a ON a.id = t.account_id
                       GROUP BY a.user_id
-                    ),
-                    funding_stats AS (
-                      SELECT
-                        user_id,
-                        COALESCE(SUM(COALESCE(amount_kzt, 0)), 0) as completed_total_kzt
-                      FROM account_funding_events
-                      WHERE source_type='topup'
-                        AND voided_at IS NULL
-                        AND EXISTS (
-                          SELECT 1
-                          FROM topups t
-                          WHERE t.id = account_funding_events.source_id
-                            AND t.status='completed'
-                        )
-                      GROUP BY user_id
                     ),
                     wallet_stats AS (
                       SELECT
@@ -11458,12 +11420,11 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
                       u.email,
                       0 as unread_topups,
                       COALESCE(ts.pending_requests, 0) as pending_requests,
-                      COALESCE(fs.completed_total_kzt, 0) as completed_total,
+                      COALESCE(ts.completed_total_kzt, 0) as completed_total,
                       COALESCE(ts.completed_count, 0) as completed_count,
                       COALESCE(ts.last_topup_at, ws.last_funding_at) as last_activity
                     FROM users u
                     LEFT JOIN topup_stats ts ON ts.user_id = u.id
-                    LEFT JOIN funding_stats fs ON fs.user_id = u.id
                     LEFT JOIN wallet_stats ws ON ws.user_id = u.id
                     WHERE COALESCE(ts.completed_count, 0) > 0 OR COALESCE(u.is_client, 0) = 1
                     ORDER BY u.email ASC
