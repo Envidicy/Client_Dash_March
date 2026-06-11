@@ -2837,14 +2837,29 @@ def _request_issuer_snapshot(req: Dict[str, object], fallback: Dict[str, object]
 def _next_invoice_number(conn) -> str:
     now = datetime.utcnow()
     year = now.year
+    prefix = f"{year % 100:02d}"
+    max_existing_seq = 0
+    for table in ("wallet_topup_requests", "invoice_uploads"):
+        try:
+            rows = conn.execute(
+                f"SELECT invoice_number FROM {table} WHERE invoice_number LIKE ?",
+                (f"{prefix}%",),
+            ).fetchall()
+        except Exception:
+            rows = []
+        for row in rows:
+            raw_number = str(row.get("invoice_number") if isinstance(row, dict) else row["invoice_number"] or "").strip()
+            if not (raw_number.startswith(prefix) and raw_number[len(prefix):].isdigit()):
+                continue
+            max_existing_seq = max(max_existing_seq, int(raw_number[len(prefix):]))
     row = conn.execute("SELECT seq FROM invoice_counters WHERE year=?", (year,)).fetchone()
     if row:
-        seq = int(row["seq"]) + 1
+        seq = max(int(row["seq"] or 0), max_existing_seq) + 1
         conn.execute("UPDATE invoice_counters SET seq=? WHERE year=?", (seq, year))
     else:
-        seq = 1
+        seq = max_existing_seq + 1
         conn.execute("INSERT INTO invoice_counters (year, seq) VALUES (?, ?)", (year, seq))
-    return f"{year % 100:02d}{seq:09d}"
+    return f"{prefix}{seq:09d}"
 
 
 def _format_legal_entity_name(entity: Dict[str, object]) -> Optional[str]:
