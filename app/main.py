@@ -2658,7 +2658,7 @@ try:
 except Exception:
     logging.exception("Schema auto-apply failed during startup; continuing without blocking app boot")
 
-ADMIN_EMAILS = {"romant997@gmail.com", "kolyadov.denis@gmail.com"}
+ADMIN_EMAILS = {"romant997@gmail.com", "kolyadov.denis@gmail.com", "olewkakim02397@gmail.com"}
 BENEFICIARY = {
     "name": "ИП Art Book Inc.",
     "bin": "960910300234",
