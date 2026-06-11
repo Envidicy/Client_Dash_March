@@ -2838,20 +2838,35 @@ def _next_invoice_number(conn) -> str:
     now = datetime.utcnow()
     year = now.year
     prefix = f"{year % 100:02d}"
+
+    def _invoice_seq(value: object) -> Optional[int]:
+        raw = str(value or "").strip()
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        if not digits:
+            return None
+        if digits.startswith(prefix) and len(digits) > 2:
+            digits = digits[len(prefix):]
+        try:
+            seq_value = int(digits)
+        except ValueError:
+            return None
+        if seq_value <= 0 or seq_value > 999_999_999:
+            return None
+        return seq_value
+
     max_existing_seq = 0
     for table in ("wallet_topup_requests", "invoice_uploads"):
         try:
             rows = conn.execute(
-                f"SELECT invoice_number FROM {table} WHERE invoice_number LIKE ?",
-                (f"{prefix}%",),
+                f"SELECT invoice_number FROM {table} WHERE invoice_number IS NOT NULL",
             ).fetchall()
         except Exception:
             rows = []
         for row in rows:
             raw_number = str(row.get("invoice_number") if isinstance(row, dict) else row["invoice_number"] or "").strip()
-            if not (raw_number.startswith(prefix) and raw_number[len(prefix):].isdigit()):
-                continue
-            max_existing_seq = max(max_existing_seq, int(raw_number[len(prefix):]))
+            seq_value = _invoice_seq(raw_number)
+            if seq_value is not None:
+                max_existing_seq = max(max_existing_seq, seq_value)
     row = conn.execute("SELECT seq FROM invoice_counters WHERE year=?", (year,)).fetchone()
     if row:
         seq = max(int(row["seq"] or 0), max_existing_seq) + 1
