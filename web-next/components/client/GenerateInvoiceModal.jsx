@@ -100,8 +100,18 @@ export default function GenerateInvoiceModal({ open, onClose, onCreated, tr, pre
     }
   }, [open])
 
-  function openInvoicePage(requestId) {
-    const href = `/api/client/wallet-topup-requests/${requestId}/invoice`
+  function invoiceHrefFromResponse(data) {
+    const publicUrl = String(data?.invoice_public_url || '')
+    if (publicUrl.startsWith('/wallet/topup-requests/')) {
+      return publicUrl.replace('/wallet/topup-requests/', '/api/client/wallet-topup-requests/')
+    }
+    const requestId = data?.id
+    return requestId ? `/api/client/wallet-topup-requests/${requestId}/invoice` : ''
+  }
+
+  function openInvoicePage(data) {
+    const href = invoiceHrefFromResponse(data)
+    if (!href) throw new Error('Invoice URL is missing')
     const popup = window.open(href, '_blank', 'noopener')
     if (!popup) throw new Error('Popup blocked while opening invoice')
   }
@@ -187,7 +197,7 @@ export default function GenerateInvoiceModal({ open, onClose, onCreated, tr, pre
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.detail || 'Failed to generate invoice request')
-      if (data?.id) openInvoicePage(data.id)
+      if (data?.id) openInvoicePage(data)
       if (onCreated) await onCreated(data)
       onClose()
     } catch (e) {

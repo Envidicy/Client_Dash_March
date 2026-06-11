@@ -46,8 +46,8 @@ async function proxyBinaryResponse(upstreamRes, fallbackName) {
   if (contentType.toLowerCase().includes('text/html')) {
     const html = await upstreamRes.text()
     const patchedHtml = html.replace(
-      /\/wallet\/topup-requests\/(\d+)\/pdf-generated(?:\?[^"']*)?/g,
-      '/api/client/wallet-topup-requests/$1/pdf-generated'
+      /\/wallet\/topup-requests\/(\d+)\/pdf-generated(\?[^"']*)?/g,
+      '/api/client/wallet-topup-requests/$1/pdf-generated$2'
     )
     return new NextResponse(patchedHtml, { status: upstreamRes.status || 200, headers })
   }
@@ -57,11 +57,13 @@ async function proxyBinaryResponse(upstreamRes, fallbackName) {
 
 export async function GET(request, { params }) {
   const auth = authHeader(request)
-  if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
+  const query = request.nextUrl?.search || ''
+  const token = (request.nextUrl?.searchParams?.get('token') || '').trim()
+  if (!auth && !token) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
   const id = params?.id
   if (!id) return NextResponse.json({ detail: 'id is required' }, { status: 400 })
 
-  const upstreamRes = await upstreamFetch(`/wallet/topup-requests/${id}/invoice`, auth)
+  const upstreamRes = await upstreamFetch(`/wallet/topup-requests/${id}/invoice${query}`, auth)
   return proxyBinaryResponse(upstreamRes, `invoice-${id}.html`)
 }

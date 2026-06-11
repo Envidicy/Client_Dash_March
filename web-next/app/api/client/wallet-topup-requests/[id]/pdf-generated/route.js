@@ -48,11 +48,13 @@ async function proxyBinaryResponse(upstreamRes, fallbackName) {
 
 export async function GET(request, { params }) {
   const auth = authHeader(request)
-  if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
+  const query = request.nextUrl?.search || ''
+  const token = (request.nextUrl?.searchParams?.get('token') || '').trim()
+  if (!auth && !token) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
   const id = params?.id
   if (!id) return NextResponse.json({ detail: 'id is required' }, { status: 400 })
 
-  const upstreamRes = await upstreamFetch(`/wallet/topup-requests/${id}/pdf-generated`, auth)
+  const upstreamRes = await upstreamFetch(`/wallet/topup-requests/${id}/pdf-generated${query}`, auth)
   return proxyBinaryResponse(upstreamRes, `invoice-${id}.pdf`)
 }
