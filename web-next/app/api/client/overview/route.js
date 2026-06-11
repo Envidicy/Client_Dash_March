@@ -539,19 +539,19 @@ export async function GET(request) {
     const lastSyncedAt = dbSnapshot?.last_synced_at || null
     const hasLiveBalance = Number.isFinite(liveBalance) || Number.isFinite(dbOptionalBalance)
     const hasFundingFallback = Number.isFinite(fundingValue) && fundingValue > 0 && Number.isFinite(spendValue)
-    const derivedBalance = Number.isFinite(dbRemaining)
-      ? dbRemaining
-      : Number.isFinite(liveBalance)
-        ? liveBalance
-        : Number.isFinite(dbOptionalBalance)
-          ? dbOptionalBalance
+    const derivedBalance = Number.isFinite(liveBalance)
+      ? liveBalance
+      : Number.isFinite(dbOptionalBalance)
+        ? dbOptionalBalance
+        : Number.isFinite(dbRemaining)
+          ? dbRemaining
           : hasFundingFallback
             ? fundingValue - spendValue
             : null
-    const balanceSource = Number.isFinite(dbRemaining)
-      ? 'db_remaining'
-      : hasLiveBalance
-        ? 'live'
+    const balanceSource = hasLiveBalance
+      ? 'live'
+      : Number.isFinite(dbRemaining)
+        ? 'db_remaining'
         : hasFundingFallback
           ? 'fact_minus_spend'
           : 'none'
