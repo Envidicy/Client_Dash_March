@@ -72,6 +72,9 @@ function consumeImpersonationFromUrl() {
 export function setAuth(auth) {
   if (typeof window === 'undefined') return
   clearImpersonation()
+  window.sessionStorage.removeItem(KEY_TOKEN)
+  window.sessionStorage.removeItem(KEY_EMAIL)
+  window.sessionStorage.removeItem(KEY_USER_ID)
   localStorage.setItem(KEY_TOKEN, auth.token)
   localStorage.setItem(KEY_EMAIL, auth.email)
   localStorage.setItem(KEY_USER_ID, String(auth.id))

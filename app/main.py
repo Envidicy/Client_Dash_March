@@ -7111,6 +7111,7 @@ def get_profile(current_user=Depends(get_current_user)):
         profile["email"] = current_user["email"]
         profile["primary_email"] = current_user.get("primary_email") or current_user["email"]
         profile["can_manage_accesses"] = bool(current_user.get("can_manage_accesses"))
+        profile["is_admin"] = _is_admin_email(current_user.get("email")) or _is_admin_email(current_user.get("primary_email"))
         if profile.get("avatar_path"):
             profile["avatar_url"] = _build_avatar_url(current_user["id"])
         return profile
@@ -7143,6 +7144,7 @@ def update_profile(payload: ProfilePayload, current_user=Depends(get_current_use
         result["email"] = current_user["email"]
         result["primary_email"] = current_user.get("primary_email") or current_user["email"]
         result["can_manage_accesses"] = bool(current_user.get("can_manage_accesses"))
+        result["is_admin"] = _is_admin_email(current_user.get("email")) or _is_admin_email(current_user.get("primary_email"))
         if result.get("avatar_path"):
             result["avatar_url"] = _build_avatar_url(current_user["id"])
         return result
