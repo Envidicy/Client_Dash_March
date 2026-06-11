@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import AppShell from '../../components/layout/AppShell'
-import { apiFetch } from '../../lib/api'
+import ClientShell from '../../components/client/ClientShell'
+import styles from '../../components/client/client.module.css'
 import { clearAuth, getAuthToken } from '../../lib/auth'
 
 function formatMoney(value, currency = 'KZT') {
@@ -10,7 +10,7 @@ function formatMoney(value, currency = 'KZT') {
 }
 
 function formatDate(value) {
-  if (!value) return '-'
+  if (!value) return '—'
   return String(value).replace('T', ' ').slice(0, 16)
 }
 
@@ -22,7 +22,7 @@ export default function AgencyPage() {
   async function agencyFetch(path, options = {}) {
     const token = getAuthToken()
     if (!token) throw new Error('Unauthorized')
-    const res = await apiFetch(path, {
+    const res = await fetch(`/api/client${path}`, {
       ...options,
       headers: {
         ...(options.headers || {}),
@@ -105,106 +105,72 @@ export default function AgencyPage() {
   const ledger = payload?.ledger || []
   const canManage = Boolean(membership?.can_manage)
   const canImpersonate = Boolean(membership?.can_impersonate)
+  const currency = summary?.currency || wallet?.currency || 'KZT'
 
   return (
-    <AppShell eyebrow="Envidicy Agency" title="Agency workspace" subtitle="Clients, balances, own accounts and ledger.">
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <p className="eyebrow">Agency</p>
-            <h2>{agency?.name || 'Agency workspace'}</h2>
-          </div>
-        </div>
-        <div className="grid-3">
-          <article className="stat">
-            <p className="muted">Operating balance</p>
-            <h3>{formatMoney(summary?.balance ?? wallet?.balance, summary?.currency || wallet?.currency || 'KZT')}</h3>
-            <p className="muted small">Separate from client balances</p>
-          </article>
-          <article className="stat">
-            <p className="muted">Clients</p>
-            <h3>{clients.length}</h3>
-            <p className="muted small">Active agency clients</p>
-          </article>
-          <article className="stat">
-            <p className="muted">Role</p>
-            <h3>{membership?.role || '-'}</h3>
-            <p className="muted small">{canManage ? 'Can manage balances' : canImpersonate ? 'Can open clients' : 'Read-only'}</p>
-          </article>
-        </div>
-        {status ? <p className="muted">{status}</p> : null}
-      </section>
+    <ClientShell
+      activeNav="agency"
+      headerActionLabel=""
+      pageTitle={agency?.name || 'Agency workspace'}
+      pageSubtitle="Clients, balances, own accounts and agency ledger."
+      statusAlerts={status || 'Agency mode'}
+    >
+      <div className={styles.cardGrid4}>
+        <article className={styles.metricCard}>
+          <p className={styles.metricLabel}>Operating balance</p>
+          <h3 className={styles.metricValue}>{formatMoney(summary?.balance ?? wallet?.balance, currency)}</h3>
+          <p className={styles.metricHint}>Separate from client balances</p>
+        </article>
+        <article className={styles.metricCard}>
+          <p className={styles.metricLabel}>Clients</p>
+          <h3 className={styles.metricValue}>{clients.length}</h3>
+          <p className={styles.metricHint}>Active agency clients</p>
+        </article>
+        <article className={styles.metricCard}>
+          <p className={styles.metricLabel}>Rebate earned</p>
+          <h3 className={styles.metricValue}>{formatMoney(summary?.rebate_earned, currency)}</h3>
+          <p className={styles.metricHint}>Completed client topups</p>
+        </article>
+        <article className={styles.metricCard}>
+          <p className={styles.metricLabel}>Role</p>
+          <h3 className={styles.metricValue}>{membership?.role || '—'}</h3>
+          <p className={styles.metricHint}>{canManage ? 'Can manage balances' : canImpersonate ? 'Can open clients' : 'Read-only'}</p>
+        </article>
+      </div>
 
-      <section className="panel">
-        <div className="panel-head">
+      <section className={styles.sectionCard}>
+        <div className={styles.sectionHeader}>
           <div>
-            <p className="eyebrow">Finance</p>
-            <h2>Agency totals</h2>
-          </div>
-        </div>
-        <div className="grid-3">
-          <article className="stat">
-            <p className="muted">Rebate earned</p>
-            <h3>{formatMoney(summary?.rebate_earned, summary?.currency || 'KZT')}</h3>
-            <p className="muted small">Completed client topups</p>
-          </article>
-          <article className="stat">
-            <p className="muted">Sent to clients</p>
-            <h3>{formatMoney(summary?.transferred_to_clients, summary?.currency || 'KZT')}</h3>
-            <p className="muted small">Agency balance to client balance</p>
-          </article>
-          <article className="stat">
-            <p className="muted">Own account funding</p>
-            <h3>{formatMoney(summary?.own_account_funding, summary?.currency || 'KZT')}</h3>
-            <p className="muted small">Agency accounts spend base</p>
-          </article>
-          <article className="stat">
-            <p className="muted">Platform fees paid</p>
-            <h3>{formatMoney(summary?.platform_fees_paid, summary?.currency || 'KZT')}</h3>
-            <p className="muted small">Fees on agency own funding</p>
-          </article>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <p className="eyebrow">Clients</p>
-            <h2>Client balances</h2>
+            <h3 className={styles.sectionTitle}>Client balances</h3>
+            <div className={styles.metricHint}>Transfer agency balance to client wallets and open client workspaces.</div>
           </div>
         </div>
         {canManage ? (
-          <>
-            <div className="form-grid">
-              <label className="field">
-                <span>Client</span>
-                <select value={transferForm.client_user_id} onChange={(e) => setTransferForm((s) => ({ ...s, client_user_id: e.target.value }))}>
-                  <option value="">Select client</option>
-                  {clients.map((row) => (
-                    <option key={row.id} value={String(row.client_user_id)}>{row.email}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Amount</span>
-                <input value={transferForm.amount} onChange={(e) => setTransferForm((s) => ({ ...s, amount: e.target.value }))} type="number" placeholder="50000" />
-              </label>
-              <label className="field">
-                <span>Note</span>
-                <input value={transferForm.note} onChange={(e) => setTransferForm((s) => ({ ...s, note: e.target.value }))} placeholder="Client funding" />
-              </label>
-            </div>
-            <div className="panel-actions">
-              <button className="btn primary" type="button" onClick={transferToClient}>Transfer to client</button>
-            </div>
-          </>
+          <div className={styles.requestFormGrid} style={{ padding: '18px 22px' }}>
+            <label className={styles.requestField}>
+              <span>Client</span>
+              <select value={transferForm.client_user_id} onChange={(e) => setTransferForm((s) => ({ ...s, client_user_id: e.target.value }))}>
+                <option value="">Select client</option>
+                {clients.map((row) => (
+                  <option key={row.id} value={String(row.client_user_id)}>{row.email}</option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.requestField}>
+              <span>Amount</span>
+              <input value={transferForm.amount} onChange={(e) => setTransferForm((s) => ({ ...s, amount: e.target.value }))} type="number" placeholder="50000" />
+            </label>
+            <label className={styles.requestField}>
+              <span>Note</span>
+              <input value={transferForm.note} onChange={(e) => setTransferForm((s) => ({ ...s, note: e.target.value }))} placeholder="Client funding" />
+            </label>
+            <button className={styles.headerPrimaryAction} type="button" onClick={transferToClient}>Transfer to client</button>
+          </div>
         ) : null}
-        <div className="table-wrapper">
-          <table className="table">
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
             <thead>
-              <tr>
-                <th>Email</th><th>Balance</th><th>Rebate</th><th>Status</th><th>Вход</th>
-              </tr>
+              <tr><th>Email</th><th>Balance</th><th>Rebate</th><th>Status</th><th>Login</th></tr>
             </thead>
             <tbody>
               {!clients.length ? (
@@ -212,16 +178,16 @@ export default function AgencyPage() {
               ) : (
                 clients.map((row) => (
                   <tr key={row.id}>
-                    <td>{row.email}</td>
+                    <td><span className={styles.tableStrong}>{row.email}</span></td>
                     <td>{formatMoney(row.wallet_balance, row.wallet_currency || 'KZT')}</td>
                     <td>{row.default_rebate_percent ?? 3}%</td>
-                    <td>{row.status || 'active'}</td>
+                    <td><span className={styles.statusChip}>{row.status || 'active'}</span></td>
                     <td>
                       {canImpersonate ? (
-                        <button className="btn ghost small" type="button" onClick={() => impersonateClient(row.client_user_id, row.email)}>
-                          Войти
+                        <button className={styles.tableActionButton} type="button" onClick={() => impersonateClient(row.client_user_id, row.email)}>
+                          Open client
                         </button>
-                      ) : '-'}
+                      ) : '—'}
                     </td>
                   </tr>
                 ))
@@ -231,19 +197,19 @@ export default function AgencyPage() {
         </div>
       </section>
 
-      <section className="panel">
-        <div className="panel-head">
+      <div style={{ height: 18 }} />
+
+      <section className={styles.sectionCard}>
+        <div className={styles.sectionHeader}>
           <div>
-            <p className="eyebrow">Own accounts</p>
-            <h2>Agency ad accounts</h2>
+            <h3 className={styles.sectionTitle}>Agency ad accounts</h3>
+            <div className={styles.metricHint}>Personal agency-owned ad accounts.</div>
           </div>
         </div>
-        <div className="table-wrapper">
-          <table className="table">
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
             <thead>
-              <tr>
-                <th>Account</th><th>Platform</th><th>Currency</th><th>Budget</th><th>Status</th>
-              </tr>
+              <tr><th>Account</th><th>Platform</th><th>Currency</th><th>Budget</th><th>Status</th></tr>
             </thead>
             <tbody>
               {!ownAccounts.length ? (
@@ -251,11 +217,11 @@ export default function AgencyPage() {
               ) : (
                 ownAccounts.map((row) => (
                   <tr key={row.id}>
-                    <td>{row.name}</td>
+                    <td><span className={styles.tableStrong}>{row.name}</span></td>
                     <td>{row.platform}</td>
                     <td>{row.currency || 'USD'}</td>
                     <td>{formatMoney(row.budget_total, row.currency || 'USD')}</td>
-                    <td>{row.status || 'active'}</td>
+                    <td><span className={styles.statusChip}>{row.status || 'active'}</span></td>
                   </tr>
                 ))
               )}
@@ -264,19 +230,19 @@ export default function AgencyPage() {
         </div>
       </section>
 
-      <section className="panel">
-        <div className="panel-head">
+      <div style={{ height: 18 }} />
+
+      <section className={styles.sectionCard}>
+        <div className={styles.sectionHeader}>
           <div>
-            <p className="eyebrow">Ledger</p>
-            <h2>Agency ledger</h2>
+            <h3 className={styles.sectionTitle}>Agency ledger</h3>
+            <div className={styles.metricHint}>Rebates, transfers and own-account funding.</div>
           </div>
         </div>
-        <div className="table-wrapper">
-          <table className="table">
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
             <thead>
-              <tr>
-                <th>Date</th><th>Type</th><th>Amount</th><th>Client</th><th>Account</th><th>Note</th>
-              </tr>
+              <tr><th>Date</th><th>Type</th><th>Amount</th><th>Client</th><th>Account</th><th>Note</th></tr>
             </thead>
             <tbody>
               {!ledger.length ? (
@@ -287,9 +253,9 @@ export default function AgencyPage() {
                     <td>{formatDate(row.created_at)}</td>
                     <td>{row.type}</td>
                     <td>{formatMoney(row.amount, row.currency || 'KZT')}</td>
-                    <td>{row.client_email || '-'}</td>
-                    <td>{row.account_name ? `${row.account_platform} · ${row.account_name}` : '-'}</td>
-                    <td>{row.note || '-'}</td>
+                    <td>{row.client_email || '—'}</td>
+                    <td>{row.account_name ? `${row.account_platform} · ${row.account_name}` : '—'}</td>
+                    <td>{row.note || '—'}</td>
                   </tr>
                 ))
               )}
@@ -297,6 +263,6 @@ export default function AgencyPage() {
           </table>
         </div>
       </section>
-    </AppShell>
+    </ClientShell>
   )
 }

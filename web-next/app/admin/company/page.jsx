@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import AdminShell from '../../../components/admin/AdminShell'
 import { adminFetch } from '../../../lib/admin'
 
+const ISSUER_CODES = ['too', 'too_no_vat', 'ip']
+
 const EMPTY = {
   name: '',
   bin: '',
@@ -19,13 +21,15 @@ const EMPTY = {
 }
 
 function issuerLabel(code) {
-  return code === 'ip' ? 'IP (Without VAT)' : 'TOO (With VAT)'
+  if (code === 'ip') return 'IP (Without VAT)'
+  if (code === 'too_no_vat') return 'TOO (Without VAT)'
+  return 'TOO (With VAT)'
 }
 
 export default function AdminCompanyPage() {
   const router = useRouter()
   const [status, setStatus] = useState('Loading issuer profiles...')
-  const [forms, setForms] = useState({ too: { ...EMPTY }, ip: { ...EMPTY } })
+  const [forms, setForms] = useState({ too: { ...EMPTY }, too_no_vat: { ...EMPTY }, ip: { ...EMPTY } })
   const [saving, setSaving] = useState('')
 
   async function safeFetch(path, options = {}) {
@@ -40,9 +44,9 @@ export default function AdminCompanyPage() {
         throw new Error(payload?.detail || 'Failed to load issuer profiles.')
       }
       const data = await res.json().catch(() => [])
-      const next = { too: { ...EMPTY }, ip: { ...EMPTY } }
+      const next = { too: { ...EMPTY }, too_no_vat: { ...EMPTY }, ip: { ...EMPTY } }
       ;(Array.isArray(data) ? data : []).forEach((row) => {
-        const key = row?.issuer_type === 'ip' ? 'ip' : 'too'
+        const key = ISSUER_CODES.includes(row?.issuer_type) ? row.issuer_type : 'too'
         next[key] = {
           name: row?.name || '',
           bin: row?.bin || '',
@@ -112,8 +116,8 @@ export default function AdminCompanyPage() {
   }
 
   return (
-    <AdminShell title="Company" subtitle="Manage billing issuers for contract-based invoicing (TOO/IP).">
-      {['too', 'ip'].map((code) => (
+    <AdminShell title="Company" subtitle="Manage billing issuers for contract-based invoicing.">
+      {ISSUER_CODES.map((code) => (
         <section className="panel" key={code} style={{ marginBottom: 16 }}>
           <div className="panel-head">
             <div>

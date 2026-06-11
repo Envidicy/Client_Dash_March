@@ -59,8 +59,6 @@ function consumeImpersonationFromUrl() {
   window.sessionStorage.setItem(KEY_IMPERSONATION_ACTIVE, '1')
   window.sessionStorage.setItem(KEY_IMPERSONATION_RETURN, params.get('impersonation_return') || '/admin/clients')
   window.sessionStorage.setItem(KEY_IMPERSONATION_LABEL, params.get('impersonate_email') || '')
-  setTokenCookie(token)
-  syncAccessCookies(params.get('impersonate_email') || '')
 
   params.delete('impersonate_token')
   params.delete('impersonate_email')
@@ -94,6 +92,9 @@ export function clearAuth() {
 
 export function getAuthToken() {
   consumeImpersonationFromUrl()
+  if (typeof window !== 'undefined' && window.sessionStorage.getItem(KEY_IMPERSONATION_ACTIVE) === '1') {
+    return window.sessionStorage.getItem(KEY_TOKEN)
+  }
   const token = storageGet(KEY_TOKEN)
   if (token) {
     setTokenCookie(token)

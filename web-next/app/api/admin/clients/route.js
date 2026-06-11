@@ -27,6 +27,7 @@ function normalizeClient(row) {
     id: row?.id ?? null,
     email: row?.email || '',
     pending_requests: Number(row?.pending_requests || 0),
+    completed_count: Number(row?.completed_count || 0),
     completed_total_kzt: Number(row?.completed_total_kzt ?? row?.completed_total ?? 0),
     completed_total: Number(row?.completed_total ?? row?.completed_total_kzt ?? 0),
   }

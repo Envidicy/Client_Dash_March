@@ -13,6 +13,21 @@ function formatDate(value) {
   return str.split(' ')[0]
 }
 
+function normalizeIssuerType(value) {
+  return ['too', 'too_no_vat', 'ip'].includes(value) ? value : 'too'
+}
+
+function taxModeForIssuer(value) {
+  return normalizeIssuerType(value) === 'too' ? 'with_vat' : 'without_vat'
+}
+
+function issuerLabel(value) {
+  const type = normalizeIssuerType(value)
+  if (type === 'ip') return 'IP'
+  if (type === 'too_no_vat') return 'TOO (No VAT)'
+  return 'TOO'
+}
+
 function StatCard({ label, value, hint }) {
   return (
     <article className={styles.statCard}>
@@ -90,8 +105,8 @@ export default function AdminLegalEntitiesPage() {
       short_name: row.short_name || row.name || '',
       full_name: row.full_name || row.name || '',
       legal_address: row.legal_address || row.address || '',
-      issuer_type: row.issuer_type || 'too',
-      tax_mode: row.tax_mode || 'without_vat',
+      issuer_type: normalizeIssuerType(row.issuer_type),
+      tax_mode: row.tax_mode || taxModeForIssuer(row.issuer_type),
       contract_number: row.contract_number || '',
       contract_date: row.contract_date || '',
     })
@@ -106,8 +121,8 @@ export default function AdminLegalEntitiesPage() {
       short_name: form.short_name.trim(),
       full_name: form.full_name.trim(),
       legal_address: form.legal_address.trim(),
-      issuer_type: form.issuer_type || 'too',
-      tax_mode: form.tax_mode || 'without_vat',
+      issuer_type: normalizeIssuerType(form.issuer_type),
+      tax_mode: form.tax_mode || taxModeForIssuer(form.issuer_type),
       contract_number: form.contract_number.trim() || null,
       contract_date: form.contract_date.trim() || null,
     }
@@ -179,7 +194,7 @@ export default function AdminLegalEntitiesPage() {
                       <span className={styles.tableMeta}>Entity #{row.id}</span>
                     </td>
                     <td>{row.bin || '—'}</td>
-                    <td>{row.issuer_type === 'ip' ? 'IP' : 'TOO'}</td>
+                    <td>{issuerLabel(row.issuer_type)}</td>
                     <td>{row.tax_mode === 'with_vat' ? 'With VAT' : 'Without VAT'}</td>
                     <td>{row.contract_number ? `${row.contract_number}${row.contract_date ? ` · ${row.contract_date}` : ''}` : '—'}</td>
                     <td>{row.short_name || row.name || '—'}</td>
@@ -244,10 +259,11 @@ export default function AdminLegalEntitiesPage() {
                       setForm((s) => ({
                         ...s,
                         issuer_type: issuerType,
-                        tax_mode: issuerType === 'ip' ? 'without_vat' : 'with_vat',
+                        tax_mode: taxModeForIssuer(issuerType),
                       }))
                     }}>
                       <option value="too">TOO (With VAT)</option>
+                      <option value="too_no_vat">TOO (Without VAT)</option>
                       <option value="ip">IP (Without VAT)</option>
                     </select>
                   </label>

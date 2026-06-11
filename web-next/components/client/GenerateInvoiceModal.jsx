@@ -26,6 +26,14 @@ export default function GenerateInvoiceModal({ open, onClose, onCreated, tr, pre
 
   const amountNum = useMemo(() => Number(amount || 0), [amount])
 
+  function normalizeIssuerType(value) {
+    return ['too', 'too_no_vat', 'ip'].includes(value) ? value : 'too'
+  }
+
+  function taxModeForIssuer(value) {
+    return normalizeIssuerType(value) === 'too' ? 'with_vat' : 'without_vat'
+  }
+
   useEffect(() => {
     if (!open) return
     const token = getAuthToken()
@@ -107,8 +115,8 @@ export default function GenerateInvoiceModal({ open, onClose, onCreated, tr, pre
     }
     setSaving(true)
     setError('')
-    const issuerType = entityForm.issuer_type === 'ip' ? 'ip' : 'too'
-    const taxMode = issuerType === 'ip' ? 'without_vat' : 'with_vat'
+    const issuerType = normalizeIssuerType(entityForm.issuer_type)
+    const taxMode = taxModeForIssuer(issuerType)
     try {
       const res = await fetch('/api/client/legal-entities', {
         method: 'POST',
@@ -271,12 +279,13 @@ export default function GenerateInvoiceModal({ open, onClose, onCreated, tr, pre
                     setEntityForm((prev) => ({
                       ...prev,
                       issuer_type: issuerType,
-                      tax_mode: issuerType === 'ip' ? 'without_vat' : 'with_vat',
+                      tax_mode: taxModeForIssuer(issuerType),
                     }))
                   }}
                   value={entityForm.issuer_type}
                 >
                   <option value="too">{tr('TOO (With VAT)', 'ТОО (с НДС)')}</option>
+                  <option value="too_no_vat">{tr('TOO (Without VAT)', '\u0422\u041e\u041e (\u0431\u0435\u0437 \u041d\u0414\u0421)')}</option>
                   <option value="ip">{tr('IP (Without VAT)', 'ИП (без НДС)')}</option>
                 </select>
               </label>

@@ -207,6 +207,15 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
     router.push('/login')
   }
 
+  function closeImpersonationSession() {
+    const returnUrl = getImpersonationReturnUrl()
+    clearImpersonation()
+    window.close()
+    window.setTimeout(() => {
+      router.push(returnUrl)
+    }, 150)
+  }
+
   return (
     <>
       <nav className="sidebar">
@@ -285,10 +294,18 @@ export default function AppShell({ eyebrow, title, subtitle, area = 'client', ch
         <div className="bg-blur" />
         {impersonationActive ? (
           <div className="impersonation-banner">
-            <span>{t('shell.impersonatingClient')}: {impersonationLabel || profile.email || ''}</span>
-            <button className="btn ghost small" onClick={logout} type="button">
-              {t('shell.returnToAdmin')}
-            </button>
+            <div className="impersonation-banner-copy">
+              <strong>{t('shell.impersonatingClient')}: {impersonationLabel || profile.email || ''}</strong>
+              <span>{t('shell.impersonationSession')}</span>
+            </div>
+            <div className="impersonation-banner-actions">
+              <button className="btn ghost small" onClick={logout} type="button">
+                {t('shell.returnToAdmin')}
+              </button>
+              <button className="btn primary small" onClick={closeImpersonationSession} type="button">
+                {t('shell.close')}
+              </button>
+            </div>
           </div>
         ) : null}
         <header className="topbar">

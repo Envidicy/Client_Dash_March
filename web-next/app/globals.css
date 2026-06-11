@@ -1476,11 +1476,34 @@ button:disabled {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(106, 227, 255, 0.28);
-  background: rgba(106, 227, 255, 0.1);
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 198, 41, 0.45);
+  background: rgba(255, 198, 41, 0.12);
   color: var(--text);
+}
+
+.impersonation-banner-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.impersonation-banner-copy strong {
+  overflow-wrap: anywhere;
+}
+
+.impersonation-banner-copy span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.impersonation-banner-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .small {
@@ -1491,6 +1514,11 @@ button:disabled {
   .impersonation-banner {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .impersonation-banner-actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .profile-avatar {

@@ -506,12 +506,12 @@ function renderNotifications(items) {
           ? `${item.platform || ''} ${item.name || ''}`.trim()
           : `${item.platform || ''} ${item.name || ''}`.trim()
       const amount =
-        item.amount != null ? ` В· ${Number(item.amount).toLocaleString('ru-RU')} ${item.currency || ''}` : ''
-      const user = item.user_email ? ` В· ${item.user_email}` : ''
+        item.amount != null ? ` · ${Number(item.amount).toLocaleString('ru-RU')} ${item.currency || ''}` : ''
+      const user = item.user_email ? ` · ${item.user_email}` : ''
       return `
         <div class="dropdown-item">
           <div class="dropdown-title">${item.title}${amount}${user}</div>
-          <div class="dropdown-meta">${subtitle} В· ${date}</div>
+          <div class="dropdown-meta">${subtitle} · ${date}</div>
         </div>
       `
     })
@@ -519,7 +519,7 @@ function renderNotifications(items) {
 }
 
 function formatDate(value) {
-  if (!value) return 'вЂ”'
+  if (!value) return '—'
   const str = String(value)
   if (str.includes('T')) return str.split('T')[0]
   return str.split(' ')[0]

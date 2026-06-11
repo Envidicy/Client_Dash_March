@@ -1,16 +1,25 @@
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import styles from './client.module.css'
-import { clearAuth, getAuthToken } from '../../lib/auth'
+import {
+  clearAuth,
+  clearImpersonation,
+  getAuthToken,
+  getImpersonationLabel,
+  getImpersonationReturnUrl,
+  isImpersonating,
+} from '../../lib/auth'
 import { useI18n } from '../../lib/i18n/client'
 import GenerateInvoiceModal from './GenerateInvoiceModal'
 
-const NAV_ITEMS = [
+const BASE_NAV_ITEMS = [
   { key: 'overview', href: '/dashboard', label: 'Overview', labelRu: 'Обзор', icon: 'O' },
   { key: 'performance', href: '/performance', label: 'Performance', labelRu: 'Перфоманс', icon: 'P' },
   { key: 'finance', href: '/funds', label: 'Finance', labelRu: 'Финансы', icon: 'F' },
 ]
+
+const AGENCY_NAV_ITEM = { key: 'agency', href: '/agency', label: 'Agency', labelRu: 'Агентство', icon: 'A' }
 
 export default function ClientShell({
   activeNav,
@@ -42,36 +51,44 @@ export default function ClientShell({
   ])
   const [notifications, setNotifications] = useState([])
   const [unreadNotifications, setUnreadNotifications] = useState(0)
+  const [hasAgencyAccess, setHasAgencyAccess] = useState(false)
+  const [impersonationActive, setImpersonationActive] = useState(false)
+  const [impersonationLabel, setImpersonationLabel] = useState('')
   const profileRef = useRef(null)
   const entityRef = useRef(null)
   const notificationsRef = useRef(null)
 
+  const navItems = useMemo(() => {
+    return hasAgencyAccess || activeNav === 'agency' ? [...BASE_NAV_ITEMS, AGENCY_NAV_ITEM] : BASE_NAV_ITEMS
+  }, [activeNav, hasAgencyAccess])
+
   useEffect(() => {
     function onPointerDown(event) {
-      if (!profileRef.current?.contains(event.target)) {
-        setProfileOpen(false)
-      }
-      if (!entityRef.current?.contains(event.target)) {
-        setEntityOpen(false)
-      }
-      if (!notificationsRef.current?.contains(event.target)) {
-        setNotificationsOpen(false)
-      }
+      if (!profileRef.current?.contains(event.target)) setProfileOpen(false)
+      if (!entityRef.current?.contains(event.target)) setEntityOpen(false)
+      if (!notificationsRef.current?.contains(event.target)) setNotificationsOpen(false)
     }
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
   }, [])
 
   useEffect(() => {
+    setImpersonationActive(isImpersonating())
+    setImpersonationLabel(getImpersonationLabel())
+  }, [])
+
+  useEffect(() => {
     const token = getAuthToken()
     if (!token) return
     let cancelled = false
+
     async function loadSidebarData() {
       try {
-        const [entityRes, ratesRes, notificationsRes] = await Promise.all([
+        const [entityRes, ratesRes, notificationsRes, agencyRes] = await Promise.all([
           fetch('/api/client/legal-entities', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }),
           fetch('/api/client/rates-bcc', { cache: 'no-store' }),
           fetch('/api/client/notifications', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }),
+          fetch('/api/client/agencies/mine', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }),
         ])
         if (cancelled) return
 
@@ -115,10 +132,14 @@ export default function ClientShell({
         const notificationsPayload = notificationsRes.ok ? await notificationsRes.json().catch(() => ({})) : {}
         setNotifications(Array.isArray(notificationsPayload?.items) ? notificationsPayload.items : [])
         setUnreadNotifications(Number(notificationsPayload?.unread || 0))
+
+        const agencyPayload = agencyRes.ok ? await agencyRes.json().catch(() => null) : null
+        setHasAgencyAccess(Array.isArray(agencyPayload?.items) && agencyPayload.items.length > 0)
       } catch {
-        // ignore sidebar data errors
+        if (!cancelled) setHasAgencyAccess(false)
       }
     }
+
     loadSidebarData()
     return () => {
       cancelled = true
@@ -163,8 +184,23 @@ export default function ClientShell({
   }
 
   function logout() {
+    if (isImpersonating()) {
+      const returnUrl = getImpersonationReturnUrl()
+      clearImpersonation()
+      router.push(returnUrl)
+      return
+    }
     clearAuth()
     router.push('/login')
+  }
+
+  function closeImpersonationSession() {
+    const returnUrl = getImpersonationReturnUrl()
+    clearImpersonation()
+    window.close()
+    window.setTimeout(() => {
+      router.push(returnUrl)
+    }, 150)
   }
 
   return (
@@ -176,7 +212,7 @@ export default function ClientShell({
           </div>
 
           <nav className={styles.nav}>
-            {NAV_ITEMS.map((item) => (
+            {navItems.map((item) => (
               <Link
                 key={item.key}
                 href={item.href}
@@ -221,6 +257,23 @@ export default function ClientShell({
         </aside>
 
         <div className={styles.main}>
+          {impersonationActive ? (
+            <div className={styles.impersonationBanner}>
+              <div className={styles.impersonationCopy}>
+                <strong>{tr('Impersonating client', 'Вы вошли как клиент')}: {impersonationLabel}</strong>
+                <span>{tr('Separate temporary session', 'Отдельная временная сессия')}</span>
+              </div>
+              <div className={styles.impersonationActions}>
+                <button className={styles.secondaryActionButton} onClick={logout} type="button">
+                  {tr('Return to admin', 'Вернуться в админку')}
+                </button>
+                <button className={styles.topbarActionButton} onClick={closeImpersonationSession} type="button">
+                  {tr('Close', 'Закрыть')}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <header className={styles.topbar}>
             <div className={styles.topbarLeft}>
               {searchPlaceholder ? (
@@ -233,18 +286,10 @@ export default function ClientShell({
 
             <div className={styles.topbarRight}>
               <div className={styles.localeSwitch}>
-                <button
-                  className={locale === 'en' ? styles.localeButtonActive : styles.localeButton}
-                  onClick={() => setLocale('en')}
-                  type="button"
-                >
+                <button className={locale === 'en' ? styles.localeButtonActive : styles.localeButton} onClick={() => setLocale('en')} type="button">
                   EN
                 </button>
-                <button
-                  className={locale === 'ru' ? styles.localeButtonActive : styles.localeButton}
-                  onClick={() => setLocale('ru')}
-                  type="button"
-                >
+                <button className={locale === 'ru' ? styles.localeButtonActive : styles.localeButton} onClick={() => setLocale('ru')} type="button">
                   RU
                 </button>
               </div>

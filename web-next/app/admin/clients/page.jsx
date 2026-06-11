@@ -229,7 +229,8 @@ export default function AdminClientsPage() {
         impersonate_user_id: String(data.id || userId),
         impersonation_return: '/admin/clients',
       })
-      window.open(`/dashboard?${params.toString()}`, '_blank', 'noopener')
+      const targetPath = data.agency_access ? '/agency' : '/dashboard'
+      window.open(`${targetPath}?${params.toString()}`, '_blank', 'noopener')
     } catch (e) {
       setStatus(e?.message || 'Failed to open client workspace.')
     }
@@ -357,7 +358,7 @@ export default function AdminClientsPage() {
               <tr>
                 <th>Client</th>
                 <th>Requests</th>
-                <th>Completed</th>
+                <th>Completed funding</th>
                 <th style={{ textAlign: 'right' }}>Action</th>
               </tr>
             </thead>
@@ -368,11 +369,15 @@ export default function AdminClientsPage() {
                 rows.map((row) => {
                   const pending = Number(row.pending_requests || 0)
                   const completedTotal = Number(row.completed_total_kzt ?? row.completed_total ?? 0)
+                  const completedCount = Number(row.completed_count || 0)
                   return (
                     <tr key={row.id}>
                       <td>{row.email || '—'}</td>
                       <td>{pending ? <span className="dot">{pending}</span> : '—'}</td>
-                      <td>{completedTotal ? `${formatMoney(completedTotal)} KZT` : '—'}</td>
+                      <td>
+                        {completedTotal ? `${formatMoney(completedTotal)} KZT` : '—'}
+                        {completedCount ? <div className={'muted small'}>{completedCount} topups</div> : null}
+                      </td>
                       <td style={{ textAlign: 'right' }}>
                         <div className="inline-actions">
                           <button className="btn primary small" type="button" onClick={() => impersonateClient(row.id, row.email)}>Impersonate</button>
