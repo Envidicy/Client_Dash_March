@@ -6055,9 +6055,12 @@ def _resolve_topup_account_amount(row: Dict[str, object], rates_data: Optional[D
 
     if fx_rate_value and fx_rate_value > 0 and amount_input_value is not None:
         calculated = amount_input_value / fx_rate_value
-        if amount_net_value is None:
+        if amount_net_value is None or amount_net_value <= 0:
             return calculated
-        if amount_net_value > amount_input_value * 0.95:
+        # Older/manual rows sometimes stored KZT net in amount_net even when the
+        # ad account currency was USD/EUR. Treat values close to the KZT input as
+        # KZT, otherwise keep explicit account-currency overrides.
+        if amount_net_value >= amount_input_value * 0.5:
             return calculated
         return amount_net_value
 
@@ -11325,6 +11328,15 @@ def admin_list_clients(admin_user=Depends(get_admin_user)):
             conn.execute("SET LOCAL statement_timeout TO '15000ms'")
         except Exception:
             pass
+        try:
+            _sync_completed_topup_funding_events(conn)
+            conn.commit()
+        except Exception:
+            logging.exception("Failed to sync completed topup funding events before admin client list")
+            try:
+                conn.rollback()
+            except Exception:
+                logging.exception("Rollback failed after funding sync error")
         clients: List[Dict[str, object]] = []
         try:
             try:
