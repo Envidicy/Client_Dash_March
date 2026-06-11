@@ -3612,6 +3612,10 @@ def _normalize_email(value: Optional[str]) -> str:
     return (value or "").strip().lower()
 
 
+def _is_admin_email(value: Optional[str]) -> bool:
+    return _normalize_email(value) in ADMIN_EMAILS
+
+
 def _issue_password_salt() -> str:
     return secrets.token_hex(16)
 
@@ -4505,7 +4509,7 @@ def _list_accessible_accounts(conn, current_user) -> List[Dict[str, object]]:
     fallback_accounts = [dict(row) for row in fallback_rows]
     fallback_visible = [row for row in fallback_accounts if _is_client_visible(row)]
 
-    if current_user["email"] in ADMIN_EMAILS or current_user.get("primary_email") in ADMIN_EMAILS:
+    if _is_admin_email(current_user.get("email")) or _is_admin_email(current_user.get("primary_email")):
         rows = conn.execute("SELECT * FROM ad_accounts ORDER BY created_at DESC").fetchall()
         return [dict(row) for row in rows]
 
@@ -4749,7 +4753,7 @@ def get_optional_user(authorization: Optional[str] = Header(None)):
 
 
 def get_admin_user(current_user=Depends(get_current_user)):
-    if current_user["email"] not in ADMIN_EMAILS and current_user.get("primary_email") not in ADMIN_EMAILS:
+    if not (_is_admin_email(current_user.get("email")) or _is_admin_email(current_user.get("primary_email"))):
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
 
