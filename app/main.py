@@ -416,18 +416,69 @@ def _r2_upload_fileobj(key: str, fileobj, content_type: str = "application/pdf")
     return f"r2://{bucket_name}/{key}"
 
 
-def _send_telegram_alert(text: str, channel: str = "ops") -> None:
+def _telegram_bot_token(channel: str = "ops") -> Optional[str]:
     if channel == "reg":
         token = os.getenv("TELEGRAM_REG_BOT_TOKEN")
+    else:
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+    return token
+
+
+def _telegram_callback_secret() -> str:
+    return (
+        os.getenv("TELEGRAM_CALLBACK_SECRET")
+        or os.getenv("TELEGRAM_WEBHOOK_SECRET")
+        or os.getenv("AUTH_TOKEN_SECRET")
+        or _PUBLIC_URL_TOKEN_SECRET_FALLBACK
+    )
+
+
+def _telegram_callback_signature(action: str, resource_id: int) -> str:
+    message = f"{action}:{resource_id}".encode("utf-8")
+    digest = hmac.new(_telegram_callback_secret().encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return digest[:12]
+
+
+def _build_wallet_topup_credit_callback_data(request_id: int) -> str:
+    return f"wtc:{request_id}:{_telegram_callback_signature('wtc', request_id)}"
+
+
+def _parse_wallet_topup_credit_callback_data(value: str) -> Optional[int]:
+    parts = str(value or "").split(":")
+    if len(parts) != 3 or parts[0] != "wtc":
+        return None
+    try:
+        request_id = int(parts[1])
+    except (TypeError, ValueError):
+        return None
+    expected = _telegram_callback_signature("wtc", request_id)
+    if not hmac.compare_digest(parts[2], expected):
+        return None
+    return request_id
+
+
+def _telegram_api_post(method: str, payload: Dict[str, object], channel: str = "ops") -> Optional[Dict[str, object]]:
+    token = _telegram_bot_token(channel)
+    if not token:
+        return None
+    try:
+        resp = httpx.post(f"https://api.telegram.org/bot{token}/{method}", json=payload, timeout=8)
+        if resp.status_code >= 400:
+            return None
+        return resp.json()
+    except Exception:
+        return None
+
+
+def _send_telegram_alert(text: str, channel: str = "ops", reply_markup: Optional[Dict[str, object]] = None) -> None:
+    if channel == "reg":
         chat_id = os.getenv("TELEGRAM_REG_CHAT_ID")
         thread_id = os.getenv("TELEGRAM_REG_MESSAGE_THREAD_ID")
     else:
-        token = os.getenv("TELEGRAM_BOT_TOKEN")
         chat_id = os.getenv("TELEGRAM_CHAT_ID")
         thread_id = os.getenv("TELEGRAM_MESSAGE_THREAD_ID")
-    if not token or not chat_id:
+    if not _telegram_bot_token(channel) or not chat_id:
         return
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload: Dict[str, object] = {
         "chat_id": chat_id,
         "text": text,
@@ -439,8 +490,10 @@ def _send_telegram_alert(text: str, channel: str = "ops") -> None:
             payload["message_thread_id"] = int(thread_id)
         except ValueError:
             pass
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     try:
-        httpx.post(url, json=payload, timeout=8)
+        _telegram_api_post("sendMessage", payload, channel=channel)
     except Exception:
         # Telegram notifications should not break business flow.
         pass
@@ -6204,6 +6257,27 @@ def _build_topup_account_payload(row: Dict[str, object], account_row: Optional[D
     return _attach_topup_account_amount([payload])[0]
 
 
+def _format_topup_telegram_currency_lines(
+    *,
+    wallet_amount: Optional[float],
+    wallet_currency: Optional[str],
+    account_amount: Optional[float],
+    account_currency: Optional[str],
+    fx_rate: Optional[float],
+    wallet_total: Optional[float] = None,
+) -> List[str]:
+    wallet_currency_value = str(wallet_currency or "KZT").upper()
+    account_currency_value = str(account_currency or wallet_currency_value).upper()
+    lines = [f"Сумма в кошельке: <b>{float(wallet_amount or 0):.2f} {wallet_currency_value}</b>"]
+    if account_currency_value != wallet_currency_value or round(float(account_amount or 0), 2) != round(float(wallet_amount or 0), 2):
+        lines.append(f"Сумма на аккаунт: <b>{float(account_amount or 0):.2f} {account_currency_value}</b>")
+    if fx_rate and float(fx_rate) > 0 and account_currency_value != wallet_currency_value:
+        lines.append(f"Курс: <b>1 {account_currency_value} = {float(fx_rate):.2f} {wallet_currency_value}</b>")
+    if wallet_total is not None:
+        lines.append(f"Холд в кошельке: <b>{float(wallet_total or 0):.2f} {wallet_currency_value}</b>")
+    return lines
+
+
 def _funding_source_key(source_type: str, source_id: Optional[object]) -> Optional[str]:
     if source_id is None:
         return None
@@ -9624,7 +9698,17 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
                     f"БИН/ИИН: <code>{client_bin or '—'}</code>",
                     f"Order Ref: <code>{payload.order_ref or '—'}</code>",
                 ]
-            )
+            ),
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "Пополнить кошелек",
+                            "callback_data": _build_wallet_topup_credit_callback_data(int(request_id)),
+                        }
+                    ]
+                ]
+            },
         )
         return {
             "id": request_id,
@@ -9665,6 +9749,139 @@ def list_wallet_topup_requests(current_user=Depends(get_current_user)):
             item["invoice_generated_pdf_public_url"] = _build_wallet_invoice_generated_pdf_url(current_user["id"], request_id)
             items.append(item)
         return items
+
+
+def _credit_wallet_topup_request(conn, request_id: int, credited_by: Optional[str] = None) -> Dict[str, object]:
+    row = conn.execute(
+        """
+        SELECT r.*, u.email as user_email
+        FROM wallet_topup_requests r
+        LEFT JOIN users u ON u.id = r.user_id
+        WHERE r.id=?
+        """,
+        (request_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Wallet topup request not found")
+    request_row = dict(row)
+    status = str(request_row.get("status") or "").lower()
+    if status in {"completed", "credited", "approved"}:
+        return {
+            "status": "already_completed",
+            "request_id": request_id,
+            "user_id": request_row.get("user_id"),
+            "user_email": request_row.get("user_email"),
+            "amount": float(request_row.get("amount") or 0),
+            "currency": request_row.get("currency") or "KZT",
+        }
+
+    amount = float(request_row.get("amount") or 0)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Wallet topup amount must be positive")
+    currency = str(request_row.get("currency") or "KZT").upper()
+    user_id = int(request_row["user_id"])
+    wallet = _get_or_create_wallet(conn, user_id)
+    wallet_currency = str(wallet.get("currency") or currency).upper()
+    if wallet_currency != currency:
+        raise HTTPException(status_code=400, detail=f"Wallet currency mismatch: {wallet_currency} != {currency}")
+
+    cur = conn.execute(
+        """
+        UPDATE wallet_topup_requests
+        SET status=?
+        WHERE id=? AND COALESCE(status, '') NOT IN ('completed', 'credited', 'approved')
+        """,
+        ("completed", request_id),
+    )
+    if getattr(cur, "rowcount", 1) == 0:
+        return {
+            "status": "already_completed",
+            "request_id": request_id,
+            "user_id": user_id,
+            "user_email": request_row.get("user_email"),
+            "amount": amount,
+            "currency": currency,
+        }
+
+    new_balance = float(wallet.get("balance") or 0) + amount
+    conn.execute(
+        "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+        (new_balance, user_id),
+    )
+    note = f"Wallet topup request #{request_id}"
+    if credited_by:
+        note = f"{note} credited by {credited_by}"
+    conn.execute(
+        """
+        INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, None, amount, currency, "wallet_topup", note),
+    )
+    conn.commit()
+    return {
+        "status": "completed",
+        "request_id": request_id,
+        "user_id": user_id,
+        "user_email": request_row.get("user_email"),
+        "amount": amount,
+        "currency": currency,
+        "balance": new_balance,
+    }
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Optional[str] = Header(None)):
+    expected_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
+    if expected_secret and not hmac.compare_digest(str(x_telegram_bot_api_secret_token or ""), expected_secret):
+        raise HTTPException(status_code=403, detail="Invalid Telegram webhook secret")
+    payload = await request.json()
+    callback = payload.get("callback_query") if isinstance(payload, dict) else None
+    if not isinstance(callback, dict):
+        return {"status": "ignored"}
+
+    callback_id = callback.get("id")
+    data = str(callback.get("data") or "")
+    request_id = _parse_wallet_topup_credit_callback_data(data)
+    if not request_id:
+        if callback_id:
+            _telegram_api_post(
+                "answerCallbackQuery",
+                {"callback_query_id": callback_id, "text": "Неизвестное действие", "show_alert": True},
+            )
+        return {"status": "ignored"}
+
+    try:
+        if not get_conn:
+            raise HTTPException(status_code=500, detail="DB not initialized")
+        with get_conn() as conn:
+            result = _credit_wallet_topup_request(conn, request_id, credited_by="telegram")
+    except HTTPException as exc:
+        if callback_id:
+            _telegram_api_post(
+                "answerCallbackQuery",
+                {"callback_query_id": callback_id, "text": str(exc.detail), "show_alert": True},
+            )
+        return {"status": "error", "detail": exc.detail}
+
+    if callback_id:
+        if result.get("status") == "already_completed":
+            text = "Уже пополнено"
+        else:
+            text = f"Кошелек пополнен: {float(result.get('amount') or 0):.2f} {result.get('currency') or 'KZT'}"
+        _telegram_api_post("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
+
+    message = callback.get("message") if isinstance(callback.get("message"), dict) else {}
+    chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+    chat_id = chat.get("id")
+    message_id = message.get("message_id")
+    if chat_id and message_id and result.get("status") != "already_completed":
+        _telegram_api_post(
+            "editMessageReplyMarkup",
+            {"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}},
+        )
+
+    return {"status": "ok", "result": result}
 
 
 @app.get("/wallet/topup-requests/{request_id}/invoice", response_class=HTMLResponse)
@@ -11925,7 +12142,7 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
             """
             SELECT
               id, status, account_id, amount_input, amount_net, fee_percent, platform_fee_percent,
-              agency_id, agency_rebate_percent, agency_rebate_amount, vat_percent, currency, user_id, hold_applied
+              agency_id, agency_rebate_percent, agency_rebate_amount, vat_percent, currency, fx_rate, user_id, hold_applied
             FROM topups
             WHERE id=?
             """,
@@ -12012,7 +12229,13 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                         f"Пользователь: <code>{user_row['email'] if user_row else row['user_id']}</code>",
                         f"Платформа: <b>{account_row['platform'] if account_row else '—'}</b>",
                         f"Аккаунт: <b>{account_row['name'] if account_row else row['account_id']}</b>",
-                        f"Сумма: <b>{(row['amount_net'] or row['amount_input'] or 0):.2f} {row['currency']}</b>",
+                        *_format_topup_telegram_currency_lines(
+                            wallet_amount=float(row.get("amount_input") or 0),
+                            wallet_currency=str(row.get("currency") or "KZT"),
+                            account_amount=float(topup_payload.get("amount_account") or row.get("amount_net") or row.get("amount_input") or 0),
+                            account_currency=str(topup_payload.get("account_currency") or (account_row["currency"] if account_row else row.get("currency") or "USD")),
+                            fx_rate=float(row.get("fx_rate") or 0) if row.get("fx_rate") else None,
+                        ),
                     ]
                 )
             )
@@ -13154,9 +13377,15 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
                     f"Пользователь: <code>{current_user['email']}</code> (id={resolved_user_id})",
                     f"Платформа: <b>{acc['platform']}</b>",
                     f"Аккаунт: <b>{account_name['name'] if account_name else account_id}</b> (id={account_id})",
-                    f"Сумма: <b>{amount_input:.2f} {currency}</b>",
+                    *_format_topup_telegram_currency_lines(
+                        wallet_amount=amount_input,
+                        wallet_currency=currency,
+                        account_amount=amount_net,
+                        account_currency=account_currency,
+                        fx_rate=fx_rate,
+                        wallet_total=gross_amount,
+                    ),
                     f"Комиссия: <b>{fee_percent:.2f}%</b>",
-                    f"Холд в кошельке: <b>{gross_amount:.2f} {currency}</b>",
                 ]
             )
         )
