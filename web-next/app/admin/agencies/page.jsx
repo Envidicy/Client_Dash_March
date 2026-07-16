@@ -49,6 +49,7 @@ export default function AdminAgenciesPage() {
   const [clientForm, setClientForm] = useState({ client_user_id: '', default_rebate_percent: '3' })
   const [rateForm, setRateForm] = useState({ client_user_id: '', platform: 'meta', platform_fee_percent: '', rebate_percent: '3' })
   const [walletForm, setWalletForm] = useState({ amount: '', note: '' })
+  const [payoutForm, setPayoutForm] = useState({ amount: '', note: '' })
   const [transferForm, setTransferForm] = useState({ client_user_id: '', amount: '', note: '' })
   const [ownAccountForm, setOwnAccountForm] = useState({ platform: 'meta', name: '', external_id: '', account_code: '', currency: 'USD' })
   const [ownFundingForm, setOwnFundingForm] = useState({ account_id: '', amount: '', platform_fee_percent: '3', note: '' })
@@ -187,6 +188,22 @@ export default function AdminAgenciesPage() {
     )
   }
 
+  async function detachClient(client) {
+    if (!selectedAgencyId || !client?.client_user_id) return
+    if (!window.confirm(`Detach ${client.email} from ${selectedAgency?.name || 'this agency'}? The history and rates will be preserved.`)) return
+    try {
+      const res = await safeFetch(`/admin/agencies/${selectedAgencyId}/clients/${client.client_user_id}`, {
+        method: 'DELETE',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || 'Failed to detach client.')
+      await loadDetail(selectedAgencyId)
+      setStatus('Client detached from agency.')
+    } catch (e) {
+      setStatus(e?.message || 'Failed to detach client.')
+    }
+  }
+
   async function saveRate() {
     if (!selectedAgencyId || !rateForm.client_user_id) {
       setStatus('Select an agency client.')
@@ -219,6 +236,26 @@ export default function AdminAgenciesPage() {
       },
       'Agency wallet updated.',
       () => setWalletForm({ amount: '', note: '' })
+    )
+  }
+
+  async function payAgencyRebate() {
+    const amount = Number(payoutForm.amount)
+    if (!selectedAgencyId || !Number.isFinite(amount) || amount <= 0) {
+      setStatus('Enter a valid rebate payout amount.')
+      return
+    }
+    const currency = wallet?.currency || 'KZT'
+    if (!window.confirm(`Record a rebate payout of ${formatMoney(amount, currency)} to ${selectedAgency?.name || 'this agency'}?`)) return
+    await postJson(
+      `/admin/agencies/${selectedAgencyId}/rebate-payouts`,
+      {
+        amount,
+        currency,
+        note: payoutForm.note || null,
+      },
+      'Agency rebate payout recorded.',
+      () => setPayoutForm({ amount: '', note: '' })
     )
   }
 
@@ -312,12 +349,26 @@ export default function AdminAgenciesPage() {
   const mappedAccounts = detail?.accounts || []
   const accesses = detail?.accesses || []
   const clients = detail?.clients || []
+  const activeClients = useMemo(
+    () => clients.filter((row) => String(row?.status || 'active').toLowerCase() === 'active'),
+    [clients]
+  )
   const rates = detail?.rates || []
   const ledger = detail?.ledger || []
   const wallet = detail?.wallet || {}
   const ownAccounts = detail?.own_accounts || []
 
   const summary = useMemo(() => {
+    if (detail?.summary) {
+      return {
+        rebateEarned: Number(detail.summary.rebate_earned || 0),
+        rebatePaid: Number(detail.summary.rebate_paid || 0),
+        rebateAvailable: Number(detail.summary.rebate_available || 0),
+        sentToClients: Number(detail.summary.transferred_to_clients || 0),
+        ownFunding: Number(detail.summary.own_account_funding || 0),
+        platformFees: Number(detail.summary.platform_fees_paid || 0),
+      }
+    }
     const byType = ledger.reduce((acc, row) => {
       const key = String(row?.type || '')
       acc[key] = (acc[key] || 0) + Number(row?.amount || 0)
@@ -325,11 +376,19 @@ export default function AdminAgenciesPage() {
     }, {})
     return {
       rebateEarned: (byType.rebate_accrual || 0) + (byType.rebate_reversal || 0),
+      rebatePaid: -(byType.rebate_payout || 0),
+      rebateAvailable: Math.max(
+        0,
+        Math.min(
+          Number(wallet?.balance || 0),
+          (byType.rebate_accrual || 0) + (byType.rebate_reversal || 0) + (byType.rebate_payout || 0)
+        )
+      ),
       sentToClients: -(byType.transfer_to_client || 0),
       ownFunding: -(byType.own_account_funding || 0),
       platformFees: -(byType.platform_fee || 0),
     }
-  }, [ledger])
+  }, [detail?.summary, ledger, wallet?.balance])
 
   return (
     <AdminShell title="Agencies" subtitle="Agency setup, balances, client rebates and account access.">
@@ -385,8 +444,8 @@ export default function AdminAgenciesPage() {
         </article>
         <article className="stat">
           <p className="muted">Clients</p>
-          <h3>{clients.length}</h3>
-          <p className="muted small">{members.length} members, {mappedAccounts.length} mapped accounts</p>
+          <h3>{activeClients.length}</h3>
+          <p className="muted small">{clients.length - activeClients.length} detached, {members.length} members, {mappedAccounts.length} mapped accounts</p>
         </article>
         <article className="stat">
           <p className="muted">Rebate earned</p>
@@ -429,9 +488,45 @@ export default function AdminAgenciesPage() {
                   <p className="muted small">Fees on agency own funding</p>
                 </article>
               </div>
+              <div className="grid-3" style={{ marginTop: 16 }}>
+                <article className="stat">
+                  <p className="muted">Rebate paid</p>
+                  <h3>{formatMoney(summary.rebatePaid, wallet?.currency || 'KZT')}</h3>
+                  <p className="muted small">Recorded payouts to the agency</p>
+                </article>
+                <article className="stat">
+                  <p className="muted">Available for payout</p>
+                  <h3>{formatMoney(summary.rebateAvailable, wallet?.currency || 'KZT')}</h3>
+                  <p className="muted small">Limited by accrued rebate and wallet balance</p>
+                </article>
+              </div>
               <div className="form-grid" style={{ marginTop: 16 }}>
                 <label className="field">
-                  <span>Wallet adjustment</span>
+                  <span>Rebate payout amount</span>
+                  <input
+                    value={payoutForm.amount}
+                    onChange={(e) => setPayoutForm((s) => ({ ...s, amount: e.target.value }))}
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    placeholder="100000"
+                  />
+                </label>
+                <label className="field">
+                  <span>Payout note</span>
+                  <input
+                    value={payoutForm.note}
+                    onChange={(e) => setPayoutForm((s) => ({ ...s, note: e.target.value }))}
+                    placeholder="Bank transfer reference"
+                  />
+                </label>
+              </div>
+              <div className="panel-actions">
+                <button className="btn primary" type="button" onClick={payAgencyRebate}>Record rebate payout</button>
+              </div>
+              <div className="form-grid" style={{ marginTop: 16 }}>
+                <label className="field">
+                  <span>Manual wallet adjustment</span>
                   <input value={walletForm.amount} onChange={(e) => setWalletForm((s) => ({ ...s, amount: e.target.value }))} type="number" placeholder="100000" />
                 </label>
                 <label className="field">
@@ -463,7 +558,7 @@ export default function AdminAgenciesPage() {
                   <span>Transfer client</span>
                   <select value={transferForm.client_user_id} onChange={(e) => setTransferForm((s) => ({ ...s, client_user_id: e.target.value }))}>
                     <option value="">Select agency client</option>
-                    {clients.map((row) => <option key={row.id} value={String(row.client_user_id)}>{row.email}</option>)}
+                    {activeClients.map((row) => <option key={row.id} value={String(row.client_user_id)}>{row.email}</option>)}
                   </select>
                 </label>
                 <label className="field">
@@ -479,15 +574,22 @@ export default function AdminAgenciesPage() {
                 <button className="btn primary" type="button" onClick={addClient}>Attach client</button>
                 <button className="btn ghost" type="button" onClick={transferToClient}>Transfer to client</button>
               </div>
-              <Table columns={['Email', 'Balance', 'Default rebate', 'Status']}>
+              <Table columns={['Email', 'Balance', 'Default rebate', 'Status', 'Actions']}>
                 {!clients.length ? (
-                  <tr><td colSpan={4}>No agency clients.</td></tr>
+                  <tr><td colSpan={5}>No agency clients.</td></tr>
                 ) : clients.map((row) => (
                   <tr key={row.id}>
                     <td>{row.email}</td>
                     <td>{formatMoney(row.wallet_balance, row.wallet_currency || 'KZT')}</td>
                     <td>{row.default_rebate_percent ?? 3}%</td>
                     <td>{row.status || 'active'}</td>
+                    <td>
+                      {String(row.status || 'active').toLowerCase() === 'active' ? (
+                        <button className="btn ghost" type="button" onClick={() => detachClient(row)}>Detach</button>
+                      ) : (
+                        <span className="muted small">Detached</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </Table>
@@ -501,7 +603,7 @@ export default function AdminAgenciesPage() {
                   <span>Client</span>
                   <select value={rateForm.client_user_id} onChange={(e) => setRateForm((s) => ({ ...s, client_user_id: e.target.value }))}>
                     <option value="">Select agency client</option>
-                    {clients.map((row) => <option key={row.id} value={String(row.client_user_id)}>{row.email}</option>)}
+                    {activeClients.map((row) => <option key={row.id} value={String(row.client_user_id)}>{row.email}</option>)}
                   </select>
                 </label>
                 <label className="field">

@@ -4318,6 +4318,37 @@ def _record_agency_wallet_transaction(
     return int(cur.lastrowid) if cur.lastrowid is not None else None
 
 
+def _agency_wallet_summary(conn, agency_id: int, wallet: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+    wallet = wallet or _get_or_create_agency_wallet(conn, agency_id)
+    summary_rows = conn.execute(
+        """
+        SELECT
+          type,
+          COALESCE(SUM(amount), 0) as amount
+        FROM agency_wallet_transactions
+        WHERE agency_id=?
+        GROUP BY type
+        """,
+        (agency_id,),
+    ).fetchall()
+    summary_by_type = {str(row["type"] or ""): float(row["amount"] or 0) for row in summary_rows}
+    wallet_balance = float(wallet.get("balance") or 0)
+    rebate_earned = summary_by_type.get("rebate_accrual", 0.0) + summary_by_type.get("rebate_reversal", 0.0)
+    rebate_paid = -summary_by_type.get("rebate_payout", 0.0)
+    unpaid_rebate = max(0.0, rebate_earned - rebate_paid)
+    rebate_available = max(0.0, min(wallet_balance, unpaid_rebate))
+    return {
+        "balance": round(wallet_balance, 2),
+        "currency": wallet.get("currency") or "KZT",
+        "rebate_earned": round(rebate_earned, 2),
+        "rebate_paid": round(rebate_paid, 2),
+        "rebate_available": round(rebate_available, 2),
+        "transferred_to_clients": round(-summary_by_type.get("transfer_to_client", 0.0), 2),
+        "own_account_funding": round(-summary_by_type.get("own_account_funding", 0.0), 2),
+        "platform_fees_paid": round(-summary_by_type.get("platform_fee", 0.0), 2),
+    }
+
+
 def _get_or_create_default_agency(conn, user_id: int) -> Optional[Dict[str, object]]:
     row = conn.execute(
         """
@@ -4513,34 +4544,11 @@ def _agency_dashboard_payload(conn, agency_id: int, membership: Dict[str, object
         """,
         (agency_id,),
     ).fetchall()
-    summary_rows = conn.execute(
-        """
-        SELECT
-          type,
-          COALESCE(SUM(amount), 0) as amount
-        FROM agency_wallet_transactions
-        WHERE agency_id=?
-        GROUP BY type
-        """,
-        (agency_id,),
-    ).fetchall()
-    summary_by_type = {str(row["type"] or ""): float(row["amount"] or 0) for row in summary_rows}
-    rebate_earned = summary_by_type.get("rebate_accrual", 0.0) + summary_by_type.get("rebate_reversal", 0.0)
-    transferred_to_clients = -summary_by_type.get("transfer_to_client", 0.0)
-    own_account_funding = -summary_by_type.get("own_account_funding", 0.0)
-    platform_fees_paid = -summary_by_type.get("platform_fee", 0.0)
     return {
         "agency": dict(agency),
         "membership": membership,
         "wallet": dict(wallet),
-        "summary": {
-            "balance": float(wallet["balance"] or 0),
-            "currency": wallet["currency"] or "KZT",
-            "rebate_earned": round(rebate_earned, 2),
-            "transferred_to_clients": round(transferred_to_clients, 2),
-            "own_account_funding": round(own_account_funding, 2),
-            "platform_fees_paid": round(platform_fees_paid, 2),
-        },
+        "summary": _agency_wallet_summary(conn, agency_id, dict(wallet)),
         "clients": [dict(row) for row in clients],
         "own_accounts": [dict(row) for row in own_accounts],
         "ledger": [dict(row) for row in ledger],
@@ -4974,6 +4982,12 @@ class AgencyWalletAdjustPayload(BaseModel):
     currency: str = "KZT"
     note: Optional[str] = None
     type: Optional[str] = "manual_adjustment"
+
+
+class AgencyRebatePayoutPayload(BaseModel):
+    amount: float = Field(..., gt=0)
+    currency: str = "KZT"
+    note: Optional[str] = None
 
 
 class AgencyOwnAccountPayload(BaseModel):
@@ -10756,6 +10770,7 @@ def admin_get_agency_detail(agency_id: int, admin_user=Depends(get_admin_user)):
             "clients": [dict(row) for row in clients],
             "rates": [dict(row) for row in rates],
             "wallet": dict(wallet),
+            "summary": _agency_wallet_summary(conn, agency_id, dict(wallet)),
             "ledger": [dict(row) for row in ledger],
         }
 
@@ -10821,6 +10836,39 @@ def admin_add_agency_client(agency_id: int, payload: AgencyClientPayload, admin_
         conn.execute("UPDATE users SET is_client=1 WHERE id=?", (payload.client_user_id,))
         conn.commit()
         return {"status": "ok", "agency_id": agency_id, "client_user_id": payload.client_user_id}
+
+
+@app.delete("/admin/agencies/{agency_id}/clients/{client_user_id}")
+def admin_detach_agency_client(agency_id: int, client_user_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        relation = conn.execute(
+            """
+            SELECT id, status
+            FROM agency_clients
+            WHERE agency_id=? AND client_user_id=?
+            """,
+            (agency_id, client_user_id),
+        ).fetchone()
+        if not relation:
+            raise HTTPException(status_code=404, detail="Agency client relation not found")
+        if str(relation["status"] or "active").lower() != "inactive":
+            conn.execute(
+                """
+                UPDATE agency_clients
+                SET status='inactive', updated_at=CURRENT_TIMESTAMP
+                WHERE agency_id=? AND client_user_id=?
+                """,
+                (agency_id, client_user_id),
+            )
+            conn.commit()
+        return {
+            "status": "ok",
+            "agency_id": agency_id,
+            "client_user_id": client_user_id,
+            "relation_status": "inactive",
+        }
 
 
 @app.post("/admin/agencies/{agency_id}/clients/{client_user_id}/rates")
@@ -10951,6 +10999,56 @@ def admin_adjust_agency_wallet(agency_id: int, payload: AgencyWalletAdjustPayloa
         conn.commit()
         next_wallet = _get_or_create_agency_wallet(conn, agency_id, currency)
         return {"status": "ok", "agency_id": agency_id, "balance": next_wallet.get("balance"), "currency": currency}
+
+
+@app.post("/admin/agencies/{agency_id}/rebate-payouts")
+def admin_pay_agency_rebate(
+    agency_id: int,
+    payload: AgencyRebatePayoutPayload,
+    admin_user=Depends(get_admin_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    currency = str(payload.currency or "KZT").upper()
+    amount = round(float(payload.amount), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=422, detail="Rebate payout amount must be at least 0.01")
+    with get_conn() as conn:
+        agency = conn.execute("SELECT id FROM agencies WHERE id=?", (agency_id,)).fetchone()
+        if not agency:
+            raise HTTPException(status_code=404, detail="Agency not found")
+        wallet = _get_or_create_agency_wallet(conn, agency_id, currency)
+        if str(wallet.get("currency") or currency).upper() != currency:
+            raise HTTPException(status_code=400, detail="Agency wallet currency mismatch")
+        summary = _agency_wallet_summary(conn, agency_id, wallet)
+        available = float(summary["rebate_available"] or 0)
+        if amount > available + 0.001:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient accrued rebate balance. Available: {available:.2f} {currency}",
+            )
+        transaction_id = _record_agency_wallet_transaction(
+            conn,
+            agency_id=agency_id,
+            amount=-amount,
+            currency=currency,
+            tx_type="rebate_payout",
+            source_type="admin_agency_rebate_payout",
+            note=payload.note or "Agency rebate payout",
+            created_by=admin_user.get("email"),
+        )
+        conn.commit()
+        next_wallet = _get_or_create_agency_wallet(conn, agency_id, currency)
+        next_summary = _agency_wallet_summary(conn, agency_id, next_wallet)
+        return {
+            "status": "ok",
+            "agency_id": agency_id,
+            "transaction_id": transaction_id,
+            "amount": amount,
+            "currency": currency,
+            "balance": next_wallet.get("balance"),
+            "rebate_available": next_summary["rebate_available"],
+        }
 
 
 @app.post("/admin/agencies/{agency_id}/own-accounts")
