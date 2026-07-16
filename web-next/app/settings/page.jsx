@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { apiFetch } from '../../lib/api'
 import { clearAuth, getAuthToken } from '../../lib/auth'
@@ -46,6 +47,19 @@ export default function SettingsPage() {
   const [fees, setFees] = useState(null)
   const [documents, setDocuments] = useState([])
   const [docsStatus, setDocsStatus] = useState('')
+  const [apiKeys, setApiKeys] = useState([])
+  const [apiKeyStatus, setApiKeyStatus] = useState('')
+  const [apiKeySecret, setApiKeySecret] = useState('')
+  const [apiKeyCreating, setApiKeyCreating] = useState(false)
+  const [apiKeyForm, setApiKeyForm] = useState({
+    name: '',
+    expires_in_days: '365',
+    scopes: {
+      'accounts:read': true,
+      'finance:read': true,
+      'performance:read': true,
+    },
+  })
 
   const canManageAccesses = Boolean(profile.can_manage_accesses)
 
@@ -56,6 +70,7 @@ export default function SettingsPage() {
       ...(canManageAccesses ? [{ key: 'accesses', label: tr('Accesses', 'Доступы') }] : []),
       { key: 'fees', label: tr('Fees', 'Комиссии') },
       { key: 'docs', label: tr('Documents', 'Документы') },
+      ...(canManageAccesses ? [{ key: 'developer', label: tr('Developer API', 'API для интеграций') }] : []),
     ],
     [canManageAccesses, tr]
   )
@@ -265,6 +280,94 @@ export default function SettingsPage() {
     }
   }
 
+  async function loadApiKeys() {
+    if (!canManageAccesses && !profile.can_manage_accesses) return
+    try {
+      const res = await safeFetch('/profile/api-keys')
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || 'Failed to load API keys.')
+      setApiKeys(Array.isArray(data?.items) ? data.items : [])
+      setApiKeyStatus('')
+    } catch (e) {
+      setApiKeyStatus(e?.message || tr('Failed to load API keys.', 'Не удалось загрузить API-ключи.'))
+    }
+  }
+
+  async function createApiKey() {
+    const name = apiKeyForm.name.trim()
+    const scopes = Object.entries(apiKeyForm.scopes)
+      .filter(([, enabled]) => enabled)
+      .map(([scope]) => scope)
+    if (name.length < 2) {
+      setApiKeyStatus(tr('Enter a key name.', 'Укажите название ключа.'))
+      return
+    }
+    if (!scopes.length) {
+      setApiKeyStatus(tr('Select at least one permission.', 'Выберите хотя бы одно разрешение.'))
+      return
+    }
+    setApiKeyCreating(true)
+    setApiKeyStatus(tr('Creating API key...', 'Создаём API-ключ...'))
+    setApiKeySecret('')
+    try {
+      const res = await safeFetch('/profile/api-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          scopes,
+          expires_in_days: Number(apiKeyForm.expires_in_days || 365),
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || 'Failed to create API key.')
+      setApiKeySecret(String(data.secret || ''))
+      setApiKeyForm((current) => ({ ...current, name: '' }))
+      await loadApiKeys()
+      setApiKeyStatus(
+        tr(
+          'API key created. Copy it now — it will not be shown again.',
+          'API-ключ создан. Скопируйте его сейчас — повторно он показан не будет.'
+        )
+      )
+    } catch (e) {
+      setApiKeyStatus(e?.message || tr('Failed to create API key.', 'Не удалось создать API-ключ.'))
+    } finally {
+      setApiKeyCreating(false)
+    }
+  }
+
+  async function copyApiKey() {
+    if (!apiKeySecret) return
+    try {
+      await navigator.clipboard.writeText(apiKeySecret)
+      setApiKeyStatus(tr('API key copied.', 'API-ключ скопирован.'))
+    } catch {
+      setApiKeyStatus(tr('Failed to copy API key.', 'Не удалось скопировать API-ключ.'))
+    }
+  }
+
+  async function revokeApiKey(row) {
+    if (!row?.id) return
+    if (!window.confirm(
+      tr(
+        `Revoke API key "${row.name}"? Existing integrations will stop working immediately.`,
+        `Отозвать API-ключ «${row.name}»? Интеграции с этим ключом сразу перестанут работать.`
+      )
+    )) return
+    setApiKeyStatus(tr('Revoking API key...', 'Отзываем API-ключ...'))
+    try {
+      const res = await safeFetch(`/profile/api-keys/${row.id}`, { method: 'DELETE' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || 'Failed to revoke API key.')
+      setApiKeySecret('')
+      await loadApiKeys()
+      setApiKeyStatus(tr('API key revoked.', 'API-ключ отозван.'))
+    } catch (e) {
+      setApiKeyStatus(e?.message || tr('Failed to revoke API key.', 'Не удалось отозвать API-ключ.'))
+    }
+  }
+
   async function downloadDocument(row) {
     if (!row?.id) return
     const token = getAuthToken()
@@ -316,6 +419,9 @@ export default function SettingsPage() {
     if (tab === 'accesses' && canManageAccesses) {
       loadAccesses()
     }
+    if (tab === 'developer' && canManageAccesses) {
+      loadApiKeys()
+    }
   }, [tab, canManageAccesses])
 
   return (
@@ -323,7 +429,7 @@ export default function SettingsPage() {
       activeNav=""
       headerActionLabel=""
       pageActionLabel=""
-      pageSubtitle={tr('Profile, security, accesses, fees and documents.', 'Профиль, безопасность, доступы, комиссии и документы.')}
+      pageSubtitle={tr('Profile, security, accesses, fees, documents and integrations.', 'Профиль, безопасность, доступы, комиссии, документы и интеграции.')}
       pageTitle={tr('Settings', 'Настройки')}
     >
       <section className={styles.sectionCard}>
@@ -583,6 +689,163 @@ export default function SettingsPage() {
                         </tr>
                       )
                     })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
+          {tab === 'developer' && canManageAccesses ? (
+            <div className={styles.settingsTabPanel}>
+              <div className={styles.settingsDeveloperIntro}>
+                <div>
+                  <p className={styles.metricLabel}>{tr('Read-only integration', 'Интеграция только для чтения')}</p>
+                  <h3>{tr('Connect your finance and analytics systems', 'Подключите финансовые и аналитические системы')}</h3>
+                  <p className={styles.settingsMuted}>
+                    {tr(
+                      'API keys provide access only to this client workspace. They cannot create topups, change balances or modify advertising accounts.',
+                      'API-ключи дают доступ только к данным этого клиентского кабинета. Они не могут создавать пополнения, менять баланс или рекламные аккаунты.'
+                    )}
+                  </p>
+                </div>
+                <Link className={styles.settingsDocsLink} href="/developers/integration-api">
+                  {tr('Open API documentation', 'Открыть документацию API')}
+                </Link>
+              </div>
+
+              <div className={styles.settingsFieldGrid}>
+                <label className={styles.settingsField}>
+                  <span>{tr('Key name', 'Название ключа')}</span>
+                  <input
+                    maxLength={100}
+                    onChange={(e) => setApiKeyForm((current) => ({ ...current, name: e.target.value }))}
+                    placeholder={tr('Finance integration', 'Финансовая интеграция')}
+                    type="text"
+                    value={apiKeyForm.name}
+                  />
+                </label>
+                <label className={styles.settingsField}>
+                  <span>{tr('Expires after', 'Срок действия')}</span>
+                  <select
+                    onChange={(e) => setApiKeyForm((current) => ({ ...current, expires_in_days: e.target.value }))}
+                    value={apiKeyForm.expires_in_days}
+                  >
+                    <option value="90">{tr('90 days', '90 дней')}</option>
+                    <option value="180">{tr('180 days', '180 дней')}</option>
+                    <option value="365">{tr('1 year', '1 год')}</option>
+                    <option value="730">{tr('2 years', '2 года')}</option>
+                  </select>
+                </label>
+              </div>
+
+              <fieldset className={styles.settingsScopeFieldset}>
+                <legend>{tr('Permissions', 'Разрешения')}</legend>
+                <div className={styles.settingsScopeGrid}>
+                  {[
+                    {
+                      key: 'accounts:read',
+                      title: tr('Accounts', 'Аккаунты'),
+                      description: tr('Account identifiers, status and commission settings.', 'Идентификаторы, статусы и настройки комиссий.'),
+                    },
+                    {
+                      key: 'finance:read',
+                      title: tr('Finance', 'Финансы'),
+                      description: tr('Wallet movements, topups, funding events and exchange rates.', 'Движения кошелька, пополнения, зачисления и курсы.'),
+                    },
+                    {
+                      key: 'performance:read',
+                      title: tr('Performance', 'Статистика'),
+                      description: tr('Daily spend, impressions and clicks.', 'Ежедневные расходы, показы и клики.'),
+                    },
+                  ].map((scope) => (
+                    <label className={styles.settingsScopeOption} key={scope.key}>
+                      <input
+                        checked={Boolean(apiKeyForm.scopes[scope.key])}
+                        onChange={(e) => setApiKeyForm((current) => ({
+                          ...current,
+                          scopes: { ...current.scopes, [scope.key]: e.target.checked },
+                        }))}
+                        type="checkbox"
+                      />
+                      <span>
+                        <strong>{scope.title}</strong>
+                        <small>{scope.description}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <div className={styles.settingsActions}>
+                <button
+                  className={styles.settingsPrimaryButton}
+                  disabled={apiKeyCreating}
+                  onClick={createApiKey}
+                  type="button"
+                >
+                  {apiKeyCreating ? tr('Creating...', 'Создаём...') : tr('Create API key', 'Создать API-ключ')}
+                </button>
+              </div>
+
+              {apiKeySecret ? (
+                <div className={styles.settingsSecretPanel}>
+                  <div>
+                    <strong>{tr('Copy this key now', 'Скопируйте ключ сейчас')}</strong>
+                    <p>{tr('For security, the full key is shown only once.', 'В целях безопасности полный ключ показывается только один раз.')}</p>
+                  </div>
+                  <code>{apiKeySecret}</code>
+                  <div className={styles.settingsActions}>
+                    <button className={styles.settingsPrimaryButton} onClick={copyApiKey} type="button">
+                      {tr('Copy API key', 'Скопировать API-ключ')}
+                    </button>
+                    <button className={styles.settingsGhostButton} onClick={() => setApiKeySecret('')} type="button">
+                      {tr('I saved it', 'Я сохранил ключ')}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <p aria-live="polite" className={styles.settingsMuted}>{apiKeyStatus}</p>
+
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>{tr('Name', 'Название')}</th>
+                      <th>{tr('Key', 'Ключ')}</th>
+                      <th>{tr('Permissions', 'Разрешения')}</th>
+                      <th>{tr('Status', 'Статус')}</th>
+                      <th>{tr('Last used', 'Последнее использование')}</th>
+                      <th>{tr('Expires', 'Истекает')}</th>
+                      <th style={{ textAlign: 'right' }}>{tr('Action', 'Действие')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!apiKeys.length ? (
+                      <tr>
+                        <td className={styles.tableSubtle} colSpan={7}>
+                          {tr('No API keys yet.', 'API-ключей пока нет.')}
+                        </td>
+                      </tr>
+                    ) : apiKeys.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.name}</td>
+                        <td><code className={styles.settingsKeyPrefix}>{row.prefix}••••</code></td>
+                        <td>{(row.scopes || []).map((scope) => scope.replace(':read', '')).join(', ') || '-'}</td>
+                        <td>{row.status}</td>
+                        <td>{row.last_used_at ? String(row.last_used_at).replace('T', ' ').slice(0, 16) : tr('Never', 'Никогда')}</td>
+                        <td>{row.expires_at ? String(row.expires_at).replace('T', ' ').slice(0, 10) : '-'}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          {row.status === 'active' ? (
+                            <button className={styles.tableActionButton} onClick={() => revokeApiKey(row)} type="button">
+                              {tr('Revoke', 'Отозвать')}
+                            </button>
+                          ) : (
+                            <span className={styles.tableSubtle}>—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>

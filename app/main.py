@@ -1,10 +1,10 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from typing import Dict, List, Literal, Optional, Tuple
 from enum import Enum
 import calendar
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Form, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Form, Query, Request
 import logging
 import traceback
 import time
@@ -12,7 +12,9 @@ import base64
 import re
 from fastapi import File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, FileResponse, RedirectResponse
+from fastapi.security import APIKeyHeader
 from openpyxl import Workbook
 from openpyxl.styles import Border, Side
 from openpyxl.utils import get_column_letter
@@ -65,6 +67,15 @@ _AUTH_TOKEN_IDLE_TTL_SEC = max(300, int(os.getenv("AUTH_TOKEN_IDLE_TTL_SEC", "86
 _AUTH_TOKEN_ABSOLUTE_TTL_SEC = max(_AUTH_TOKEN_IDLE_TTL_SEC, int(os.getenv("AUTH_TOKEN_ABSOLUTE_TTL_SEC", "1209600") or 1209600))
 _AUTH_TOKEN_TOUCH_INTERVAL_SEC = max(30, int(os.getenv("AUTH_TOKEN_TOUCH_INTERVAL_SEC", "300") or 300))
 _SECURITY_BLOCKED_UNTIL: Dict[str, float] = {}
+_INTEGRATION_ALLOWED_SCOPES = {"accounts:read", "finance:read", "performance:read"}
+_INTEGRATION_API_KEY_PREFIX = "env_live_"
+_INTEGRATION_MAX_ACTIVE_KEYS = 10
+_INTEGRATION_RATE_LIMIT_PER_MINUTE = max(
+    60,
+    int(os.getenv("INTEGRATION_RATE_LIMIT_PER_MINUTE", "600") or 600),
+)
+_INTEGRATION_RATE_LOG: Dict[int, List[float]] = {}
+_INTEGRATION_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -2684,7 +2695,7 @@ _SECURITY_RESPONSE_HEADERS = {
     "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
 }
 _CSP_VALUE = "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://envidicy-dash-client.onrender.com https://client-dash-staging.onrender.com;"
-_CSP_SKIP_PATHS = {"/docs", "/redoc", "/docs/oauth2-redirect"}
+_CSP_SKIP_PATHS = {"/docs", "/redoc", "/docs/oauth2-redirect", "/integration/docs"}
 
 
 @app.middleware("http")
@@ -2700,6 +2711,29 @@ async def log_exceptions(request: Request, call_next):
     # Keep Swagger/ReDoc working by not forcing CSP on their HTML pages.
     if request.url.path not in _CSP_SKIP_PATHS:
         response.headers.setdefault("Content-Security-Policy", _CSP_VALUE)
+    api_key_id = getattr(request.state, "integration_api_key_id", None)
+    integration_user_id = getattr(request.state, "integration_user_id", None)
+    if api_key_id is not None and get_conn:
+        try:
+            with get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO integration_api_audit_log
+                      (api_key_id, user_id, method, path, status_code, ip_address)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        api_key_id,
+                        integration_user_id,
+                        request.method,
+                        request.url.path,
+                        response.status_code,
+                        request.client.host if request.client else None,
+                    ),
+                )
+                conn.commit()
+        except Exception:
+            logging.exception("Failed to write integration API audit log")
     return response
 try:
     from app.db import apply_schema
@@ -4819,6 +4853,138 @@ def get_admin_user(current_user=Depends(get_current_user)):
     return current_user
 
 
+def _integration_key_hash(raw_key: str) -> str:
+    return hashlib.sha256(str(raw_key or "").encode("utf-8")).hexdigest()
+
+
+def _integration_key_is_expired(value: object) -> bool:
+    if value is None or value == "":
+        return False
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            return value.timestamp() <= time.time()
+        return value <= datetime.now(timezone.utc).replace(tzinfo=None)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            return parsed.timestamp() <= time.time()
+        return parsed <= datetime.now(timezone.utc).replace(tzinfo=None)
+    except Exception:
+        return True
+
+
+def _check_integration_rate_limit(api_key_id: int) -> None:
+    now = time.time()
+    window_start = now - 60
+    recent = [ts for ts in _INTEGRATION_RATE_LOG.get(api_key_id, []) if ts >= window_start]
+    if len(recent) >= _INTEGRATION_RATE_LIMIT_PER_MINUTE:
+        raise HTTPException(
+            status_code=429,
+            detail="Integration API rate limit exceeded",
+            headers={"Retry-After": "60"},
+        )
+    recent.append(now)
+    _INTEGRATION_RATE_LOG[api_key_id] = recent
+
+
+def get_integration_principal(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Depends(_INTEGRATION_API_KEY_HEADER),
+):
+    raw_key = str(x_api_key or _get_bearer_token(authorization) or "").strip()
+    if not raw_key or not raw_key.startswith(_INTEGRATION_API_KEY_PREFIX):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid integration API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT k.*, u.email
+            FROM integration_api_keys k
+            JOIN users u ON u.id = k.user_id
+            WHERE k.key_hash=?
+            LIMIT 1
+            """,
+            (_integration_key_hash(raw_key),),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=401, detail="Invalid integration API key")
+        key_data = dict(row)
+        if str(key_data.get("status") or "").lower() != "active" or key_data.get("revoked_at"):
+            raise HTTPException(status_code=401, detail="Integration API key is revoked")
+        if _integration_key_is_expired(key_data.get("expires_at")):
+            raise HTTPException(status_code=401, detail="Integration API key has expired")
+        api_key_id = int(key_data["id"])
+        _check_integration_rate_limit(api_key_id)
+        try:
+            scopes = json.loads(str(key_data.get("scopes") or "[]"))
+        except Exception:
+            scopes = []
+        scopes = [scope for scope in scopes if scope in _INTEGRATION_ALLOWED_SCOPES]
+        conn.execute(
+            "UPDATE integration_api_keys SET last_used_at=CURRENT_TIMESTAMP WHERE id=?",
+            (api_key_id,),
+        )
+        conn.commit()
+        request.state.integration_api_key_id = api_key_id
+        request.state.integration_user_id = int(key_data["user_id"])
+        return {
+            "api_key_id": api_key_id,
+            "user_id": int(key_data["user_id"]),
+            "email": key_data.get("email"),
+            "name": key_data.get("name"),
+            "scopes": scopes,
+        }
+
+
+def _require_integration_scope(principal: Dict[str, object], scope: str) -> None:
+    if scope not in set(principal.get("scopes") or []):
+        raise HTTPException(status_code=403, detail=f"API key does not have required scope: {scope}")
+
+
+def _integration_page_limit(value: int) -> int:
+    limit = int(value or 100)
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    return limit
+
+
+def _integration_page(items: List[Dict[str, object]], limit: int) -> Dict[str, object]:
+    has_more = len(items) > limit
+    page_items = items[:limit]
+    next_cursor = int(page_items[-1]["id"]) if has_more and page_items else None
+    return {
+        "items": page_items,
+        "pagination": {
+            "limit": limit,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+        },
+    }
+
+
+def _integration_date_range(date_from: Optional[str], date_to: Optional[str], max_days: int = 366) -> Tuple[Optional[str], Optional[str]]:
+    if not date_from and not date_to:
+        return None, None
+    if not date_from or not date_to:
+        raise HTTPException(status_code=400, detail="date_from and date_to must be provided together")
+    try:
+        start = datetime.strptime(date_from, "%Y-%m-%d").date()
+        end = datetime.strptime(date_to, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="date_from/date_to must be in YYYY-MM-DD format")
+    if start > end:
+        raise HTTPException(status_code=400, detail="date_from must be less than or equal to date_to")
+    if (end - start).days > max_days:
+        raise HTTPException(status_code=400, detail=f"Date range cannot exceed {max_days} days")
+    return start.isoformat(), end.isoformat()
+
+
 @app.post("/admin/users/{user_id}/impersonate")
 def admin_impersonate_user(user_id: int, admin_user=Depends(get_admin_user)):
     if not get_conn:
@@ -4918,6 +5084,14 @@ class SetPasswordPayload(BaseModel):
 
 class AccessCreatePayload(BaseModel):
     email: str
+
+
+class IntegrationApiKeyCreatePayload(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    scopes: List[Literal["accounts:read", "finance:read", "performance:read"]] = Field(
+        default_factory=lambda: ["accounts:read", "finance:read", "performance:read"]
+    )
+    expires_in_days: Optional[int] = Field(default=365, ge=1, le=730)
 
 
 class WalletAdjust(BaseModel):
@@ -7188,6 +7362,132 @@ def list_wallet_transactions(current_user=Depends(get_current_user)):
 def _require_access_owner(current_user):
     if not current_user.get("can_manage_accesses"):
         raise HTTPException(status_code=403, detail="Owner access required")
+
+
+def _serialize_integration_api_key(row: object) -> Dict[str, object]:
+    data = dict(row)
+    try:
+        scopes = json.loads(str(data.get("scopes") or "[]"))
+    except Exception:
+        scopes = []
+    status = str(data.get("status") or "active")
+    if status == "active" and _integration_key_is_expired(data.get("expires_at")):
+        status = "expired"
+    return {
+        "id": int(data["id"]),
+        "name": data.get("name"),
+        "prefix": data.get("key_prefix"),
+        "scopes": [scope for scope in scopes if scope in _INTEGRATION_ALLOWED_SCOPES],
+        "status": status,
+        "expires_at": data.get("expires_at"),
+        "last_used_at": data.get("last_used_at"),
+        "created_at": data.get("created_at"),
+        "revoked_at": data.get("revoked_at"),
+    }
+
+
+@app.get("/profile/api-keys", tags=["API key management"])
+def list_profile_api_keys(current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
+    if not get_conn:
+        return {"items": []}
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM integration_api_keys
+            WHERE user_id=?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (current_user["id"],),
+        ).fetchall()
+        return {"items": [_serialize_integration_api_key(row) for row in rows]}
+
+
+@app.post("/profile/api-keys", tags=["API key management"], status_code=201)
+def create_profile_api_key(
+    payload: IntegrationApiKeyCreatePayload,
+    current_user=Depends(get_current_user),
+):
+    _require_access_owner(current_user)
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    name = payload.name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=422, detail="API key name must contain at least 2 non-space characters")
+    scopes = list(dict.fromkeys(payload.scopes))
+    if not scopes:
+        raise HTTPException(status_code=400, detail="At least one API scope is required")
+    with get_conn() as conn:
+        active_rows = conn.execute(
+            """
+            SELECT expires_at
+            FROM integration_api_keys
+            WHERE user_id=? AND status='active' AND revoked_at IS NULL
+            """,
+            (current_user["id"],),
+        ).fetchall()
+        active_count = sum(1 for row in active_rows if not _integration_key_is_expired(row["expires_at"]))
+        if active_count >= _INTEGRATION_MAX_ACTIVE_KEYS:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Maximum of {_INTEGRATION_MAX_ACTIVE_KEYS} active API keys reached",
+            )
+        raw_key = f"{_INTEGRATION_API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+        key_prefix = raw_key[:20]
+        expires_at = (
+            (datetime.now(timezone.utc) + timedelta(days=int(payload.expires_in_days))).isoformat()
+            if payload.expires_in_days
+            else None
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO integration_api_keys
+              (user_id, name, key_prefix, key_hash, scopes, status, expires_at)
+            VALUES (?, ?, ?, ?, ?, 'active', ?)
+            """,
+            (
+                current_user["id"],
+                name,
+                key_prefix,
+                _integration_key_hash(raw_key),
+                json.dumps(scopes, ensure_ascii=False),
+                expires_at,
+            ),
+        )
+        key_id = int(cur.lastrowid)
+        conn.commit()
+        row = conn.execute("SELECT * FROM integration_api_keys WHERE id=?", (key_id,)).fetchone()
+        return {
+            **_serialize_integration_api_key(row),
+            "secret": raw_key,
+            "secret_shown_once": True,
+        }
+
+
+@app.delete("/profile/api-keys/{key_id}", tags=["API key management"])
+def revoke_profile_api_key(key_id: int, current_user=Depends(get_current_user)):
+    _require_access_owner(current_user)
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, status FROM integration_api_keys WHERE id=? AND user_id=?",
+            (key_id, current_user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="API key not found")
+        if str(row["status"] or "").lower() != "revoked":
+            conn.execute(
+                """
+                UPDATE integration_api_keys
+                SET status='revoked', revoked_at=CURRENT_TIMESTAMP
+                WHERE id=? AND user_id=?
+                """,
+                (key_id, current_user["id"]),
+            )
+            conn.commit()
+        return {"status": "ok", "id": key_id, "key_status": "revoked"}
 
 
 @app.get("/profile")
@@ -9827,10 +10127,21 @@ def _credit_wallet_topup_request(conn, request_id: int, credited_by: Optional[st
         note = f"{note} credited by {credited_by}"
     conn.execute(
         """
-        INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO wallet_transactions
+          (user_id, account_id, amount, currency, type, source_type, source_id, source_key, note)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (user_id, None, amount, currency, "wallet_topup", note),
+        (
+            user_id,
+            None,
+            amount,
+            currency,
+            "wallet_topup",
+            "wallet_topup_request",
+            request_id,
+            f"wallet_topup_request:{request_id}",
+            note,
+        ),
     )
     conn.commit()
     return {
@@ -12274,10 +12585,21 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                 )
                 conn.execute(
                     """
-                    INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO wallet_transactions
+                      (user_id, account_id, amount, currency, type, source_type, source_id, source_key, note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (row["user_id"], row["account_id"], -gross_amount, row["currency"], "topup", f"Account topup #{topup_id}"),
+                    (
+                        row["user_id"],
+                        row["account_id"],
+                        -gross_amount,
+                        row["currency"],
+                        "topup",
+                        "account_topup",
+                        topup_id,
+                        f"account_topup:{topup_id}",
+                        f"Account topup #{topup_id}",
+                    ),
                 )
                 conn.execute("UPDATE topups SET status=? WHERE id=?", (next_status, topup_id))
 
@@ -12355,10 +12677,20 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
             )
             conn.execute(
                 """
-                INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO wallet_transactions
+                  (user_id, account_id, amount, currency, type, source_type, source_id, note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (row["user_id"], row["account_id"], gross_amount, row["currency"], "topup_hold_release", f"Reverted completed topup #{topup_id}"),
+                (
+                    row["user_id"],
+                    row["account_id"],
+                    gross_amount,
+                    row["currency"],
+                    "topup_hold_release",
+                    "account_topup_reversal",
+                    topup_id,
+                    f"Reverted completed topup #{topup_id}",
+                ),
             )
             conn.execute(
                 """
@@ -12394,10 +12726,20 @@ def admin_update_topup_status(topup_id: int, status: TopUpStatus, admin_user=Dep
                 )
                 conn.execute(
                     """
-                    INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO wallet_transactions
+                      (user_id, account_id, amount, currency, type, source_type, source_id, note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (row["user_id"], row["account_id"], gross_amount, row["currency"], "topup_hold_release", f"Topup hold released #{topup_id}"),
+                    (
+                        row["user_id"],
+                        row["account_id"],
+                        gross_amount,
+                        row["currency"],
+                        "topup_hold_release",
+                        "account_topup_hold_release",
+                        topup_id,
+                        f"Topup hold released #{topup_id}",
+                    ),
                 )
                 conn.execute("UPDATE topups SET status=?, hold_applied=0 WHERE id=?", (next_status, topup_id))
             else:
@@ -12706,6 +13048,527 @@ def invoice_preview():
         "items_count": 1,
     }
     return HTMLResponse(content=_invoice_html(payload), media_type="text/html; charset=utf-8")
+
+
+@app.get("/api/v1/integration/me", tags=["Integration API v1"])
+def integration_me(principal=Depends(get_integration_principal)):
+    return {
+        "client_id": principal["user_id"],
+        "client_email": principal["email"],
+        "api_key_id": principal["api_key_id"],
+        "api_key_name": principal["name"],
+        "scopes": principal["scopes"],
+        "api_version": "v1",
+    }
+
+
+@app.get("/api/v1/integration/accounts", tags=["Integration API v1"])
+def integration_accounts(
+    after_id: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    principal=Depends(get_integration_principal),
+):
+    _require_integration_scope(principal, "accounts:read")
+    with get_conn() as conn:
+        profile = _get_or_create_profile(conn, int(principal["user_id"]))
+        fee_config = _load_fee_config(profile.get("fee_config"))
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM ad_accounts
+            WHERE user_id=? AND id>?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (principal["user_id"], after_id, limit + 1),
+        ).fetchall()
+        items: List[Dict[str, object]] = []
+        for raw_row in rows:
+            row = dict(raw_row)
+            platform = str(row.get("platform") or "").lower()
+            platform_fee = fee_config.get(platform)
+            agency_context = _active_agency_client_context(conn, int(principal["user_id"]), platform)
+            agency_rebate = 0.0
+            fee_source = "client_platform_default"
+            if agency_context:
+                if agency_context.get("platform_fee_percent") is not None:
+                    platform_fee = float(agency_context["platform_fee_percent"])
+                agency_rebate = float(agency_context.get("rebate_percent") or 0)
+                fee_source = "agency_rate"
+            platform_fee_value = float(platform_fee or 0)
+            items.append(
+                {
+                    "id": int(row["id"]),
+                    "platform": platform,
+                    "name": row.get("name"),
+                    "external_id": row.get("external_id"),
+                    "account_code": row.get("account_code"),
+                    "currency": row.get("currency") or "USD",
+                    "status": row.get("status") or "active",
+                    "created_at": row.get("created_at"),
+                    "commission": {
+                        "platform_fee_percent": round(platform_fee_value, 4),
+                        "agency_rebate_percent": round(agency_rebate, 4),
+                        "total_fee_percent": round(platform_fee_value + agency_rebate, 4),
+                        "source": fee_source,
+                    },
+                }
+            )
+        return _integration_page(items, limit)
+
+
+@app.get("/api/v1/integration/wallet-topups", tags=["Integration API v1"])
+def integration_wallet_topups(
+    after_id: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    principal=Depends(get_integration_principal),
+):
+    _require_integration_scope(principal, "finance:read")
+    start_date, end_date = _integration_date_range(date_from, date_to)
+    query = """
+        SELECT
+          r.*,
+          le.name AS legal_entity_name,
+          le.bin AS legal_entity_bin,
+          i.id AS uploaded_invoice_id,
+          i.invoice_number AS uploaded_invoice_number,
+          i.invoice_date AS uploaded_invoice_date,
+          i.status AS uploaded_invoice_status
+        FROM wallet_topup_requests r
+        LEFT JOIN legal_entities le ON le.id=r.legal_entity_id
+        LEFT JOIN invoice_uploads i ON i.id=(
+          SELECT iu.id
+          FROM invoice_uploads iu
+          WHERE iu.request_id=r.id
+          ORDER BY iu.created_at DESC, iu.id DESC
+          LIMIT 1
+        )
+        WHERE r.user_id=? AND r.id>?
+    """
+    params: List[object] = [principal["user_id"], after_id]
+    if status:
+        query += " AND r.status=?"
+        params.append(status)
+    if start_date and end_date:
+        end_exclusive = (datetime.strptime(end_date, "%Y-%m-%d").date() + timedelta(days=1)).isoformat()
+        query += " AND r.created_at>=? AND r.created_at<?"
+        params.extend([start_date, end_exclusive])
+    query += " ORDER BY r.id ASC LIMIT ?"
+    params.append(limit + 1)
+    with get_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+        items = []
+        for raw_row in rows:
+            row = dict(raw_row)
+            items.append(
+                {
+                    "id": int(row["id"]),
+                    "amount": float(row.get("amount") or 0),
+                    "currency": row.get("currency") or "KZT",
+                    "status": row.get("status") or "requested",
+                    "amount_kind": row.get("amount_kind") or "gross",
+                    "tax_mode": row.get("tax_mode"),
+                    "vat_rate": float(row.get("vat_rate") or 0),
+                    "note": row.get("note"),
+                    "order_ref": row.get("order_ref"),
+                    "invoice": {
+                        "number": row.get("uploaded_invoice_number") or row.get("invoice_number"),
+                        "date": row.get("uploaded_invoice_date") or row.get("invoice_date"),
+                        "status": row.get("uploaded_invoice_status") or row.get("status"),
+                    },
+                    "legal_entity": {
+                        "id": row.get("legal_entity_id"),
+                        "name": row.get("legal_entity_name") or row.get("client_name"),
+                        "bin": row.get("legal_entity_bin") or row.get("client_bin"),
+                    },
+                    "created_at": row.get("created_at"),
+                }
+            )
+        return _integration_page(items, limit)
+
+
+@app.get("/api/v1/integration/wallet-transactions", tags=["Integration API v1"])
+def integration_wallet_transactions(
+    after_id: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    transaction_type: Optional[str] = None,
+    account_id: Optional[int] = Query(None, ge=1),
+    principal=Depends(get_integration_principal),
+):
+    _require_integration_scope(principal, "finance:read")
+    query = """
+        SELECT
+          wt.*,
+          a.platform AS account_platform,
+          a.name AS account_name,
+          a.external_id AS account_external_id,
+          a.account_code AS account_code
+        FROM wallet_transactions wt
+        LEFT JOIN ad_accounts a ON a.id=wt.account_id
+        WHERE wt.user_id=? AND wt.id>?
+    """
+    params: List[object] = [principal["user_id"], after_id]
+    if transaction_type:
+        query += " AND wt.type=?"
+        params.append(transaction_type)
+    if account_id:
+        query += " AND wt.account_id=?"
+        params.append(account_id)
+    query += " ORDER BY wt.id ASC LIMIT ?"
+    params.append(limit + 1)
+    with get_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+        wallet = _get_or_create_wallet(conn, int(principal["user_id"]))
+        items = []
+        for raw_row in rows:
+            row = dict(raw_row)
+            source_id = row.get("source_id")
+            source_type = row.get("source_type")
+            if source_id is None and row.get("type") == "wallet_topup":
+                match = re.search(r"Wallet topup request #(\d+)", str(row.get("note") or ""))
+                if match:
+                    source_id = int(match.group(1))
+                    source_type = source_type or "wallet_topup_request"
+            items.append(
+                {
+                    "id": int(row["id"]),
+                    "amount": float(row.get("amount") or 0),
+                    "currency": row.get("currency") or "KZT",
+                    "type": row.get("type"),
+                    "source_type": source_type,
+                    "source_id": source_id,
+                    "note": row.get("note"),
+                    "account": (
+                        {
+                            "id": int(row["account_id"]),
+                            "platform": row.get("account_platform"),
+                            "name": row.get("account_name"),
+                            "external_id": row.get("account_external_id"),
+                            "account_code": row.get("account_code"),
+                        }
+                        if row.get("account_id")
+                        else None
+                    ),
+                    "created_at": row.get("created_at"),
+                }
+            )
+        payload = _integration_page(items, limit)
+        payload["wallet"] = {
+            "balance": float(wallet.get("balance") or 0),
+            "currency": wallet.get("currency") or "KZT",
+        }
+        return payload
+
+
+@app.get("/api/v1/integration/account-topups", tags=["Integration API v1"])
+def integration_account_topups(
+    after_id: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    status: Optional[str] = None,
+    account_id: Optional[int] = Query(None, ge=1),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    principal=Depends(get_integration_principal),
+):
+    _require_integration_scope(principal, "finance:read")
+    start_date, end_date = _integration_date_range(date_from, date_to)
+    query = """
+        SELECT
+          t.*,
+          a.name AS account_name,
+          a.platform AS account_platform,
+          a.currency AS account_currency,
+          a.external_id AS account_external_id,
+          a.account_code AS account_code
+        FROM topups t
+        JOIN ad_accounts a ON a.id=t.account_id
+        WHERE a.user_id=? AND t.id>?
+    """
+    params: List[object] = [principal["user_id"], after_id]
+    if status:
+        query += " AND t.status=?"
+        params.append(status)
+    if account_id:
+        query += " AND t.account_id=?"
+        params.append(account_id)
+    if start_date and end_date:
+        end_exclusive = (datetime.strptime(end_date, "%Y-%m-%d").date() + timedelta(days=1)).isoformat()
+        query += " AND t.created_at>=? AND t.created_at<?"
+        params.extend([start_date, end_exclusive])
+    query += " ORDER BY t.id ASC LIMIT ?"
+    params.append(limit + 1)
+    with get_conn() as conn:
+        rows = [dict(row) for row in conn.execute(query, params).fetchall()]
+        prepared = _attach_topup_account_amount(rows, include_rates=False)
+        items = []
+        for row in prepared:
+            items.append(
+                {
+                    "id": int(row["id"]),
+                    "status": row.get("status"),
+                    "account": {
+                        "id": int(row["account_id"]),
+                        "platform": row.get("account_platform"),
+                        "name": row.get("account_name"),
+                        "external_id": row.get("account_external_id"),
+                        "account_code": row.get("account_code"),
+                        "currency": row.get("account_currency"),
+                    },
+                    "amounts": {
+                        "funding_base": float(row.get("amount_input") or 0),
+                        "account_credit": float(row.get("amount_account") or 0),
+                        "platform_fee": float(row.get("platform_fee_amount") or 0),
+                        "agency_rebate": float(row.get("agency_rebate_amount") or 0),
+                        "total_fee": float(row.get("total_fee_amount") or 0),
+                        "vat": float(row.get("vat_amount") or 0),
+                        "wallet_debit": float(row.get("total_wallet_debit") or 0),
+                    },
+                    "currencies": {
+                        "wallet": row.get("currency") or "KZT",
+                        "account": row.get("account_currency") or row.get("currency") or "USD",
+                    },
+                    "commission": {
+                        "platform_fee_percent": float(row.get("platform_fee_percent") or 0),
+                        "agency_rebate_percent": float(row.get("agency_rebate_percent") or 0),
+                        "total_fee_percent": float(row.get("total_fee_percent") or 0),
+                        "vat_percent": float(row.get("vat_percent") or 0),
+                    },
+                    "exchange_rate": {
+                        "rate": float(row["fx_rate"]) if row.get("fx_rate") is not None else None,
+                        "base_currency": row.get("account_currency") or row.get("currency") or "USD",
+                        "quote_currency": row.get("currency") or "KZT",
+                    },
+                    "created_at": row.get("created_at"),
+                }
+            )
+        return _integration_page(items, limit)
+
+
+@app.get("/api/v1/integration/funding-events", tags=["Integration API v1"])
+def integration_funding_events(
+    after_id: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    account_id: Optional[int] = Query(None, ge=1),
+    principal=Depends(get_integration_principal),
+):
+    _require_integration_scope(principal, "finance:read")
+    query = """
+        SELECT
+          afe.*,
+          a.name AS account_name,
+          a.external_id AS account_external_id,
+          a.account_code AS account_code
+        FROM account_funding_events afe
+        JOIN ad_accounts a ON a.id=afe.account_id
+        WHERE afe.user_id=? AND a.user_id=? AND afe.id>?
+    """
+    params: List[object] = [principal["user_id"], principal["user_id"], after_id]
+    if account_id:
+        query += " AND afe.account_id=?"
+        params.append(account_id)
+    query += " ORDER BY afe.id ASC LIMIT ?"
+    params.append(limit + 1)
+    with get_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+        items = []
+        for raw_row in rows:
+            row = dict(raw_row)
+            items.append(
+                {
+                    "id": int(row["id"]),
+                    "account": {
+                        "id": int(row["account_id"]),
+                        "platform": row.get("platform"),
+                        "name": row.get("account_name"),
+                        "external_id": row.get("account_external_id"),
+                        "account_code": row.get("account_code"),
+                    },
+                    "amount": float(row.get("amount") or 0),
+                    "currency": row.get("currency"),
+                    "amount_usd": float(row["amount_usd"]) if row.get("amount_usd") is not None else None,
+                    "amount_kzt": float(row["amount_kzt"]) if row.get("amount_kzt") is not None else None,
+                    "source_type": row.get("source_type"),
+                    "source_id": row.get("source_id"),
+                    "reversed_by_event_id": row.get("reversed_by_event_id"),
+                    "reversal_for_event_id": row.get("reversal_for_event_id"),
+                    "voided_at": row.get("voided_at"),
+                    "note": row.get("note"),
+                    "created_at": row.get("created_at"),
+                }
+            )
+        return _integration_page(items, limit)
+
+
+@app.get("/api/v1/integration/finance/summary", tags=["Integration API v1"])
+def integration_finance_summary(principal=Depends(get_integration_principal)):
+    _require_integration_scope(principal, "finance:read")
+    with get_conn() as conn:
+        wallet = _get_or_create_wallet(conn, int(principal["user_id"]))
+        accounts = conn.execute(
+            """
+            SELECT a.*, s.spend_today, s.spend_total, s.optional_balance,
+                   s.remaining_balance, s.last_synced_at
+            FROM ad_accounts a
+            LEFT JOIN ad_account_finance_snapshots s ON s.account_id=a.id
+            WHERE a.user_id=?
+            ORDER BY a.id ASC
+            """,
+            (principal["user_id"],),
+        ).fetchall()
+        account_ids = [int(row["id"]) for row in accounts]
+        funding_map = _account_funding_totals_map(
+            conn,
+            int(principal["user_id"]),
+            account_ids,
+            sync_completed_topups=False,
+        )
+        items = []
+        for raw_row in accounts:
+            row = dict(raw_row)
+            funding = funding_map.get(str(row["id"])) or {}
+            funded_total = float(funding.get("amount") or 0)
+            spend_total = float(row.get("spend_total") or 0)
+            items.append(
+                {
+                    "account_id": int(row["id"]),
+                    "platform": row.get("platform"),
+                    "currency": row.get("currency") or "USD",
+                    "funded_total": funded_total,
+                    "spend_today": float(row.get("spend_today") or 0),
+                    "spend_total": spend_total,
+                    "remaining_balance": float(row.get("remaining_balance") if row.get("remaining_balance") is not None else funded_total - spend_total),
+                    "platform_balance": row.get("optional_balance"),
+                    "last_synced_at": row.get("last_synced_at"),
+                }
+            )
+        return {
+            "wallet": {
+                "balance": float(wallet.get("balance") or 0),
+                "currency": wallet.get("currency") or "KZT",
+                "updated_at": wallet.get("updated_at"),
+            },
+            "accounts": items,
+        }
+
+
+@app.get("/api/v1/integration/performance/daily", tags=["Integration API v1"])
+def integration_performance_daily(
+    date_from: str,
+    date_to: str,
+    after_id: int = Query(0, ge=0),
+    limit: int = Query(500, ge=1, le=500),
+    account_id: Optional[int] = Query(None, ge=1),
+    principal=Depends(get_integration_principal),
+):
+    _require_integration_scope(principal, "performance:read")
+    start_date, end_date = _integration_date_range(date_from, date_to)
+    query = """
+        SELECT
+          s.*,
+          a.name AS account_name,
+          a.external_id AS account_external_id,
+          a.account_code AS account_code
+        FROM ad_account_stats s
+        JOIN ad_accounts a ON a.id=s.account_id
+        WHERE s.client_id=? AND a.user_id=? AND s.id>?
+          AND s.stat_date BETWEEN ? AND ?
+    """
+    params: List[object] = [
+        principal["user_id"],
+        principal["user_id"],
+        after_id,
+        start_date,
+        end_date,
+    ]
+    if account_id:
+        query += " AND s.account_id=?"
+        params.append(account_id)
+    query += " ORDER BY s.id ASC LIMIT ?"
+    params.append(limit + 1)
+    with get_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+        items = []
+        for raw_row in rows:
+            row = dict(raw_row)
+            items.append(
+                {
+                    "id": int(row["id"]),
+                    "date": str(row.get("stat_date") or ""),
+                    "account": {
+                        "id": int(row["account_id"]),
+                        "platform": row.get("platform"),
+                        "name": row.get("account_name"),
+                        "external_id": row.get("account_external_id"),
+                        "account_code": row.get("account_code"),
+                    },
+                    "currency": row.get("currency") or "USD",
+                    "spend": float(row.get("spend") or 0),
+                    "impressions": float(row.get("impressions") or 0),
+                    "clicks": float(row.get("clicks") or 0),
+                    "updated_at": row.get("updated_at"),
+                }
+            )
+        payload = _integration_page(items, limit)
+        payload["date_from"] = start_date
+        payload["date_to"] = end_date
+        return payload
+
+
+@app.get("/api/v1/integration/exchange-rates/current", tags=["Integration API v1"])
+def integration_current_exchange_rates(principal=Depends(get_integration_principal)):
+    _require_integration_scope(principal, "finance:read")
+    try:
+        payload = _fetch_bcc_rates()
+    except Exception as exc:
+        cached = _BCC_RATES_CACHE.get("data")
+        payload = dict(cached) if isinstance(cached, dict) else _manual_marked_rates_data(str(exc))
+        payload["warning"] = str(exc)
+    return {
+        "base_currency": "KZT",
+        "rates": payload.get("rates") or {},
+        "source": payload.get("source"),
+        "fetched_at": payload.get("fetched_at"),
+        "informational_only": True,
+    }
+
+
+@app.get("/api/v1/integration/openapi.json", include_in_schema=False)
+def integration_openapi_schema():
+    full_schema = app.openapi()
+    integration_paths = {
+        path: operations
+        for path, operations in full_schema.get("paths", {}).items()
+        if path.startswith("/api/v1/integration/") and path != "/api/v1/integration/openapi.json"
+    }
+    return JSONResponse(
+        {
+            "openapi": full_schema.get("openapi", "3.1.0"),
+            "info": {
+                "title": "Envidicy Integration API",
+                "version": "1.0.0",
+                "description": (
+                    "Read-only API for client accounts, wallet operations, advertising account "
+                    "funding, commissions, exchange rates and daily performance."
+                ),
+            },
+            "servers": [{"url": str(os.getenv("PUBLIC_API_BASE_URL") or "https://envidicy-dash-client.onrender.com").rstrip("/")}],
+            "paths": integration_paths,
+            "components": full_schema.get("components", {}),
+            "tags": [{"name": "Integration API v1", "description": "Stable read-only client integration endpoints."}],
+        }
+    )
+
+
+@app.get("/integration/docs", include_in_schema=False)
+def integration_swagger_docs():
+    return get_swagger_ui_html(
+        openapi_url="/api/v1/integration/openapi.json",
+        title="Envidicy Integration API",
+        swagger_favicon_url="https://app.envidicy.kz/favicon.ico",
+    )
 
 
 @app.get("/accounts")
@@ -13460,10 +14323,21 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
         )
         conn.execute(
             """
-            INSERT INTO wallet_transactions (user_id, account_id, amount, currency, type, note)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO wallet_transactions
+              (user_id, account_id, amount, currency, type, source_type, source_id, source_key, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (resolved_user_id, account_id, -gross_amount, currency, "topup_hold", f"Topup hold #{topup_id}"),
+            (
+                resolved_user_id,
+                account_id,
+                -gross_amount,
+                currency,
+                "topup_hold",
+                "account_topup",
+                topup_id,
+                f"account_topup:{topup_id}",
+                f"Topup hold #{topup_id}",
+            ),
         )
         conn.commit()
         account_name = conn.execute("SELECT name FROM ad_accounts WHERE id=?", (account_id,)).fetchone()

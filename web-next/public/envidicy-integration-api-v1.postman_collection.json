@@ -1,0 +1,409 @@
+{
+  "info": {
+    "_postman_id": "8b4c6bcb-b749-4f19-a9ec-1d960fa3af45",
+    "name": "Envidicy Integration API v1",
+    "description": "Read-only API for client accounts, wallet operations, advertising account funding, commissions, exchange rates and daily performance.\n\nCreate an API key in Envidicy: Settings → Developer API. The full key is shown only once.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{api_key}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('Successful response', function () {",
+          "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+          "});",
+          "pm.test('JSON response', function () {",
+          "  pm.response.to.be.json;",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://envidicy-dash-client.onrender.com",
+      "type": "string"
+    },
+    {
+      "key": "api_key",
+      "value": "env_live_replace_with_your_key",
+      "type": "secret"
+    },
+    {
+      "key": "account_id",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "date_from",
+      "value": "2026-07-01",
+      "type": "string"
+    },
+    {
+      "key": "date_to",
+      "value": "2026-07-31",
+      "type": "string"
+    },
+    {
+      "key": "cursor",
+      "value": "0",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Connection",
+      "item": [
+        {
+          "name": "Get integration identity",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/integration/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integration",
+                "me"
+              ]
+            },
+            "description": "Validate the API key and return its client, name and scopes."
+          },
+          "response": []
+        },
+        {
+          "name": "List advertising accounts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/integration/accounts?after_id={{cursor}}&limit=100",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integration",
+                "accounts"
+              ],
+              "query": [
+                {
+                  "key": "after_id",
+                  "value": "{{cursor}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                }
+              ]
+            },
+            "description": "Advertising accounts and current commission settings. Scope: accounts:read."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Finance",
+      "item": [
+        {
+          "name": "List wallet topup requests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/integration/wallet-topups?after_id={{cursor}}&limit=100&date_from={{date_from}}&date_to={{date_to}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integration",
+                "wallet-topups"
+              ],
+              "query": [
+                {
+                  "key": "after_id",
+                  "value": "{{cursor}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                },
+                {
+                  "key": "date_from",
+                  "value": "{{date_from}}"
+                },
+                {
+                  "key": "date_to",
+                  "value": "{{date_to}}"
+                },
+                {
+                  "key": "status",
+                  "value": "completed",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Wallet funding requests and invoice metadata. Scope: finance:read."
+          },
+          "response": []
+        },
+        {
+          "name": "List wallet transactions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/integration/wallet-transactions?after_id={{cursor}}&limit=100",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integration",
+                "wallet-transactions"
+              ],
+              "query": [
+                {
+                  "key": "after_id",
+                  "value": "{{cursor}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                },
+                {
+                  "key": "transaction_type",
+                  "value": "wallet_topup",
+                  "disabled": true
+                },
+                {
+                  "key": "account_id",
+                  "value": "{{account_id}}",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Immutable client wallet ledger. Scope: finance:read."
+          },
+          "response": []
+        },
+        {
+          "name": "List advertising account topups",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/integration/account-topups?after_id={{cursor}}&limit=100&date_from={{date_from}}&date_to={{date_to}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integration",
+                "account-topups"
+              ],
+              "query": [
+                {
+                  "key": "after_id",
+                  "value": "{{cursor}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                },
+                {
+                  "key": "date_from",
+                  "value": "{{date_from}}"
+                },
+                {
+                  "key": "date_to",
+                  "value": "{{date_to}}"
+                },
+                {
+                  "key": "status",
+                  "value": "completed",
+                  "disabled": true
+                },
+                {
+                  "key": "account_id",
+                  "value": "{{account_id}}",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Topups with fees, VAT and the applied exchange rate. Scope: finance:read."
+          },
+          "response": []
+        },
+        {
+          "name": "List account funding events",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/integration/funding-events?after_id={{cursor}}&limit=100",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integration",
+                "funding-events"
+              ],
+              "query": [
+                {
+                  "key": "after_id",
+                  "value": "{{cursor}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                },
+                {
+                  "key": "account_id",
+                  "value": "{{account_id}}",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Actual account credits and reversal events. Scope: finance:read."
+          },
+          "response": []
+        },
+        {
+          "name": "Get finance summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/integration/finance/summary",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integration",
+                "finance",
+                "summary"
+              ]
+            },
+            "description": "Current wallet and account-level financial summary. Scope: finance:read."
+          },
+          "response": []
+        },
+        {
+          "name": "Get current exchange rates",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/integration/exchange-rates/current",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integration",
+                "exchange-rates",
+                "current"
+              ]
+            },
+            "description": "Informational current exchange rates. Scope: finance:read."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Performance",
+      "item": [
+        {
+          "name": "List daily performance",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/integration/performance/daily?date_from={{date_from}}&date_to={{date_to}}&after_id={{cursor}}&limit=500",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "integration",
+                "performance",
+                "daily"
+              ],
+              "query": [
+                {
+                  "key": "date_from",
+                  "value": "{{date_from}}"
+                },
+                {
+                  "key": "date_to",
+                  "value": "{{date_to}}"
+                },
+                {
+                  "key": "after_id",
+                  "value": "{{cursor}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "account_id",
+                  "value": "{{account_id}}",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Daily spend, impressions and clicks. Scope: performance:read."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

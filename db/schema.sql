@@ -238,9 +238,43 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   amount DOUBLE PRECISION NOT NULL,
   currency TEXT DEFAULT 'KZT',
   type TEXT NOT NULL,
+  source_type TEXT,
+  source_id INTEGER,
+  source_key TEXT UNIQUE,
   note TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS integration_api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  scopes TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  expires_at TEXT,
+  last_used_at TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_api_keys_user
+  ON integration_api_keys(user_id, status);
+
+CREATE TABLE IF NOT EXISTS integration_api_audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  api_key_id INTEGER REFERENCES integration_api_keys(id) ON DELETE SET NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  status_code INTEGER,
+  ip_address TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_api_audit_key_created
+  ON integration_api_audit_log(api_key_id, created_at);
 
 CREATE TABLE IF NOT EXISTS topups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

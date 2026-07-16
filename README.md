@@ -2,6 +2,14 @@
 
 FastAPI backend for media plan calculation (KZ/UZ, USD) with Excel export.
 
+## Integration API
+
+The read-only client Integration API is documented in
+[English](docs/integration-api-v1.md) and
+[Russian](docs/integration-api-v1.ru.md). A filtered interactive Swagger UI is
+available at `/integration/docs`. The public developer portal is available at
+`/developers/integration-api`, with a downloadable Postman Collection v2.1.
+
 ## Quick start
 
 ```bash
