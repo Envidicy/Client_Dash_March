@@ -138,6 +138,39 @@ CREATE TABLE IF NOT EXISTS ad_accounts (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS account_saved_views (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  viewer_email TEXT NOT NULL,
+  name TEXT NOT NULL,
+  is_pinned INTEGER DEFAULT 1,
+  is_default INTEGER DEFAULT 0,
+  position INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, viewer_email, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_saved_views_owner
+  ON account_saved_views(user_id, viewer_email, position);
+
+CREATE TABLE IF NOT EXISTS account_saved_view_accounts (
+  view_id BIGINT NOT NULL REFERENCES account_saved_views(id) ON DELETE CASCADE,
+  account_id BIGINT NOT NULL REFERENCES ad_accounts(id) ON DELETE CASCADE,
+  position INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY(view_id, account_id)
+);
+
+CREATE TABLE IF NOT EXISTS account_overview_preferences (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  viewer_email TEXT NOT NULL,
+  account_id BIGINT NOT NULL REFERENCES ad_accounts(id) ON DELETE CASCADE,
+  is_hidden INTEGER DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY(user_id, viewer_email, account_id)
+);
+
 CREATE TABLE IF NOT EXISTS ad_account_stats (
   id BIGSERIAL PRIMARY KEY,
   platform TEXT NOT NULL,

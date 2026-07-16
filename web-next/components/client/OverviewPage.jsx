@@ -146,6 +146,351 @@ function SpendFundingChart({ data = [], tr, showSpend = true, currency = 'USD' }
   )
 }
 
+function AccountGroupsModal({
+  accounts,
+  hiddenAccountIds,
+  onClose,
+  onReload,
+  open,
+  tr,
+  views,
+}) {
+  const [selectedId, setSelectedId] = useState('')
+  const [draft, setDraft] = useState({
+    id: null,
+    name: '',
+    account_ids: [],
+    is_pinned: true,
+    is_default: false,
+    position: 0,
+  })
+  const [hiddenDraft, setHiddenDraft] = useState([])
+  const [search, setSearch] = useState('')
+  const [status, setStatus] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const orderedViews = useMemo(
+    () => [...(views || [])].sort((a, b) => Number(a.position || 0) - Number(b.position || 0) || Number(a.id) - Number(b.id)),
+    [views]
+  )
+
+  function editView(view) {
+    if (!view) {
+      setSelectedId('new')
+      setDraft({
+        id: null,
+        name: '',
+        account_ids: [],
+        is_pinned: orderedViews.filter((item) => item.is_pinned).length < 5,
+        is_default: false,
+        position: orderedViews.length,
+      })
+      setSearch('')
+      setStatus('')
+      return
+    }
+    setSelectedId(String(view.id))
+    setDraft({
+      id: view.id,
+      name: view.name || '',
+      account_ids: Array.isArray(view.account_ids) ? view.account_ids.map(Number) : [],
+      is_pinned: Boolean(view.is_pinned),
+      is_default: Boolean(view.is_default),
+      position: Number(view.position || 0),
+    })
+    setSearch('')
+    setStatus('')
+  }
+
+  useEffect(() => {
+    if (!open) return
+    setHiddenDraft((hiddenAccountIds || []).map(Number))
+    editView(orderedViews[0] || null)
+  }, [open])
+
+  const filteredAccounts = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    if (!needle) return accounts
+    return accounts.filter((row) =>
+      [
+        row?.account,
+        row?.platform,
+        row?.status,
+        row?.accountId,
+        row?.externalId,
+        row?.accountCode,
+      ].some((value) => String(value || '').toLowerCase().includes(needle))
+    )
+  }, [accounts, search])
+
+  async function request(path, method, body) {
+    const token = getAuthToken()
+    if (!token) throw new Error(tr('Session expired.', 'Сессия истекла.'))
+    const res = await fetch(path, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      cache: 'no-store',
+    })
+    const payload = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(payload?.detail || tr('Failed to save account groups.', 'Не удалось сохранить группы аккаунтов.'))
+    return payload
+  }
+
+  function toggleMember(accountId) {
+    const id = Number(accountId)
+    setDraft((current) => ({
+      ...current,
+      account_ids: current.account_ids.includes(id)
+        ? current.account_ids.filter((value) => value !== id)
+        : [...current.account_ids, id],
+    }))
+  }
+
+  function toggleHidden(accountId) {
+    const id = Number(accountId)
+    setHiddenDraft((current) =>
+      current.includes(id) ? current.filter((value) => value !== id) : [...current, id]
+    )
+  }
+
+  async function saveChanges() {
+    const name = draft.name.trim()
+    if (!name && draft.account_ids.length) {
+      setStatus(tr('Enter a group name.', 'Укажите название группы.'))
+      return
+    }
+    if (name && name.length < 2) {
+      setStatus(tr('Group name must contain at least 2 characters.', 'Название группы должно содержать минимум 2 символа.'))
+      return
+    }
+    if (name && !draft.account_ids.length) {
+      setStatus(tr('Select at least one account for the group.', 'Выберите хотя бы один аккаунт для группы.'))
+      return
+    }
+    setSaving(true)
+    setStatus(tr('Saving...', 'Сохраняем...'))
+    try {
+      if (name) {
+        await request(
+          draft.id ? `/api/client/account-views/${draft.id}` : '/api/client/account-views',
+          draft.id ? 'PUT' : 'POST',
+          {
+            name,
+            account_ids: draft.account_ids,
+            is_pinned: draft.is_pinned,
+            is_default: draft.is_default,
+            position: draft.position,
+          }
+        )
+      }
+      await request('/api/client/account-overview-preferences', 'PUT', {
+        hidden_account_ids: hiddenDraft,
+      })
+      await onReload()
+      onClose()
+    } catch (error) {
+      setStatus(error?.message || tr('Failed to save changes.', 'Не удалось сохранить изменения.'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteView() {
+    if (!draft.id) return
+    if (!window.confirm(tr(`Delete group "${draft.name}"?`, `Удалить группу «${draft.name}»?`))) return
+    setSaving(true)
+    try {
+      await request(`/api/client/account-views/${draft.id}`, 'DELETE')
+      await onReload()
+      editView(null)
+    } catch (error) {
+      setStatus(error?.message || tr('Failed to delete group.', 'Не удалось удалить группу.'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function moveView(direction) {
+    if (!draft.id) return
+    const index = orderedViews.findIndex((view) => Number(view.id) === Number(draft.id))
+    const nextIndex = index + direction
+    if (index < 0 || nextIndex < 0 || nextIndex >= orderedViews.length) return
+    const current = orderedViews[index]
+    const neighbor = orderedViews[nextIndex]
+    setSaving(true)
+    try {
+      await request(`/api/client/account-views/${current.id}`, 'PUT', {
+        name: current.name,
+        account_ids: current.account_ids,
+        is_pinned: current.is_pinned,
+        is_default: current.is_default,
+        position: neighbor.position,
+      })
+      await request(`/api/client/account-views/${neighbor.id}`, 'PUT', {
+        name: neighbor.name,
+        account_ids: neighbor.account_ids,
+        is_pinned: neighbor.is_pinned,
+        is_default: neighbor.is_default,
+        position: current.position,
+      })
+      await onReload()
+      setDraft((value) => ({ ...value, position: neighbor.position }))
+      setStatus(tr('Group order updated.', 'Порядок групп обновлён.'))
+    } catch (error) {
+      setStatus(error?.message || tr('Failed to reorder groups.', 'Не удалось изменить порядок групп.'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open) return null
+
+  return (
+    <div className={styles.accountGroupsOverlay} role="presentation" onMouseDown={onClose}>
+      <section
+        aria-labelledby="account-groups-title"
+        aria-modal="true"
+        className={styles.accountGroupsModal}
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <header className={styles.accountGroupsHeader}>
+          <div>
+            <p className={styles.metricLabel}>{tr('Personal workspace', 'Персональное рабочее пространство')}</p>
+            <h2 id="account-groups-title">{tr('Account groups', 'Группы аккаунтов')}</h2>
+            <p>{tr('Create compact views for the accounts you work with.', 'Создавайте компактные подборки нужных аккаунтов.')}</p>
+          </div>
+          <button aria-label={tr('Close', 'Закрыть')} className={styles.accountGroupsClose} onClick={onClose} type="button">×</button>
+        </header>
+
+        <div className={styles.accountGroupsBody}>
+          <aside className={styles.accountGroupsSidebar}>
+            <button className={selectedId === 'new' ? styles.accountGroupItemActive : styles.accountGroupItem} onClick={() => editView(null)} type="button">
+              {tr('+ New group', '+ Новая группа')}
+            </button>
+            {orderedViews.map((view) => (
+              <button
+                className={selectedId === String(view.id) ? styles.accountGroupItemActive : styles.accountGroupItem}
+                key={view.id}
+                onClick={() => editView(view)}
+                type="button"
+              >
+                <span>{view.name}</span>
+                <small>{view.account_ids?.length || 0}</small>
+              </button>
+            ))}
+          </aside>
+
+          <div className={styles.accountGroupsEditor}>
+            <div className={styles.accountGroupsFormGrid}>
+              <label className={styles.settingsField}>
+                <span>{tr('Group name', 'Название группы')}</span>
+                <input
+                  maxLength={60}
+                  onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+                  placeholder={tr('Main accounts', 'Основные аккаунты')}
+                  value={draft.name}
+                />
+              </label>
+              <label className={styles.settingsField}>
+                <span>{tr('Find account', 'Найти аккаунт')}</span>
+                <input
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder={tr('Name, platform or ID', 'Название, платформа или ID')}
+                  value={search}
+                />
+              </label>
+            </div>
+
+            <div className={styles.accountGroupsOptions}>
+              <label>
+                <input
+                  checked={draft.is_pinned}
+                  onChange={(event) => setDraft((current) => ({ ...current, is_pinned: event.target.checked }))}
+                  type="checkbox"
+                />
+                <span>{tr('Show in the top row', 'Показывать в верхней строке')}</span>
+              </label>
+              <label>
+                <input
+                  checked={draft.is_default}
+                  onChange={(event) => setDraft((current) => ({
+                    ...current,
+                    is_default: event.target.checked,
+                    is_pinned: event.target.checked ? true : current.is_pinned,
+                  }))}
+                  type="checkbox"
+                />
+                <span>{tr('Open by default', 'Открывать по умолчанию')}</span>
+              </label>
+              <div className={styles.accountGroupsOrder}>
+                <button disabled={!draft.id || saving} onClick={() => moveView(-1)} type="button">{tr('Move up', 'Выше')}</button>
+                <button disabled={!draft.id || saving} onClick={() => moveView(1)} type="button">{tr('Move down', 'Ниже')}</button>
+              </div>
+            </div>
+
+            <div className={styles.accountGroupsTableHeader}>
+              <span>{tr('Account', 'Аккаунт')}</span>
+              <span>{tr('In group', 'В группе')}</span>
+              <span>{tr('Hide from overview', 'Скрыть с главной')}</span>
+            </div>
+            <div className={styles.accountGroupsAccountList}>
+              {!filteredAccounts.length ? (
+                <div className={styles.accountGroupsEmpty}>
+                  {tr('No matching accounts. Try another search.', 'Нет подходящих аккаунтов. Измените запрос.')}
+                </div>
+              ) : filteredAccounts.map((account) => {
+                const accountId = Number(account.accountId)
+                return (
+                  <div className={styles.accountGroupsAccountRow} key={accountId}>
+                    <div>
+                      <strong>{account.account}</strong>
+                      <span>{account.platform} · {account.status}</span>
+                    </div>
+                    <label>
+                      <input
+                        checked={draft.account_ids.includes(accountId)}
+                        onChange={() => toggleMember(accountId)}
+                        type="checkbox"
+                      />
+                    </label>
+                    <label>
+                      <input
+                        checked={hiddenDraft.includes(accountId)}
+                        onChange={() => toggleHidden(accountId)}
+                        type="checkbox"
+                      />
+                    </label>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        <footer className={styles.accountGroupsFooter}>
+          <p aria-live="polite">{status}</p>
+          <div>
+            {draft.id ? (
+              <button className={styles.accountGroupsDelete} disabled={saving} onClick={deleteView} type="button">
+                {tr('Delete group', 'Удалить группу')}
+              </button>
+            ) : null}
+            <button className={styles.settingsGhostButton} onClick={onClose} type="button">{tr('Cancel', 'Отмена')}</button>
+            <button className={styles.settingsPrimaryButton} disabled={saving} onClick={saveChanges} type="button">
+              {saving ? tr('Saving...', 'Сохраняем...') : tr('Save changes', 'Сохранить изменения')}
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
 export default function OverviewPage() {
   const router = useRouter()
   const { tr } = useI18n()
@@ -169,7 +514,13 @@ export default function OverviewPage() {
   const [loadError, setLoadError] = useState('')
   const [fundingAccountId, setFundingAccountId] = useState(null)
   const [accountRequestOpen, setAccountRequestOpen] = useState(false)
-  const [selectedAccountTab, setSelectedAccountTab] = useState('')
+  const [accountViews, setAccountViews] = useState([])
+  const [hiddenAccountIds, setHiddenAccountIds] = useState([])
+  const [selectedAccountView, setSelectedAccountView] = useState('')
+  const [accountSearch, setAccountSearch] = useState('')
+  const [accountPlatformFilter, setAccountPlatformFilter] = useState('')
+  const [accountStatusFilter, setAccountStatusFilter] = useState('')
+  const [accountGroupsOpen, setAccountGroupsOpen] = useState(false)
   const [refreshingAccountIds, setRefreshingAccountIds] = useState([])
   const [refreshingAll, setRefreshingAll] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
@@ -444,8 +795,48 @@ export default function OverviewPage() {
     }
   }
 
+  async function loadAccountViews() {
+    const token = getAuthToken()
+    if (!token) return
+    try {
+      const res = await fetch('/api/client/account-views', {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+      })
+      if (res.status === 401) {
+        router.replace('/login')
+        return
+      }
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(payload?.detail || 'Failed to load account groups')
+      const nextViews = Array.isArray(payload?.views) ? payload.views : []
+      setAccountViews(nextViews)
+      setHiddenAccountIds(Array.isArray(payload?.hidden_account_ids) ? payload.hidden_account_ids.map(Number) : [])
+      setSelectedAccountView((current) => {
+        const validIds = new Set(nextViews.map((view) => String(view.id)))
+        if (current === 'all' || validIds.has(String(current))) return current
+        const stored = typeof window !== 'undefined' ? window.localStorage.getItem('envidicy_account_view') : ''
+        if (stored === 'all' || validIds.has(String(stored))) return stored
+        const defaultView = nextViews.find((view) => view.is_default)
+        return defaultView ? String(defaultView.id) : 'all'
+      })
+    } catch (error) {
+      setSelectedAccountView((current) => current || 'all')
+      setLoadError(error?.message || tr('Failed to load account groups.', 'Не удалось загрузить группы аккаунтов.'))
+    }
+  }
+
+  function selectAccountView(viewId) {
+    const nextId = String(viewId || 'all')
+    setSelectedAccountView(nextId)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('envidicy_account_view', nextId)
+    }
+  }
+
   useEffect(() => {
     loadOverview()
+    loadAccountViews()
   }, [router])
 
   const pendingHint = useMemo(() => {
@@ -546,40 +937,80 @@ export default function OverviewPage() {
     return result
   }, [accountsData])
 
-  const accountTabs = useMemo(() => {
-    if (!dedupedAccounts.length) return []
-    const seen = new Set()
-    const tabs = dedupedAccounts
-      .map((row) => {
-        const label = String(row?.account || '').trim()
-        if (!label) return null
-        return { id: label.toLowerCase(), label }
-      })
-      .filter(Boolean)
-      .filter((item) => {
-        const key = item.id
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-      })
-    return [{ id: 'all', label: tr('All', 'Все') }, ...tabs]
-  }, [dedupedAccounts, tr])
+  const hiddenAccountSet = useMemo(
+    () => new Set(hiddenAccountIds.map(Number)),
+    [hiddenAccountIds]
+  )
+
+  const overviewAccounts = useMemo(
+    () => dedupedAccounts.filter((row) => !hiddenAccountSet.has(Number(row?.accountId))),
+    [dedupedAccounts, hiddenAccountSet]
+  )
+
+  const orderedAccountViews = useMemo(
+    () => [...accountViews].sort((a, b) => Number(a.position || 0) - Number(b.position || 0) || Number(a.id) - Number(b.id)),
+    [accountViews]
+  )
+
+  const pinnedAccountViews = useMemo(
+    () => orderedAccountViews.filter((view) => view.is_pinned).slice(0, 5),
+    [orderedAccountViews]
+  )
+
+  const overflowAccountViews = useMemo(
+    () => orderedAccountViews.filter((view) => !pinnedAccountViews.some((pinned) => Number(pinned.id) === Number(view.id))),
+    [orderedAccountViews, pinnedAccountViews]
+  )
+
+  const selectedView = useMemo(
+    () => orderedAccountViews.find((view) => String(view.id) === String(selectedAccountView)) || null,
+    [orderedAccountViews, selectedAccountView]
+  )
+
+  const viewScopedAccounts = useMemo(() => {
+    if (!selectedAccountView) return []
+    if (selectedAccountView === 'all' || !selectedView) return overviewAccounts
+    const memberIds = new Set((selectedView.account_ids || []).map(Number))
+    return overviewAccounts.filter((row) => memberIds.has(Number(row?.accountId)))
+  }, [overviewAccounts, selectedAccountView, selectedView])
+
+  const accountPlatformOptions = useMemo(
+    () => Array.from(new Set(overviewAccounts.map((row) => String(row?.platform || '').trim()).filter(Boolean))).sort(),
+    [overviewAccounts]
+  )
+
+  const accountStatusOptions = useMemo(
+    () => Array.from(new Set(overviewAccounts.map((row) => String(row?.status || '').trim()).filter(Boolean))).sort(),
+    [overviewAccounts]
+  )
 
   const visibleAccounts = useMemo(() => {
-    if (!selectedAccountTab) return []
-    if (selectedAccountTab === 'all') return dedupedAccounts
-    return dedupedAccounts.filter((row) => String(row?.account || '').trim().toLowerCase() === selectedAccountTab)
-  }, [dedupedAccounts, selectedAccountTab])
+    const needle = accountSearch.trim().toLowerCase()
+    return viewScopedAccounts.filter((row) => {
+      if (accountPlatformFilter && String(row?.platform || '') !== accountPlatformFilter) return false
+      if (accountStatusFilter && String(row?.status || '') !== accountStatusFilter) return false
+      if (!needle) return true
+      return [
+        row?.account,
+        row?.platform,
+        row?.status,
+        row?.accountId,
+        row?.externalId,
+        row?.accountCode,
+      ].some((value) => String(value || '').toLowerCase().includes(needle))
+    })
+  }, [viewScopedAccounts, accountSearch, accountPlatformFilter, accountStatusFilter])
 
-  useEffect(() => {
-    if (!accountTabs.length) {
-      setSelectedAccountTab('')
-      return
+  const accountViewCounts = useMemo(() => {
+    const availableIds = new Set(overviewAccounts.map((row) => Number(row?.accountId)))
+    const counts = { all: overviewAccounts.length }
+    for (const view of orderedAccountViews) {
+      counts[String(view.id)] = (view.account_ids || []).filter((id) => availableIds.has(Number(id))).length
     }
-    if (!selectedAccountTab || !accountTabs.some((tab) => tab.id === selectedAccountTab)) {
-      setSelectedAccountTab(accountTabs[0].id)
-    }
-  }, [accountTabs, selectedAccountTab])
+    return counts
+  }, [overviewAccounts, orderedAccountViews])
+
+  const accountFiltersActive = Boolean(accountSearch || accountPlatformFilter || accountStatusFilter)
 
   function openFundingModal(accountId) {
     if (!accountId) return
@@ -670,17 +1101,92 @@ export default function OverviewPage() {
         </div>
 
         <div className={styles.tableWrap}>
-          <div className={styles.accountTabsRow}>
-            {accountTabs.map((tab) => (
+          <div className={styles.accountViewsToolbar}>
+            <div className={styles.accountViewsRow}>
               <button
-                className={selectedAccountTab === tab.id ? styles.accountTabActive : styles.accountTab}
-                key={tab.id}
-                onClick={() => setSelectedAccountTab(tab.id)}
+                className={selectedAccountView === 'all' ? styles.accountViewChipActive : styles.accountViewChip}
+                onClick={() => selectAccountView('all')}
                 type="button"
               >
-                {tab.label}
+                <span>{tr('All', 'Все')}</span>
+                <small>{accountViewCounts.all || 0}</small>
               </button>
-            ))}
+              {pinnedAccountViews.map((view) => (
+                <button
+                  className={selectedAccountView === String(view.id) ? styles.accountViewChipActive : styles.accountViewChip}
+                  key={view.id}
+                  onClick={() => selectAccountView(view.id)}
+                  type="button"
+                >
+                  <span>{view.name}</span>
+                  <small>{accountViewCounts[String(view.id)] || 0}</small>
+                </button>
+              ))}
+              {overflowAccountViews.length ? (
+                <select
+                  aria-label={tr('More account groups', 'Другие группы аккаунтов')}
+                  className={styles.accountViewsMore}
+                  onChange={(event) => {
+                    if (event.target.value) selectAccountView(event.target.value)
+                  }}
+                  value={overflowAccountViews.some((view) => String(view.id) === selectedAccountView) ? selectedAccountView : ''}
+                >
+                  <option value="">{tr('More groups', 'Ещё группы')}</option>
+                  {overflowAccountViews.map((view) => (
+                    <option key={view.id} value={String(view.id)}>
+                      {view.name} ({accountViewCounts[String(view.id)] || 0})
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <button className={styles.accountViewsManage} onClick={() => setAccountGroupsOpen(true)} type="button">
+                {tr('Manage groups', 'Настроить группы')}
+              </button>
+            </div>
+
+            <div className={styles.accountFiltersRow}>
+              <label className={styles.accountSearchField}>
+                <span className={styles.srOnly}>{tr('Search accounts', 'Поиск аккаунтов')}</span>
+                <input
+                  onChange={(event) => setAccountSearch(event.target.value)}
+                  placeholder={tr('Search by name, platform or ID', 'Поиск по названию, платформе или ID')}
+                  type="search"
+                  value={accountSearch}
+                />
+              </label>
+              <select
+                aria-label={tr('Filter by platform', 'Фильтр по платформе')}
+                onChange={(event) => setAccountPlatformFilter(event.target.value)}
+                value={accountPlatformFilter}
+              >
+                <option value="">{tr('All platforms', 'Все платформы')}</option>
+                {accountPlatformOptions.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
+              </select>
+              <select
+                aria-label={tr('Filter by status', 'Фильтр по статусу')}
+                onChange={(event) => setAccountStatusFilter(event.target.value)}
+                value={accountStatusFilter}
+              >
+                <option value="">{tr('All statuses', 'Все статусы')}</option>
+                {accountStatusOptions.map((status) => <option key={status} value={status}>{translateStatus(status)}</option>)}
+              </select>
+              <span className={styles.accountResultsCount}>
+                {visibleAccounts.length} {tr('shown', 'показано')}
+              </span>
+              {accountFiltersActive ? (
+                <button
+                  className={styles.accountFiltersReset}
+                  onClick={() => {
+                    setAccountSearch('')
+                    setAccountPlatformFilter('')
+                    setAccountStatusFilter('')
+                  }}
+                  type="button"
+                >
+                  {tr('Reset filters', 'Сбросить')}
+                </button>
+              ) : null}
+            </div>
           </div>
           <table className={styles.table}>
             <colgroup>
@@ -704,7 +1210,20 @@ export default function OverviewPage() {
               </tr>
             </thead>
             <tbody>
-              {visibleAccounts.map((row, index) => (
+              {!visibleAccounts.length ? (
+                <tr>
+                  <td colSpan={7}>
+                    <div className={styles.accountListEmpty}>
+                      <strong>{tr('No accounts in this view', 'В этой группе нет аккаунтов')}</strong>
+                      <span>
+                        {accountFiltersActive
+                          ? tr('Reset filters or try another search.', 'Сбросьте фильтры или измените поисковый запрос.')
+                          : tr('Open group settings to add accounts or show hidden ones.', 'Откройте настройки групп, чтобы добавить аккаунты или вернуть скрытые.')}
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              ) : visibleAccounts.map((row, index) => (
                 <tr key={row.accountId || `${row.account || 'account'}-${row.platform || 'platform'}-${index}`}>
                   <td className={styles.accountCell}>
                     <span className={`${styles.tableStrong} ${styles.accountName}`}>{row.account}</span>
@@ -948,6 +1467,15 @@ export default function OverviewPage() {
         </article>
       </section>
 
+      <AccountGroupsModal
+        accounts={dedupedAccounts}
+        hiddenAccountIds={hiddenAccountIds}
+        onClose={() => setAccountGroupsOpen(false)}
+        onReload={loadAccountViews}
+        open={accountGroupsOpen}
+        tr={tr}
+        views={orderedAccountViews}
+      />
       <FundingModal
         accountId={fundingAccountId}
         onClose={() => setFundingAccountId(null)}

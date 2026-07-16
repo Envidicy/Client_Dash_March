@@ -5086,6 +5086,18 @@ class AccessCreatePayload(BaseModel):
     email: str
 
 
+class AccountSavedViewPayload(BaseModel):
+    name: str = Field(..., min_length=2, max_length=60)
+    account_ids: List[int] = Field(default_factory=list)
+    is_pinned: bool = True
+    is_default: bool = False
+    position: int = Field(default=0, ge=0, le=1000)
+
+
+class AccountOverviewPreferencesPayload(BaseModel):
+    hidden_account_ids: List[int] = Field(default_factory=list)
+
+
 class IntegrationApiKeyCreatePayload(BaseModel):
     name: str = Field(..., min_length=2, max_length=100)
     scopes: List[Literal["accounts:read", "finance:read", "performance:read"]] = Field(
@@ -7652,6 +7664,300 @@ def delete_profile_access(access_id: int, current_user=Depends(get_current_user)
         conn.execute("DELETE FROM user_accesses WHERE id=?", (access_id,))
         conn.commit()
         return {"status": "ok"}
+
+
+def _account_viewer_email(current_user: Dict[str, object]) -> str:
+    return _normalize_email(current_user.get("email") or current_user.get("primary_email"))
+
+
+def _account_view_allowed_ids(conn, current_user: Dict[str, object]) -> set:
+    rows = _list_accessible_accounts(conn, current_user)
+    return {int(row["id"]) for row in rows if row.get("id") is not None}
+
+
+def _validate_account_view_ids(conn, current_user: Dict[str, object], account_ids: List[int]) -> List[int]:
+    normalized = list(dict.fromkeys(int(value) for value in account_ids))
+    allowed = _account_view_allowed_ids(conn, current_user)
+    invalid = [account_id for account_id in normalized if account_id not in allowed]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Accounts are not available to this user: {invalid}")
+    return normalized
+
+
+def _account_views_payload(conn, current_user: Dict[str, object]) -> Dict[str, object]:
+    viewer_email = _account_viewer_email(current_user)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM account_saved_views
+        WHERE user_id=? AND viewer_email=?
+        ORDER BY position ASC, created_at ASC, id ASC
+        """,
+        (current_user["id"], viewer_email),
+    ).fetchall()
+    views = []
+    for raw_row in rows:
+        row = dict(raw_row)
+        members = conn.execute(
+            """
+            SELECT account_id
+            FROM account_saved_view_accounts
+            WHERE view_id=?
+            ORDER BY position ASC, account_id ASC
+            """,
+            (row["id"],),
+        ).fetchall()
+        views.append(
+            {
+                "id": int(row["id"]),
+                "name": row.get("name"),
+                "account_ids": [int(member["account_id"]) for member in members],
+                "is_pinned": bool(row.get("is_pinned")),
+                "is_default": bool(row.get("is_default")),
+                "position": int(row.get("position") or 0),
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            }
+        )
+    hidden_rows = conn.execute(
+        """
+        SELECT account_id
+        FROM account_overview_preferences
+        WHERE user_id=? AND viewer_email=? AND is_hidden=1
+        ORDER BY account_id ASC
+        """,
+        (current_user["id"], viewer_email),
+    ).fetchall()
+    allowed = _account_view_allowed_ids(conn, current_user)
+    return {
+        "views": views,
+        "hidden_account_ids": [
+            int(row["account_id"])
+            for row in hidden_rows
+            if int(row["account_id"]) in allowed
+        ],
+        "viewer_email": viewer_email,
+        "max_pinned": 5,
+    }
+
+
+def _ensure_account_view_name_available(
+    conn,
+    current_user: Dict[str, object],
+    name: str,
+    exclude_view_id: Optional[int] = None,
+) -> None:
+    viewer_email = _account_viewer_email(current_user)
+    query = """
+        SELECT id
+        FROM account_saved_views
+        WHERE user_id=? AND viewer_email=? AND LOWER(name)=LOWER(?)
+    """
+    params: List[object] = [current_user["id"], viewer_email, name]
+    if exclude_view_id is not None:
+        query += " AND id<>?"
+        params.append(exclude_view_id)
+    if conn.execute(query, params).fetchone():
+        raise HTTPException(status_code=409, detail="A group with this name already exists")
+
+
+def _account_view_pinned_count(
+    conn,
+    current_user: Dict[str, object],
+    exclude_view_id: Optional[int] = None,
+) -> int:
+    viewer_email = _account_viewer_email(current_user)
+    query = """
+        SELECT COUNT(*) AS count
+        FROM account_saved_views
+        WHERE user_id=? AND viewer_email=? AND is_pinned=1
+    """
+    params: List[object] = [current_user["id"], viewer_email]
+    if exclude_view_id is not None:
+        query += " AND id<>?"
+        params.append(exclude_view_id)
+    row = conn.execute(query, params).fetchone()
+    return int(row["count"] or 0) if row else 0
+
+
+def _replace_account_view_members(conn, view_id: int, account_ids: List[int]) -> None:
+    conn.execute("DELETE FROM account_saved_view_accounts WHERE view_id=?", (view_id,))
+    for position, account_id in enumerate(account_ids):
+        conn.execute(
+            """
+            INSERT INTO account_saved_view_accounts (view_id, account_id, position)
+            VALUES (?, ?, ?)
+            """,
+            (view_id, account_id, position),
+        )
+
+
+@app.get("/account-views", tags=["Account views"])
+def list_account_views(current_user=Depends(get_current_user)):
+    if not get_conn:
+        return {"views": [], "hidden_account_ids": [], "max_pinned": 5}
+    with get_conn() as conn:
+        return _account_views_payload(conn, current_user)
+
+
+@app.post("/account-views", tags=["Account views"], status_code=201)
+def create_account_view(payload: AccountSavedViewPayload, current_user=Depends(get_current_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    name = payload.name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=422, detail="Group name must contain at least 2 non-space characters")
+    with get_conn() as conn:
+        viewer_email = _account_viewer_email(current_user)
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM account_saved_views WHERE user_id=? AND viewer_email=?",
+            (current_user["id"], viewer_email),
+        ).fetchone()
+        if int(count_row["count"] or 0) >= 30:
+            raise HTTPException(status_code=409, detail="Maximum of 30 account groups reached")
+        _ensure_account_view_name_available(conn, current_user, name)
+        account_ids = _validate_account_view_ids(conn, current_user, payload.account_ids)
+        is_pinned = bool(payload.is_pinned or payload.is_default)
+        if is_pinned and _account_view_pinned_count(conn, current_user) >= 5:
+            raise HTTPException(status_code=409, detail="Maximum of 5 pinned account groups reached")
+        position = payload.position
+        if position == 0:
+            position_row = conn.execute(
+                """
+                SELECT COALESCE(MAX(position), -1) + 1 AS next_position
+                FROM account_saved_views
+                WHERE user_id=? AND viewer_email=?
+                """,
+                (current_user["id"], viewer_email),
+            ).fetchone()
+            position = int(position_row["next_position"] or 0) if position_row else 0
+        if payload.is_default:
+            conn.execute(
+                "UPDATE account_saved_views SET is_default=0 WHERE user_id=? AND viewer_email=?",
+                (current_user["id"], viewer_email),
+            )
+        cur = conn.execute(
+            """
+            INSERT INTO account_saved_views
+              (user_id, viewer_email, name, is_pinned, is_default, position)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                current_user["id"],
+                viewer_email,
+                name,
+                int(is_pinned),
+                int(payload.is_default),
+                position,
+            ),
+        )
+        view_id = int(cur.lastrowid)
+        _replace_account_view_members(conn, view_id, account_ids)
+        conn.commit()
+        return {"status": "ok", "id": view_id, **_account_views_payload(conn, current_user)}
+
+
+@app.put("/account-views/{view_id}", tags=["Account views"])
+def update_account_view(
+    view_id: int,
+    payload: AccountSavedViewPayload,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    name = payload.name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=422, detail="Group name must contain at least 2 non-space characters")
+    with get_conn() as conn:
+        viewer_email = _account_viewer_email(current_user)
+        row = conn.execute(
+            """
+            SELECT *
+            FROM account_saved_views
+            WHERE id=? AND user_id=? AND viewer_email=?
+            """,
+            (view_id, current_user["id"], viewer_email),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account group not found")
+        _ensure_account_view_name_available(conn, current_user, name, exclude_view_id=view_id)
+        account_ids = _validate_account_view_ids(conn, current_user, payload.account_ids)
+        is_pinned = bool(payload.is_pinned or payload.is_default)
+        if is_pinned and _account_view_pinned_count(conn, current_user, exclude_view_id=view_id) >= 5:
+            raise HTTPException(status_code=409, detail="Maximum of 5 pinned account groups reached")
+        if payload.is_default:
+            conn.execute(
+                "UPDATE account_saved_views SET is_default=0 WHERE user_id=? AND viewer_email=?",
+                (current_user["id"], viewer_email),
+            )
+        conn.execute(
+            """
+            UPDATE account_saved_views
+            SET name=?, is_pinned=?, is_default=?, position=?, updated_at=CURRENT_TIMESTAMP
+            WHERE id=? AND user_id=? AND viewer_email=?
+            """,
+            (
+                name,
+                int(is_pinned),
+                int(payload.is_default),
+                payload.position,
+                view_id,
+                current_user["id"],
+                viewer_email,
+            ),
+        )
+        _replace_account_view_members(conn, view_id, account_ids)
+        conn.commit()
+        return {"status": "ok", "id": view_id, **_account_views_payload(conn, current_user)}
+
+
+@app.delete("/account-views/{view_id}", tags=["Account views"])
+def delete_account_view(view_id: int, current_user=Depends(get_current_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        viewer_email = _account_viewer_email(current_user)
+        row = conn.execute(
+            """
+            SELECT id
+            FROM account_saved_views
+            WHERE id=? AND user_id=? AND viewer_email=?
+            """,
+            (view_id, current_user["id"], viewer_email),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account group not found")
+        conn.execute("DELETE FROM account_saved_view_accounts WHERE view_id=?", (view_id,))
+        conn.execute("DELETE FROM account_saved_views WHERE id=?", (view_id,))
+        conn.commit()
+        return {"status": "ok", "id": view_id, **_account_views_payload(conn, current_user)}
+
+
+@app.put("/account-overview/preferences", tags=["Account views"])
+def update_account_overview_preferences(
+    payload: AccountOverviewPreferencesPayload,
+    current_user=Depends(get_current_user),
+):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        viewer_email = _account_viewer_email(current_user)
+        hidden_ids = _validate_account_view_ids(conn, current_user, payload.hidden_account_ids)
+        conn.execute(
+            "DELETE FROM account_overview_preferences WHERE user_id=? AND viewer_email=?",
+            (current_user["id"], viewer_email),
+        )
+        for account_id in hidden_ids:
+            conn.execute(
+                """
+                INSERT INTO account_overview_preferences
+                  (user_id, viewer_email, account_id, is_hidden, updated_at)
+                VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+                """,
+                (current_user["id"], viewer_email, account_id),
+            )
+        conn.commit()
+        return {"status": "ok", **_account_views_payload(conn, current_user)}
 
 
 @app.get("/fees")
