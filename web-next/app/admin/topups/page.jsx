@@ -24,6 +24,7 @@ function statusLabel(value) {
   if (value === 'completed') return 'Completed'
   if (value === 'failed') return 'Failed'
   if (value === 'pending') return 'Pending'
+  if (value === 'processing') return 'In progress'
   return value || '-'
 }
 
@@ -206,7 +207,7 @@ export default function AdminTopupsPage() {
 
   const viewFiltered = useMemo(() => {
     return rows.filter((row) => {
-      if (activeView === 'pending' && row.status !== 'pending') return false
+      if (activeView === 'pending' && !['pending', 'processing'].includes(row.status)) return false
       if (activeView === 'high') return Number(row?.total_wallet_debit || 0) >= 100000
       if (activeView === 'manual') return topupRiskFlags(row).length > 0
       return true
@@ -278,6 +279,7 @@ export default function AdminTopupsPage() {
             <select className={styles.select} value={filters.status} onChange={(e) => setFilters((s) => ({ ...s, status: e.target.value }))}>
               <option value="">{tr('All', 'All')}</option>
               <option value="pending">{tr('Pending', 'Pending')}</option>
+              <option value="processing">{tr('In progress', 'In progress')}</option>
               <option value="completed">{tr('Completed', 'Completed')}</option>
               <option value="failed">{tr('Failed', 'Failed')}</option>
             </select>
@@ -483,13 +485,21 @@ export default function AdminTopupsPage() {
                     <span className={styles.detailLabel}>Agency</span>
                     <span className={styles.detailValue}>{selected.agency_name || (selected.agency_id ? `Agency #${selected.agency_id}` : 'Direct client')}</span>
                   </div>
+                  {selected.account_platform === 'meta' ? (
+                    <>
+                      <div className={styles.detailRow}><span className={styles.detailLabel}>Meta cap before</span><span className={styles.detailValue}>{selected.meta_cap_before == null ? '-' : `$${(Number(selected.meta_cap_before) / 100).toFixed(2)}`}</span></div>
+                      <div className={styles.detailRow}><span className={styles.detailLabel}>Expected Meta cap</span><span className={styles.detailValue}>{selected.meta_cap_target == null ? '-' : `$${(Number(selected.meta_cap_target) / 100).toFixed(2)}`}</span></div>
+                      <div className={styles.detailRow}><span className={styles.detailLabel}>Confirmed Meta cap</span><span className={styles.detailValue}>{selected.meta_cap_confirmed == null ? '-' : `$${(Number(selected.meta_cap_confirmed) / 100).toFixed(2)}`}</span></div>
+                      {selected.meta_cap_error ? <p className={styles.muted} style={{ margin: 0, color: '#a33' }}>{selected.meta_cap_error}</p> : null}
+                    </>
+                  ) : null}
                 </div>
 
                 <div className={styles.buttonRow}>
-                  <button className={styles.buttonPrimary} type="button" disabled={selected.status !== 'pending'} onClick={() => setTopupStatus(selected.id, 'completed')}>
+                  <button className={styles.buttonPrimary} type="button" disabled={!['pending', 'processing'].includes(selected.status)} onClick={() => setTopupStatus(selected.id, 'completed')}>
                     Approve
                   </button>
-                  <button className={styles.buttonGhost} type="button" disabled={selected.status !== 'pending'} onClick={() => setTopupStatus(selected.id, 'failed')}>
+                  <button className={styles.buttonGhost} type="button" disabled={!['pending', 'processing'].includes(selected.status)} onClick={() => setTopupStatus(selected.id, 'failed')}>
                     Fail
                   </button>
                 </div>

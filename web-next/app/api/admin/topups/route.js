@@ -35,6 +35,7 @@ function normalizeStatus(status) {
   const value = String(status || '').toLowerCase()
   if (value === 'completed' || value === 'approved') return 'completed'
   if (value === 'failed' || value === 'rejected') return 'failed'
+  if (value === 'processing') return 'processing'
   return 'pending'
 }
 
@@ -69,6 +70,12 @@ function normalizeTopup(row, index) {
     agency_name: row?.agency_name || '',
     agency_rebate_percent: agencyRebatePercent,
     agency_rebate_amount: agencyRebateAmount,
+    meta_cap_before: row?.meta_cap_before ?? null,
+    meta_cap_target: row?.meta_cap_target ?? null,
+    meta_cap_confirmed: row?.meta_cap_confirmed ?? null,
+    meta_cap_error: row?.meta_cap_error || '',
+    meta_cap_attempted_at: row?.meta_cap_attempted_at || null,
+    meta_cap_applied_at: row?.meta_cap_applied_at || null,
     total_fee_amount: totalFeeAmount,
     topup_owner_type: row?.topup_owner_type || (row?.agency_id ? 'agency_client' : 'direct_client'),
     vat_percent: breakdown.vatPercent,
@@ -94,6 +101,7 @@ function buildStats(items) {
     (acc, row) => {
       acc.total += 1
       if (row.status === 'pending') acc.pending += 1
+      if (row.status === 'processing') acc.pending += 1
       if (row.status === 'completed') {
         acc.completed += 1
         acc.completedGross += Number(row.total_wallet_debit || 0)

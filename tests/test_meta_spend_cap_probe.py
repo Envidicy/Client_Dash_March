@@ -57,7 +57,7 @@ def test_meta_spend_cap_probe_writes_same_value_and_confirms(monkeypatch):
 
     def fake_post(url, data, timeout):
         assert url == "https://graph.facebook.com/v24.0/act_123"
-        assert data == {"access_token": token, "spend_cap": "250000"}
+        assert data == {"access_token": token, "spend_cap": "2500.00"}
         assert timeout == 20
         return FakeResponse(200, {"success": True})
 
@@ -118,3 +118,32 @@ def test_meta_spend_cap_probe_skips_write_without_current_cap(monkeypatch):
 
     assert exc_info.value.status_code == 409
     assert "safe no-op write was skipped" in exc_info.value.detail
+
+
+def test_meta_increment_writes_major_units_and_verifies_minor_units(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "secret-meta-token")
+    reads = iter([
+        FakeResponse(200, {"name": "SmartLab2", "spend_cap": "229500", "amount_spent": "214900", "currency": "USD"}),
+        FakeResponse(200, {"name": "SmartLab2", "spend_cap": "229515", "amount_spent": "214900", "currency": "USD"}),
+    ])
+    monkeypatch.setattr(main_module.httpx, "get", lambda *args, **kwargs: next(reads))
+
+    def fake_post(url, data, timeout):
+        assert data["spend_cap"] == "2295.15"
+        return FakeResponse(200, {"success": True})
+
+    monkeypatch.setattr(main_module.httpx, "post", fake_post)
+    result = main_module._meta_apply_spend_cap_increment("123", "0.15")
+    assert result["before_minor"] == 229500
+    assert result["confirmed_minor"] == 229515
+
+
+def test_meta_increment_retry_does_not_add_twice(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "secret-meta-token")
+    monkeypatch.setattr(main_module.httpx, "get", lambda *args, **kwargs: FakeResponse(
+        200, {"name": "SmartLab2", "spend_cap": "229515", "amount_spent": "214900", "currency": "USD"}
+    ))
+    monkeypatch.setattr(main_module.httpx, "post", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not write twice")))
+    result = main_module._meta_apply_spend_cap_increment("123", "0.15", expected_target_minor=229515)
+    assert result["already_applied"] is True
+    assert result["confirmed_minor"] == 229515

@@ -2,7 +2,9 @@ from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from typing import Dict, List, Literal, Optional, Tuple
 from enum import Enum
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import calendar
+import threading
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Form, Query, Request
 import logging
@@ -49,6 +51,8 @@ _MANUAL_MARKED_RATES = {
 }
 _LIVE_BILLING_CACHE: Dict[str, Dict[str, object]] = {}
 _LIVE_BILLING_TTL_SEC = 300
+_META_ACCOUNT_LOCKS: Dict[str, threading.Lock] = {}
+_META_ACCOUNT_LOCKS_GUARD = threading.Lock()
 _ASSISTANT_GLOBAL_OVERVIEW_CACHE: Dict[str, object] = {"key": None, "ts": 0.0, "data": None}
 _ASSISTANT_GLOBAL_OVERVIEW_TTL_SEC = int(os.getenv("ASSISTANT_GLOBAL_CACHE_TTL_SEC", "3600") or 3600)
 _USER_OVERVIEW_CACHE: Dict[str, Dict[str, object]] = {}
@@ -3627,6 +3631,7 @@ def report_weekly(campaign_id: int, plan_id: Optional[int] = None):
 
 class TopUpStatus(str, Enum):
     pending = "pending"
+    processing = "processing"
     completed = "completed"
     failed = "failed"
 
@@ -5745,6 +5750,87 @@ def _meta_safe_error(resp: httpx.Response, fallback: str) -> str:
     return f"{message}{suffix}"
 
 
+def _meta_minor_factor(currency: str) -> int:
+    return 1 if str(currency or "").upper() in {"JPY", "KRW", "VND", "CLP", "PYG", "UGX", "XAF", "XOF", "XPF"} else 100
+
+
+def _meta_account_lock(account_external_id: object) -> threading.Lock:
+    key = str(account_external_id or "").strip().removeprefix("act_")
+    with _META_ACCOUNT_LOCKS_GUARD:
+        return _META_ACCOUNT_LOCKS.setdefault(key, threading.Lock())
+
+
+def _meta_major_string(minor_amount: int, currency: str) -> str:
+    factor = _meta_minor_factor(currency)
+    value = Decimal(int(minor_amount)) / Decimal(factor)
+    decimals = 0 if factor == 1 else 2
+    return f"{value:.{decimals}f}"
+
+
+def _meta_apply_spend_cap_increment(account_external_id: str, amount_major: object, expected_target_minor: object = None, topup_id: Optional[int] = None) -> Dict[str, object]:
+    token = os.getenv("META_ACCESS_TOKEN")
+    if not token:
+        raise HTTPException(status_code=500, detail="META_ACCESS_TOKEN is not set")
+    external_id = str(account_external_id or "").strip().removeprefix("act_")
+    if not external_id:
+        raise HTTPException(status_code=400, detail="Meta account external ID is missing")
+    try:
+        increment = Decimal(str(amount_major))
+    except (InvalidOperation, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Meta topup amount is invalid")
+    if increment <= 0:
+        raise HTTPException(status_code=400, detail="Meta topup amount must be positive")
+
+    api_version = _meta_graph_api_version()
+    url = f"https://graph.facebook.com/{api_version}/act_{external_id}"
+    params = {"access_token": token, "fields": "id,name,account_id,spend_cap,amount_spent,currency,account_status"}
+    read = httpx.get(url, params=params, timeout=20)
+    if read.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Meta read failed: {_meta_safe_error(read, 'Meta rejected the account read')}")
+    before = read.json()
+    currency = str(before.get("currency") or "USD").upper()
+    try:
+        current_minor = int(before.get("spend_cap"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=409, detail="Meta did not return a valid current spend_cap")
+    factor = _meta_minor_factor(currency)
+    increment_minor = int((increment * factor).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    target_minor = int(expected_target_minor) if expected_target_minor not in (None, "") else current_minor + increment_minor
+    if topup_id and get_conn:
+        with get_conn() as state_conn:
+            state_conn.execute(
+                "UPDATE topups SET meta_cap_before=COALESCE(meta_cap_before, ?), meta_cap_target=?, meta_cap_error=NULL, meta_cap_attempted_at=CURRENT_TIMESTAMP WHERE id=?",
+                (current_minor, target_minor, int(topup_id)),
+            )
+            state_conn.commit()
+
+    # Idempotent recovery: Meta already has the stored target, so never add the topup twice.
+    if expected_target_minor not in (None, "") and current_minor == target_minor:
+        return {"account_id": external_id, "account_name": before.get("name"), "currency": currency, "before_minor": None,
+                "target_minor": target_minor, "confirmed_minor": current_minor, "already_applied": True,
+                "amount_spent_minor": int(before.get("amount_spent") or 0)}
+    if expected_target_minor not in (None, "") and current_minor != target_minor - increment_minor:
+        raise HTTPException(status_code=409, detail=f"Meta spend_cap is {current_minor}, expected {target_minor - increment_minor} before retry")
+
+    write = httpx.post(url, data={"access_token": token, "spend_cap": _meta_major_string(target_minor, currency)}, timeout=20)
+    if write.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Meta spend_cap write failed: {_meta_safe_error(write, 'Meta rejected the spend_cap write')}")
+    verify = httpx.get(url, params=params, timeout=20)
+    if verify.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Meta verification read failed: {_meta_safe_error(verify, 'Meta rejected verification')}")
+    after = verify.json()
+    try:
+        confirmed_minor = int(after.get("spend_cap"))
+    except (TypeError, ValueError):
+        confirmed_minor = -1
+    if confirmed_minor != target_minor:
+        raise HTTPException(status_code=502, detail=f"Meta confirmed spend_cap {confirmed_minor}, expected {target_minor}")
+    _LIVE_BILLING_CACHE.pop(f"meta:{external_id}", None)
+    return {"account_id": external_id, "account_name": before.get("name"), "currency": currency,
+            "before_minor": current_minor, "target_minor": target_minor, "confirmed_minor": confirmed_minor,
+            "already_applied": False, "amount_spent_minor": int(after.get("amount_spent") or 0)}
+
+
 def _meta_probe_spend_cap_write(account_external_id: str) -> Dict[str, object]:
     token = os.getenv("META_ACCESS_TOKEN")
     if not token:
@@ -5794,7 +5880,7 @@ def _meta_probe_spend_cap_write(account_external_id: str) -> Dict[str, object]:
 
     write_resp = httpx.post(
         account_url,
-        data={"access_token": token, "spend_cap": str(spend_cap_raw)},
+        data={"access_token": token, "spend_cap": _meta_major_string(int(spend_cap_raw), str(before.get("currency") or "USD"))},
         timeout=20,
     )
     if write_resp.status_code != 200:
@@ -6369,7 +6455,9 @@ def _finance_refresh_snapshot_for_account(
             live_payload = _attach_live_billing(account, force_refresh=True).get("live_billing")
         optional_balance = _finance_extract_optional_balance(live_payload if isinstance(live_payload, dict) else None)
 
-    remaining_balance = funded_total - spend_total
+    # Meta's operational balance is the remaining account spend cap, not the
+    # internal lifetime-funded calculation. Prefer the live provider balance.
+    remaining_balance = optional_balance if platform == "meta" and optional_balance is not None else funded_total - spend_total
     synced_at = datetime.utcnow().isoformat() + "Z"
 
     conn.execute(
@@ -6418,6 +6506,115 @@ def _finance_refresh_snapshot_for_account(
         "remaining_balance": round(remaining_balance, 6),
         "last_synced_at": synced_at,
     }
+
+
+_HOURLY_META_SYNC_THREAD: Optional[threading.Thread] = None
+_HOURLY_META_SYNC_STOP = threading.Event()
+
+
+def _acquire_background_job_lease(job_key: str, lease_seconds: int) -> Optional[str]:
+    owner = secrets.token_hex(12)
+    now = datetime.now(timezone.utc)
+    locked_until = now + timedelta(seconds=max(60, lease_seconds))
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO background_job_leases (job_key) VALUES (?)",
+            (job_key,),
+        )
+        conn.execute(
+            """
+            UPDATE background_job_leases
+            SET lock_owner=?, locked_until=?, last_started_at=?, last_error=NULL
+            WHERE job_key=? AND (locked_until IS NULL OR locked_until < ?)
+            """,
+            (owner, locked_until, now, job_key, now),
+        )
+        row = conn.execute("SELECT lock_owner FROM background_job_leases WHERE job_key=?", (job_key,)).fetchone()
+        conn.commit()
+    return owner if row and dict(row).get("lock_owner") == owner else None
+
+
+def _finish_background_job_lease(job_key: str, owner: str, error: Optional[str] = None) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE background_job_leases
+            SET locked_until=NULL, lock_owner=NULL, last_finished_at=?, last_error=?
+            WHERE job_key=? AND lock_owner=?
+            """,
+            (datetime.now(timezone.utc), str(error)[:2000] if error else None, job_key, owner),
+        )
+        conn.commit()
+
+
+def _sync_all_meta_balances_once() -> Dict[str, object]:
+    job_key = "hourly_meta_balance_sync"
+    owner = _acquire_background_job_lease(job_key, lease_seconds=1800)
+    if not owner:
+        return {"status": "skipped", "reason": "another instance owns the lease"}
+    synced = 0
+    failures: List[str] = []
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM ad_accounts
+                WHERE LOWER(COALESCE(platform, ''))='meta'
+                  AND external_id IS NOT NULL AND TRIM(external_id)<>''
+                  AND LOWER(COALESCE(status, 'active')) NOT IN ('closed', 'archived', 'delete', 'deleted')
+                ORDER BY id
+                """
+            ).fetchall()
+            accounts = [dict(row) for row in rows]
+            for account in accounts:
+                try:
+                    live = _meta_fetch_account_billing(str(account.get("external_id")), force_refresh=True)
+                    _finance_refresh_snapshot_for_account(
+                        conn, account=account, refresh_live_billing=True, live_billing_payload=live,
+                    )
+                    synced += 1
+                except Exception as exc:
+                    logging.exception("Hourly Meta balance sync failed for account_id=%s", account.get("id"))
+                    failures.append(f"{account.get('id')}: {exc}")
+            conn.commit()
+        error_text = "; ".join(failures) if failures else None
+        _finish_background_job_lease(job_key, owner, error=error_text)
+        return {"status": "ok", "synced": synced, "failed": len(failures)}
+    except Exception as exc:
+        _finish_background_job_lease(job_key, owner, error=str(exc))
+        raise
+
+
+def _hourly_meta_balance_sync_loop() -> None:
+    interval = max(300, int(os.getenv("META_BALANCE_SYNC_INTERVAL_SEC", "3600") or 3600))
+    initial_delay = max(5, int(os.getenv("META_BALANCE_SYNC_INITIAL_DELAY_SEC", "30") or 30))
+    if _HOURLY_META_SYNC_STOP.wait(initial_delay):
+        return
+    while not _HOURLY_META_SYNC_STOP.is_set():
+        try:
+            result = _sync_all_meta_balances_once()
+            logging.info("Automatic Meta balance sync: %s", result)
+        except Exception:
+            logging.exception("Automatic Meta balance sync job failed")
+        if _HOURLY_META_SYNC_STOP.wait(interval):
+            return
+
+
+@app.on_event("startup")
+def _start_hourly_meta_balance_sync() -> None:
+    global _HOURLY_META_SYNC_THREAD
+    if not _env_flag("META_BALANCE_SYNC_ENABLED", True):
+        return
+    if _HOURLY_META_SYNC_THREAD and _HOURLY_META_SYNC_THREAD.is_alive():
+        return
+    _HOURLY_META_SYNC_STOP.clear()
+    _HOURLY_META_SYNC_THREAD = threading.Thread(target=_hourly_meta_balance_sync_loop, name="meta-balance-sync", daemon=True)
+    _HOURLY_META_SYNC_THREAD.start()
+
+
+@app.on_event("shutdown")
+def _stop_hourly_meta_balance_sync() -> None:
+    _HOURLY_META_SYNC_STOP.set()
 
 
 def _resolve_topup_account_amount(row: Dict[str, object], rates_data: Optional[Dict[str, object]] = None) -> Optional[float]:
@@ -14377,7 +14574,12 @@ def accounts_finance_summary(
             spend_today = _finance_to_float(snapshot.get("spend_today")) if snapshot else 0.0
             spend_total = _finance_to_float(snapshot.get("spend_total")) if snapshot else 0.0
             optional_balance = snapshot.get("optional_balance") if snapshot else None
-            remaining_balance = funded_total - spend_total
+            remaining_balance = (
+                _finance_to_float(optional_balance)
+                if platform == "meta" and optional_balance is not None
+                else _finance_to_float(snapshot.get("remaining_balance")) if snapshot and snapshot.get("remaining_balance") is not None
+                else funded_total - spend_total
+            )
             last_synced_at = snapshot.get("last_synced_at") if snapshot else None
 
             items.append(
@@ -14523,7 +14725,7 @@ def account_funding_totals(current_user=Depends(get_current_user)):
               a.currency as account_currency
             FROM topups t
             JOIN ad_accounts a ON a.id = t.account_id
-            WHERE a.user_id=? AND t.status IN ('pending', 'completed')
+            WHERE a.user_id=? AND t.status IN ('pending', 'processing', 'completed')
             ORDER BY t.created_at DESC
             """,
             (current_user["id"],),
@@ -14667,6 +14869,99 @@ def _topup_gross_amount(amount_input: float, fee_percent: float, vat_percent: fl
     return amount_input + fee_amount + vat_amount
 
 
+def _finalize_automatic_meta_topup(topup_id: int, meta_result: Dict[str, object]) -> None:
+    with get_conn() as conn:
+        row_db = conn.execute("SELECT * FROM topups WHERE id=?", (topup_id,)).fetchone()
+        if not row_db:
+            raise HTTPException(status_code=404, detail="Topup not found after Meta update")
+        row = dict(row_db)
+        if row.get("status") == "completed":
+            return
+        account_db = conn.execute("SELECT * FROM ad_accounts WHERE id=?", (row["account_id"],)).fetchone()
+        account = dict(account_db) if account_db else {}
+        topup_payload = _build_topup_account_payload(row, account)
+        budget_delta = float(topup_payload.get("amount_account") or 0)
+        current_budget = float(account.get("budget_total") or 0)
+        conn.execute("UPDATE ad_accounts SET budget_total=? WHERE id=?", (current_budget + budget_delta, row["account_id"]))
+        conn.execute(
+            "UPDATE topups SET status='completed', hold_applied=0, meta_cap_confirmed=?, meta_cap_error=NULL, meta_cap_applied_at=CURRENT_TIMESTAMP WHERE id=?",
+            (int(meta_result["confirmed_minor"]), topup_id),
+        )
+        _record_account_funding_event(
+            conn, account_id=int(row["account_id"]), user_id=int(row["user_id"]), platform="meta",
+            amount=budget_delta, currency=str(account.get("currency") or "USD"), source_type="topup", source_id=topup_id,
+            note=f"Automatic Meta spend cap topup #{topup_id}", update_existing=True,
+        )
+        if row.get("agency_id") and float(row.get("agency_rebate_amount") or 0) > 0:
+            _record_agency_wallet_transaction(
+                conn, agency_id=int(row["agency_id"]), client_user_id=int(row["user_id"]), account_id=int(row["account_id"]),
+                amount=float(row["agency_rebate_amount"]), currency=str(row.get("currency") or "KZT"), tx_type="rebate_accrual",
+                source_type="topup_rebate", source_id=topup_id, note=f"Agency rebate for completed topup #{topup_id}",
+                created_by="meta-automation", acting_as_user_id=int(row["user_id"]),
+            )
+        conn.execute("UPDATE users SET is_client=1 WHERE id=?", (row["user_id"],))
+        live_payload = {
+            "provider": "meta", "currency": meta_result.get("currency"),
+            "spend": float(meta_result.get("amount_spent_minor") or 0) / _meta_minor_factor(str(meta_result.get("currency") or "USD")),
+            "limit": float(meta_result.get("confirmed_minor") or 0) / _meta_minor_factor(str(meta_result.get("currency") or "USD")),
+        }
+        live_payload["balance"] = live_payload["limit"] - live_payload["spend"]
+        try:
+            _finance_refresh_snapshot_for_account(conn, account=account, refresh_live_billing=True, live_billing_payload=live_payload)
+        except Exception:
+            logging.exception("Finance snapshot refresh failed after Meta topup %s", topup_id)
+        conn.commit()
+
+
+def _process_automatic_meta_topup(topup_id: int) -> Dict[str, object]:
+    with get_conn() as conn:
+        row_db = conn.execute(
+            "SELECT t.*, a.external_id, a.name AS account_name, a.currency AS account_currency FROM topups t JOIN ad_accounts a ON a.id=t.account_id WHERE t.id=?",
+            (topup_id,),
+        ).fetchone()
+    if not row_db:
+        raise HTTPException(status_code=404, detail="Topup not found")
+    row = dict(row_db)
+    amount_account = float(_build_topup_account_payload(row, {"currency": row.get("account_currency")}).get("amount_account") or 0)
+    account_lock = _meta_account_lock(row.get("external_id"))
+    account_lock.acquire()
+    try:
+        result = _meta_apply_spend_cap_increment(
+            str(row.get("external_id") or ""), amount_account,
+            expected_target_minor=row.get("meta_cap_target"), topup_id=topup_id,
+        )
+        _finalize_automatic_meta_topup(topup_id, result)
+        factor = _meta_minor_factor(str(result.get("currency") or "USD"))
+        _send_telegram_alert("\n".join([
+            "✅ <b>Meta лимит обновлён</b>",
+            f"Пополнение: <code>#{topup_id}</code>",
+            f"Аккаунт: <b>{html.escape(str(row.get('account_name') or row.get('external_id')))}</b>",
+            f"Новый лимит: <b>{float(result['confirmed_minor']) / factor:,.2f} {result.get('currency')}</b>",
+            f"Пополнение: <b>+{amount_account:,.2f} {result.get('currency')}</b>",
+        ]))
+        return result
+    except Exception as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        with get_conn() as error_conn:
+            current = error_conn.execute("SELECT meta_cap_target FROM topups WHERE id=?", (topup_id,)).fetchone()
+            target_minor = dict(current).get("meta_cap_target") if current else None
+            error_conn.execute("UPDATE topups SET status='processing', meta_cap_error=? WHERE id=?", (str(detail)[:2000], topup_id))
+            error_conn.commit()
+        target_text = "—"
+        if target_minor is not None:
+            target_text = f"{int(target_minor) / _meta_minor_factor(str(row.get('account_currency') or 'USD')):,.2f} {row.get('account_currency') or 'USD'}"
+        _send_telegram_alert("\n".join([
+            "⚠️ <b>Meta не приняла новый лимит</b>",
+            f"Пополнение: <code>#{topup_id}</code>",
+            f"Аккаунт: <b>{html.escape(str(row.get('account_name') or row.get('external_id')))}</b>",
+            f"Должен быть лимит: <b>{target_text}</b>",
+            f"Ошибка: {html.escape(str(detail))}",
+        ]))
+        return {"ok": False, "error": str(detail), "target_minor": target_minor}
+    finally:
+        account_lock.release()
+
+
 @app.post("/topups")
 def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_user)):
     if not get_conn:
@@ -14730,6 +15025,7 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
         else:
             fx_rate = None
             amount_net = amount_input
+        initial_status = "processing" if acc["platform"] == "meta" else "pending"
         cur = conn.execute(
             """
             INSERT INTO topups
@@ -14750,7 +15046,7 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
                 currency,
                 fx_rate,
                 1,
-                "pending",
+                initial_status,
                 0,
             ),
         )
@@ -14800,6 +15096,9 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
                 ]
             )
         )
+        meta_processing = None
+        if acc["platform"] == "meta":
+            meta_processing = _process_automatic_meta_topup(int(topup_id))
         return {
             "id": topup_id,
             "account_id": account_id,
@@ -14814,9 +15113,10 @@ def create_topup(payload: TopupCreatePayload, current_user=Depends(get_current_u
             "amount_net": amount_net,
             "currency": currency,
             "fx_rate": fx_rate,
-            "hold_applied": 1,
+            "hold_applied": 0 if meta_processing and meta_processing.get("confirmed_minor") is not None else 1,
             "hold_amount": gross_amount,
-            "status": "pending",
+            "status": "completed" if meta_processing and meta_processing.get("confirmed_minor") is not None else initial_status,
+            "meta_spend_cap": meta_processing,
         }
 
 

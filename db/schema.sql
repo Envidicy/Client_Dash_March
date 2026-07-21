@@ -326,7 +326,22 @@ CREATE TABLE IF NOT EXISTS topups (
   hold_applied INTEGER DEFAULT 0,
   status TEXT DEFAULT 'pending',
   seen_by_admin INTEGER DEFAULT 0,
+  meta_cap_before INTEGER,
+  meta_cap_target INTEGER,
+  meta_cap_confirmed INTEGER,
+  meta_cap_error TEXT,
+  meta_cap_attempted_at TEXT,
+  meta_cap_applied_at TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS background_job_leases (
+  job_key TEXT PRIMARY KEY,
+  lock_owner TEXT,
+  locked_until TEXT,
+  last_started_at TEXT,
+  last_finished_at TEXT,
+  last_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS wallet_topup_requests (
