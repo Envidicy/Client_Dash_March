@@ -43,6 +43,7 @@ export default function AdminAccountsPage() {
   const [fundingEvents, setFundingEvents] = useState([])
   const [fundingLoading, setFundingLoading] = useState(false)
   const [liveBillingLoading, setLiveBillingLoading] = useState(false)
+  const [spendCapProbeId, setSpendCapProbeId] = useState('')
 
   const [form, setForm] = useState({
     id: '',
@@ -101,6 +102,32 @@ export default function AdminAccountsPage() {
 
   async function refreshLiveBilling() {
     await fetchAccounts({ includeLiveBilling: true })
+  }
+
+  async function probeMetaSpendCap(row) {
+    const confirmed = window.confirm(
+      `Check spend cap write access for ${row?.name || row?.external_id}? The current limit will be written back unchanged.`
+    )
+    if (!confirmed) return
+    setSpendCapProbeId(String(row.id))
+    setStatus('Checking Meta spend cap write access...')
+    try {
+      const res = await adminRouteFetch(`/api/admin/accounts/${row.id}/meta-spend-cap-probe`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || 'Meta spend cap probe failed.')
+      const permission = Array.isArray(data?.permissions)
+        ? data.permissions.find((item) => item?.permission === 'ads_management')
+        : null
+      const permissionLabel = permission ? ` ads_management: ${permission.status}.` : ''
+      setStatus(
+        `Confirmed: this token can write spend_cap for ${data?.account?.name || row.name}. ` +
+        `The limit stayed unchanged (${data?.spend_cap_raw_after}, Meta raw units). API ${data?.api_version}.${permissionLabel}`
+      )
+    } catch (e) {
+      setStatus(e?.message || 'Meta spend cap probe failed.')
+    } finally {
+      setSpendCapProbeId('')
+    }
   }
 
   async function fetchUsers() {
@@ -335,6 +362,17 @@ export default function AdminAccountsPage() {
                       >
                         History
                       </button>
+                      {row.platform === 'meta' && row.external_id ? (
+                        <button
+                          className={styles.buttonGhost}
+                          type="button"
+                          onClick={() => probeMetaSpendCap(row)}
+                          disabled={Boolean(spendCapProbeId)}
+                          style={{ marginLeft: 8 }}
+                        >
+                          {spendCapProbeId === String(row.id) ? 'Checking...' : 'Check limit access'}
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))

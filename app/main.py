@@ -5720,6 +5720,116 @@ def _meta_fetch_account_billing(account_external_id: str, force_refresh: bool = 
     return _live_billing_cache_set(cache_key, payload)
 
 
+def _meta_graph_api_version() -> str:
+    value = (os.getenv("META_GRAPH_API_VERSION") or "v24.0").strip()
+    return value if value.startswith("v") else f"v{value}"
+
+
+def _meta_safe_error(resp: httpx.Response, fallback: str) -> str:
+    try:
+        payload = resp.json()
+    except Exception:
+        return fallback
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return fallback
+    message = str(error.get("message") or fallback)
+    code = error.get("code")
+    subcode = error.get("error_subcode")
+    suffix = ""
+    if code is not None:
+        suffix += f" (code {code}"
+        if subcode is not None:
+            suffix += f", subcode {subcode}"
+        suffix += ")"
+    return f"{message}{suffix}"
+
+
+def _meta_probe_spend_cap_write(account_external_id: str) -> Dict[str, object]:
+    token = os.getenv("META_ACCESS_TOKEN")
+    if not token:
+        raise HTTPException(status_code=500, detail="META_ACCESS_TOKEN is not set")
+
+    external_id = str(account_external_id or "").strip()
+    if external_id.startswith("act_"):
+        external_id = external_id[4:]
+    if not external_id:
+        raise HTTPException(status_code=400, detail="Meta account external ID is missing")
+
+    api_version = _meta_graph_api_version()
+    base_url = f"https://graph.facebook.com/{api_version}"
+    account_url = f"{base_url}/act_{external_id}"
+    read_params = {
+        "access_token": token,
+        "fields": "id,name,account_id,spend_cap,amount_spent,currency,account_status",
+    }
+
+    before_resp = httpx.get(account_url, params=read_params, timeout=20)
+    if before_resp.status_code != 200:
+        detail = _meta_safe_error(before_resp, "Meta rejected the account read")
+        raise HTTPException(status_code=502, detail=f"Meta read failed: {detail}")
+    before = before_resp.json()
+    spend_cap_raw = before.get("spend_cap") if isinstance(before, dict) else None
+    if spend_cap_raw in (None, ""):
+        raise HTTPException(status_code=409, detail="Meta did not return a current spend_cap; safe no-op write was skipped")
+
+    permissions = []
+    permissions_error = None
+    permissions_resp = httpx.get(
+        f"{base_url}/me/permissions",
+        params={"access_token": token},
+        timeout=20,
+    )
+    if permissions_resp.status_code == 200:
+        permissions_payload = permissions_resp.json()
+        raw_permissions = permissions_payload.get("data") if isinstance(permissions_payload, dict) else []
+        if isinstance(raw_permissions, list):
+            permissions = [
+                {"permission": str(item.get("permission") or ""), "status": str(item.get("status") or "")}
+                for item in raw_permissions
+                if isinstance(item, dict)
+            ]
+    else:
+        permissions_error = _meta_safe_error(permissions_resp, "Permission list is unavailable")
+
+    write_resp = httpx.post(
+        account_url,
+        data={"access_token": token, "spend_cap": str(spend_cap_raw)},
+        timeout=20,
+    )
+    if write_resp.status_code != 200:
+        detail = _meta_safe_error(write_resp, "Meta rejected the spend_cap write")
+        raise HTTPException(status_code=502, detail=f"Meta spend_cap write failed: {detail}")
+
+    after_resp = httpx.get(account_url, params=read_params, timeout=20)
+    if after_resp.status_code != 200:
+        detail = _meta_safe_error(after_resp, "Meta rejected the verification read")
+        raise HTTPException(status_code=502, detail=f"Meta verification read failed: {detail}")
+    after = after_resp.json()
+    after_spend_cap_raw = after.get("spend_cap") if isinstance(after, dict) else None
+    unchanged = str(after_spend_cap_raw) == str(spend_cap_raw)
+    if not unchanged:
+        raise HTTPException(status_code=502, detail="Meta accepted the write, but spend_cap changed during verification")
+
+    return {
+        "ok": True,
+        "write_access_confirmed": True,
+        "safe_noop": True,
+        "api_version": api_version,
+        "account": {
+            "id": before.get("id"),
+            "name": before.get("name"),
+            "account_id": before.get("account_id") or external_id,
+            "currency": before.get("currency"),
+            "account_status": before.get("account_status"),
+        },
+        "spend_cap_raw_before": str(spend_cap_raw),
+        "spend_cap_raw_after": str(after_spend_cap_raw),
+        "permissions": permissions,
+        "permissions_error": permissions_error,
+    }
+
+
 def _google_ads_client() -> GoogleAdsClient:
     developer_token = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN")
     client_id = os.getenv("GOOGLE_ADS_CLIENT_ID")
@@ -11211,6 +11321,29 @@ def admin_list_accounts(include_live_billing: int = 0, admin_user=Depends(get_ad
         if include_live_billing:
             return _attach_live_billing_many(payload)
         return payload
+
+
+@app.post("/admin/accounts/{account_id}/meta-spend-cap-probe")
+def admin_probe_meta_spend_cap(account_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, platform, name, external_id FROM ad_accounts WHERE id=?",
+            (account_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Account not found")
+    account = dict(row)
+    if str(account.get("platform") or "").lower() != "meta":
+        raise HTTPException(status_code=400, detail="Spend cap probe is available only for Meta accounts")
+    external_id = str(account.get("external_id") or "").strip()
+    if not external_id:
+        raise HTTPException(status_code=400, detail="Meta account external ID is missing")
+    result = _meta_probe_spend_cap_write(external_id)
+    result["internal_account_id"] = account_id
+    result["internal_account_name"] = account.get("name")
+    return result
 
 
 @app.get("/admin/agencies")
