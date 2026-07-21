@@ -105,10 +105,6 @@ export default function AdminAccountsPage() {
   }
 
   async function probeMetaSpendCap(row) {
-    const confirmed = window.confirm(
-      `Check spend cap write access for ${row?.name || row?.external_id}? The current limit will be written back unchanged.`
-    )
-    if (!confirmed) return
     setSpendCapProbeId(String(row.id))
     setStatus('Checking Meta spend cap write access...')
     try {
