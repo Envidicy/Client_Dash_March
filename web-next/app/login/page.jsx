@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { setAuth } from '../../lib/auth'
+import { getAuthToken, setAuth } from '../../lib/auth'
 import { isAdminEmail } from '../../lib/admin-access'
 import { useI18n } from '../../lib/i18n/client'
 import styles from './login.module.css'
@@ -22,6 +22,8 @@ export default function LoginPage() {
     () =>
       mode === 'login'
         ? t('login.statusLogin')
+        : mode === 'phone'
+          ? t('login.phoneRequired', 'Add your phone number to continue.')
         : t('login.statusSetPassword'),
     [mode, t]
   )
@@ -35,7 +37,7 @@ export default function LoginPage() {
   )
 
   useEffect(() => {
-    setStatus(mode === 'login' ? t('login.statusLogin') : t('login.statusSetPassword'))
+    setStatus(mode === 'login' ? t('login.statusLogin') : mode === 'phone' ? t('login.phoneRequired', 'Add your phone number to continue.') : t('login.statusSetPassword'))
   }, [locale, mode, t])
 
   useEffect(() => {
@@ -48,6 +50,8 @@ export default function LoginPage() {
     setSetupTokenFromQuery(querySetupToken)
     if (queryMode === 'set-password' || querySetupToken) {
       setMode('set-password')
+    } else if (queryMode === 'phone') {
+      setMode('phone')
     }
   }, [])
 
@@ -73,11 +77,38 @@ export default function LoginPage() {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.detail || 'Could not sign in')
       setAuth(data)
+      if (data?.requires_phone) {
+        setMode('phone')
+        setStatus(t('login.phoneRequired', 'Add your phone number to continue.'))
+        return
+      }
       setStatus(t('login.accessGranted'))
       const nextEmail = String(data?.email || email || '').toLowerCase()
       router.push(isAdminEmail(nextEmail) ? '/admin/requests' : '/dashboard')
     } catch (error) {
       setStatus(error?.message || t('login.signInFailed'))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  async function onPhoneSubmit(event) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const phone = String(form.get('phone') || '').trim()
+    if (!phone) return setStatus(t('login.phoneRequired', 'Add your phone number to continue.'))
+    setPending(true)
+    try {
+      const res = await fetch('/api/auth/phone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAuthToken()}` },
+        body: JSON.stringify({ phone }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || 'Could not save phone number')
+      router.push('/dashboard')
+    } catch (error) {
+      setStatus(error?.message || 'Could not save phone number')
     } finally {
       setPending(false)
     }
@@ -159,7 +190,7 @@ export default function LoginPage() {
           <span className={styles.mobileBrand}>Envidicy</span>
 
           <div className={styles.panelHead}>
-            <h2 className={styles.panelTitle}>{mode === 'login' ? t('login.signIn') : t('login.setPassword')}</h2>
+            <h2 className={styles.panelTitle}>{mode === 'login' ? t('login.signIn') : mode === 'phone' ? t('login.addPhone', 'Add phone') : t('login.setPassword')}</h2>
             <p className={styles.panelText}>{helperText}</p>
           </div>
 
@@ -195,6 +226,22 @@ export default function LoginPage() {
 
                 <button className={styles.submit} type="submit" disabled={pending}>
                   <span>{pending ? t('login.signingIn') : t('login.signIn')}</span>
+                  <span className="material-symbols-outlined">arrow_forward</span>
+                </button>
+                <div className={styles.divider}><span>{t('login.or', 'or')}</span></div>
+                <a className={styles.metaButton} href="/api/auth/meta/start">
+                  <span className={styles.metaMark}>f</span>
+                  <span>{t('login.continueMeta', 'Continue with Meta')}</span>
+                </a>
+              </form>
+            ) : mode === 'phone' ? (
+              <form className={styles.form} onSubmit={onPhoneSubmit}>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>{t('login.phone', 'Phone number')}</span>
+                  <input className={styles.fieldInput} name="phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="+7 700 000 00 00" required />
+                </label>
+                <button className={styles.submit} type="submit" disabled={pending}>
+                  <span>{pending ? t('login.saving', 'Saving...') : t('login.continue', 'Continue')}</span>
                   <span className="material-symbols-outlined">arrow_forward</span>
                 </button>
               </form>

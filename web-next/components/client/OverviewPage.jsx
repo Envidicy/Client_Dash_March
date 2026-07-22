@@ -1190,13 +1190,11 @@ export default function OverviewPage() {
           </div>
           <table className={styles.table}>
             <colgroup>
-              <col style={{ width: '28%' }} />
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '8%' }} />
+              <col style={{ width: '34%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '10%' }} />
             </colgroup>
             <thead>
               <tr>
@@ -1204,15 +1202,13 @@ export default function OverviewPage() {
                 <th>{tr('Platform', 'Платформа')}</th>
                 <th>{tr('Status', 'Статус')}</th>
                 <th>{tr('Balance', 'Баланс')}</th>
-                <th>{tr('Spend', 'Расход')}</th>
-                <th>{tr('Note', 'Комментарий')}</th>
                 <th>{tr('Action', 'Действие')}</th>
               </tr>
             </thead>
             <tbody>
               {!visibleAccounts.length ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={5}>
                     <div className={styles.accountListEmpty}>
                       <strong>{tr('No accounts in this view', 'В этой группе нет аккаунтов')}</strong>
                       <span>
@@ -1238,22 +1234,6 @@ export default function OverviewPage() {
                     <span className={styles.tableStrong}>{row.balance}</span>
                     <span className={styles.tableSubtle}>{translateOverviewHint(row.balanceSourceLabel || '')}</span>
                     <span className={styles.tableSubtle}>{translateOverviewHint(row.lastSyncedLabel || '')}</span>
-                  </td>
-                  <td>
-                    <span className={styles.tableSubtle}>{row.spend}</span>
-                  </td>
-                  <td>
-                    <span
-                      className={
-                        row.noteTone === 'good'
-                          ? styles.noteGood
-                          : row.noteTone === 'neutral'
-                            ? styles.tableSubtle
-                            : styles.noteWarn
-                      }
-                    >
-                      {row.note}
-                    </span>
                   </td>
                   <td>
                     <div className={styles.accountActions}>

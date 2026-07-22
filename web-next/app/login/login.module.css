@@ -271,6 +271,11 @@
   cursor: default;
 }
 
+.divider { display: flex; align-items: center; gap: 12px; color: #aaa4b1; font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; font-weight: 700; }
+.divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #e8e1d9; }
+.metaButton { display: inline-flex; align-items: center; justify-content: center; gap: 10px; width: 100%; height: 56px; border: 1px solid #d8dce8; border-radius: 10px; background: #fff; color: #202124; text-decoration: none; font-size: 15px; font-weight: 800; }
+.metaMark { display: inline-flex; align-items: flex-end; justify-content: center; width: 24px; height: 24px; border-radius: 999px; background: #0866ff; color: #fff; font: 800 22px/22px Arial, sans-serif; }
+
 .bottomLinks {
   margin-top: 24px;
   display: flex;

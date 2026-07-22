@@ -1483,6 +1483,11 @@ button:disabled {
   color: var(--text);
 }
 
+.auth-divider { display: flex; align-items: center; gap: 12px; color: #8d8795; font-size: 12px; text-transform: uppercase; }
+.auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: rgba(255, 255, 255, 0.15); }
+.auth-meta { min-height: 48px; display: inline-flex; align-items: center; justify-content: center; gap: 10px; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 10px; color: inherit; text-decoration: none; font-weight: 700; }
+.auth-meta-mark { display: inline-flex; align-items: flex-end; justify-content: center; width: 24px; height: 24px; border-radius: 999px; background: #0866ff; color: #fff; font: 800 22px/22px Arial, sans-serif; }
+
 .impersonation-banner-copy {
   display: flex;
   min-width: 0;

@@ -18,11 +18,12 @@ export default function RegisterPage() {
     const form = new FormData(event.currentTarget)
     const name = String(form.get('name') || '').trim()
     const company = String(form.get('company') || '').trim()
+    const phone = String(form.get('phone') || '').trim()
     const email = String(form.get('email') || '').trim()
     const password = String(form.get('password') || '').trim()
     const confirm = String(form.get('confirm_password') || '').trim()
 
-    if (!email || !password) {
+    if (!name || !phone || !email || !password) {
       setStatus(tr('Fill in required fields.', 'Заполните обязательные поля.'))
       return
     }
@@ -37,23 +38,12 @@ export default function RegisterPage() {
       const res = await apiFetch('/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ name, company: company || null, phone, email, password }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.detail || tr('Failed to create account', 'Не удалось создать аккаунт'))
 
       setAuth(data)
-
-      if (name || company) {
-        await apiFetch('/profile', {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${data.token}`,
-          },
-          body: JSON.stringify({ name: name || null, company: company || null, language: 'ru' }),
-        }).catch(() => {})
-      }
 
       setStatus(tr('Account created. Redirecting...', 'Аккаунт создан. Перенаправляем...'))
       router.push('/dashboard')
@@ -76,6 +66,10 @@ export default function RegisterPage() {
           <input name="company" type="text" placeholder="ACME Corp" />
         </label>
         <label>
+          <span>{tr('Phone number', 'Номер телефона')}</span>
+          <input name="phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="+7 700 000 00 00" required />
+        </label>
+        <label>
           <span>Email</span>
           <input name="email" type="email" placeholder="name@gmail.com" required />
         </label>
@@ -90,6 +84,11 @@ export default function RegisterPage() {
         <button disabled={pending} className="auth-primary" type="submit">
           {pending ? tr('Creating...', 'Создаем...') : tr('Create account', 'Создать аккаунт')}
         </button>
+        <div className="auth-divider"><span>{tr('or', 'или')}</span></div>
+        <a className="auth-meta" href="/api/auth/meta/start">
+          <span className="auth-meta-mark">f</span>
+          {tr('Continue with Meta', 'Продолжить через Meta')}
+        </a>
         <a className="auth-secondary" href="/login">
           {tr('Already have an account', 'Уже есть аккаунт')}
         </a>

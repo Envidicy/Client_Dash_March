@@ -155,6 +155,7 @@ def apply_schema():
             conn.execute("ALTER TABLE ad_accounts ADD COLUMN IF NOT EXISTS agency_id BIGINT")
             conn.execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS fee_config TEXT")
             conn.execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS notifications_seen_at TIMESTAMPTZ")
+            conn.execute("ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS scopes TEXT")
             conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS hold_applied INTEGER DEFAULT 0")
             conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS platform_fee_percent DOUBLE PRECISION DEFAULT 0")
             conn.execute("ALTER TABLE topups ADD COLUMN IF NOT EXISTS agency_id BIGINT")
@@ -577,6 +578,21 @@ def apply_schema():
         )
         _ensure_table(
             conn,
+            "meta_connections",
+            """
+            CREATE TABLE IF NOT EXISTS meta_connections (
+              user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+              meta_user_id TEXT NOT NULL UNIQUE,
+              access_token TEXT NOT NULL,
+              scopes TEXT,
+              expires_at INTEGER,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
             "telegram_bind_tokens",
             """
             CREATE TABLE IF NOT EXISTS telegram_bind_tokens (
@@ -603,6 +619,7 @@ def apply_schema():
         _ensure_column(conn, "client_telegram_chats", "message_thread_id", "INTEGER")
         _ensure_column(conn, "client_telegram_chats", "bound_by_telegram_user_id", "TEXT")
         _ensure_column(conn, "client_telegram_chats", "updated_at", "TEXT")
+        _ensure_column(conn, "meta_connections", "scopes", "TEXT")
         _ensure_table(
             conn,
             "user_documents",

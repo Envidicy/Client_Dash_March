@@ -165,6 +165,16 @@ CREATE TABLE IF NOT EXISTS ad_accounts (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS meta_connections (
+  user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  meta_user_id TEXT NOT NULL UNIQUE,
+  access_token TEXT NOT NULL,
+  scopes TEXT,
+  expires_at BIGINT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS account_saved_views (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -3787,6 +3787,21 @@ class AuthPayload(BaseModel):
     password: str
 
 
+class RegisterPayload(AuthPayload):
+    name: str
+    company: Optional[str] = None
+    phone: str
+
+
+class MetaAuthPayload(BaseModel):
+    code: str
+    redirect_uri: str
+
+
+class PhonePayload(BaseModel):
+    phone: str
+
+
 class ChangePasswordPayload(BaseModel):
     current_password: str
     new_password: str
@@ -3796,6 +3811,27 @@ class MetaInsightsResponse(BaseModel):
     summary: Dict[str, object]
     campaigns: List[Dict[str, object]]
     status: Optional[str] = None
+
+
+def _meta_graph_rows(url: str, *, token: str, params: Optional[Dict[str, object]] = None) -> List[Dict[str, object]]:
+    query = dict(params or {})
+    query["access_token"] = token
+    rows: List[Dict[str, object]] = []
+    next_url: Optional[str] = url
+    while next_url:
+        response = requests.get(next_url, params=query, timeout=25)
+        payload = response.json()
+        if not response.ok:
+            error = payload.get("error") if isinstance(payload, dict) else None
+            message = error.get("message") if isinstance(error, dict) else None
+            raise HTTPException(status_code=502, detail=message or "Meta API request failed")
+        data = payload.get("data") if isinstance(payload, dict) else []
+        if isinstance(data, list):
+            rows.extend(row for row in data if isinstance(row, dict))
+        paging = payload.get("paging") if isinstance(payload, dict) else {}
+        next_url = str((paging or {}).get("next") or "") or None
+        query = {}
+    return rows
 
 
 class GoogleInsightsResponse(BaseModel):
@@ -5410,13 +5446,18 @@ def topup_request(payload: TopUpRequest):
 
 
 @app.post("/auth/register")
-def register(payload: AuthPayload):
+def register(payload: RegisterPayload):
     if not get_conn:
         raise HTTPException(status_code=500, detail="DB not initialized")
     email = _normalize_email(payload.email)
     password = payload.password.strip()
-    if not email or not password:
-        raise HTTPException(status_code=400, detail="Email and password are required")
+    name = payload.name.strip()
+    company = (payload.company or "").strip() or None
+    phone = re.sub(r"[^\d+]", "", payload.phone.strip())
+    if not email or not password or not name or not phone:
+        raise HTTPException(status_code=400, detail="Name, phone, email and password are required")
+    if len(re.sub(r"\D", "", phone)) < 10:
+        raise HTTPException(status_code=400, detail="Enter a valid phone number")
     with get_conn() as conn:
         existing = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         if existing or _get_access_by_email(conn, email):
@@ -5428,6 +5469,13 @@ def register(payload: AuthPayload):
             (email, password_hash, salt),
         )
         user_id = cur.lastrowid
+        conn.execute(
+            """
+            INSERT INTO user_profiles (user_id, name, company, language, whatsapp_phone)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, name, company, "ru", phone),
+        )
         _ensure_owner_access(conn, user_id)
         token = _issue_user_token(conn, user_id, email)
         conn.commit()
@@ -5437,11 +5485,109 @@ def register(payload: AuthPayload):
                     "🆕 <b>Новая регистрация</b>",
                     f"ID: <code>{user_id}</code>",
                     f"Email: <code>{email}</code>",
+                    f"Phone: <code>{phone}</code>",
                 ]
             ),
             channel="reg",
         )
-        return {"id": user_id, "email": email, "token": token, "can_manage_accesses": True}
+        return {
+            "id": user_id,
+            "email": email,
+            "token": token,
+            "can_manage_accesses": True,
+            "requires_phone": False,
+        }
+
+
+@app.post("/auth/meta/login")
+def meta_login(payload: MetaAuthPayload):
+    app_id = (os.getenv("META_APP_ID") or "").strip()
+    app_secret = (os.getenv("META_APP_SECRET") or "").strip()
+    graph_version = (os.getenv("META_GRAPH_API_VERSION") or "v25.0").strip()
+    if not app_id or not app_secret:
+        raise HTTPException(status_code=503, detail="Meta login is not configured")
+
+    try:
+        token_response = requests.post(
+            f"https://graph.facebook.com/{graph_version}/oauth/access_token",
+            data={
+                "client_id": app_id,
+                "client_secret": app_secret,
+                "redirect_uri": payload.redirect_uri,
+                "code": payload.code,
+            },
+            timeout=20,
+        )
+        token_data = token_response.json()
+        access_token = str(token_data.get("access_token") or "")
+        if not token_response.ok or not access_token:
+            raise HTTPException(status_code=401, detail="Meta authorization failed")
+        profile_response = requests.get(
+            f"https://graph.facebook.com/{graph_version}/me",
+            params={"fields": "id,name,email", "access_token": access_token},
+            timeout=20,
+        )
+        meta_profile = profile_response.json()
+        if not profile_response.ok:
+            raise HTTPException(status_code=401, detail="Could not read Meta profile")
+        permissions_response = requests.get(
+            f"https://graph.facebook.com/{graph_version}/me/permissions",
+            params={"access_token": access_token},
+            timeout=20,
+        )
+        permissions_payload = permissions_response.json() if permissions_response.ok else {}
+        granted_scopes = sorted(
+            str(row.get("permission"))
+            for row in (permissions_payload.get("data") or [])
+            if isinstance(row, dict) and row.get("status") == "granted" and row.get("permission")
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=502, detail="Meta is temporarily unavailable")
+
+    meta_user_id = str(meta_profile.get("id") or "").strip()
+    email = _normalize_email(meta_profile.get("email"))
+    if not meta_user_id or not email:
+        raise HTTPException(status_code=400, detail="Meta account must provide an email address")
+
+    with get_conn() as conn:
+        user = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        if not user:
+            raise HTTPException(
+                status_code=409,
+                detail="Register with your phone number first, then sign in with Meta",
+            )
+        user_id = int(user["id"])
+        conn.execute(
+            """
+            INSERT INTO meta_connections (user_id, meta_user_id, access_token, scopes, expires_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+              meta_user_id=excluded.meta_user_id,
+              access_token=excluded.access_token,
+              scopes=excluded.scopes,
+              expires_at=excluded.expires_at,
+              updated_at=CURRENT_TIMESTAMP
+            """,
+            (user_id, meta_user_id, access_token, json.dumps(granted_scopes), token_data.get("expires_in")),
+        )
+        profile = _get_or_create_profile(conn, user_id)
+        if not profile.get("name") and meta_profile.get("name"):
+            conn.execute(
+                "UPDATE user_profiles SET name=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+                (str(meta_profile["name"]).strip(), user_id),
+            )
+        token = _issue_user_token(conn, user_id, email)
+        conn.commit()
+        return {
+            "id": user_id,
+            "email": email,
+            "token": token,
+            "can_manage_accesses": True,
+            "requires_phone": not bool(profile.get("whatsapp_phone")),
+            "meta_scopes": granted_scopes,
+        }
 
 
 @app.post("/auth/login")
@@ -5485,6 +5631,7 @@ def login(payload: AuthPayload, request: Request):
                 raise HTTPException(status_code=401, detail="Invalid credentials")
             _upgrade_password_hash_if_needed(conn, access, password)
             token = _issue_user_token(conn, user["id"], access.get("email") or user.get("email"))
+            profile = _get_or_create_profile(conn, int(user["id"]))
             conn.commit()
             _security_clear_failures(bucket)
             return {
@@ -5492,6 +5639,7 @@ def login(payload: AuthPayload, request: Request):
                 "email": access.get("email") or user.get("email") or email,
                 "token": token,
                 "can_manage_accesses": (access.get("role") or "member") == "owner",
+                "requires_phone": not bool(profile.get("whatsapp_phone")),
             }
     except HTTPException:
         raise
@@ -5517,6 +5665,7 @@ def login(payload: AuthPayload, request: Request):
             )
             raise HTTPException(status_code=401, detail="Invalid credentials")
         token = _issue_user_token(conn, int(legacy_user["id"]), legacy_user.get("email") or email)
+        profile = _get_or_create_profile(conn, int(legacy_user["id"]))
         conn.commit()
         _security_clear_failures(bucket)
         return {
@@ -5524,7 +5673,23 @@ def login(payload: AuthPayload, request: Request):
             "email": legacy_user.get("email") or email,
             "token": token,
             "can_manage_accesses": True,
+            "requires_phone": not bool(profile.get("whatsapp_phone")),
         }
+
+
+@app.post("/auth/phone")
+def save_required_phone(payload: PhonePayload, current_user=Depends(get_current_user)):
+    phone = re.sub(r"[^\d+]", "", payload.phone.strip())
+    if len(re.sub(r"\D", "", phone)) < 10:
+        raise HTTPException(status_code=400, detail="Enter a valid phone number")
+    with get_conn() as conn:
+        _get_or_create_profile(conn, int(current_user["id"]))
+        conn.execute(
+            "UPDATE user_profiles SET whatsapp_phone=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+            (phone, int(current_user["id"])),
+        )
+        conn.commit()
+    return {"status": "ok", "phone": phone}
 
 
 @app.get("/auth/access-status")
@@ -9052,6 +9217,126 @@ def meta_insights(
     elif errors:
         status = f"Часть Meta аккаунтов недоступна: {len(errors)}"
     return {"summary": summary, "campaigns": campaigns, "status": status}
+
+
+@app.get("/meta/dashboard")
+def meta_dashboard(
+    date_from: str,
+    date_to: str,
+    account_id: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    if not date_from or not date_to:
+        raise HTTPException(status_code=400, detail="date_from and date_to are required")
+    graph_version = (os.getenv("META_GRAPH_API_VERSION") or "v25.0").strip()
+    with get_conn() as conn:
+        connection = conn.execute(
+            "SELECT access_token FROM meta_connections WHERE user_id=?",
+            (int(current_user["id"]),),
+        ).fetchone()
+    connection_data = dict(connection) if connection else {}
+    if not connection_data.get("access_token"):
+        raise HTTPException(status_code=409, detail="Connect Meta to view analytics")
+    token = str(connection_data["access_token"])
+
+    accounts_raw = _meta_graph_rows(
+        f"https://graph.facebook.com/{graph_version}/me/adaccounts",
+        token=token,
+        params={"fields": "id,account_id,name,currency,account_status", "limit": 200},
+    )
+    accounts = [
+        {
+            "id": str(row.get("account_id") or row.get("id") or "").replace("act_", ""),
+            "name": row.get("name") or f"Meta {row.get('account_id') or ''}",
+            "currency": row.get("currency") or "USD",
+            "status": row.get("account_status"),
+        }
+        for row in accounts_raw
+        if row.get("account_id") or row.get("id")
+    ]
+    selected = [row for row in accounts if not account_id or row["id"] == str(account_id).replace("act_", "")]
+    if account_id and not selected:
+        raise HTTPException(status_code=404, detail="Meta advertising account not found")
+
+    campaigns: List[Dict[str, object]] = []
+    daily_by_date: Dict[str, Dict[str, object]] = {}
+    for account in selected:
+        external_id = account["id"]
+        base = f"https://graph.facebook.com/{graph_version}/act_{external_id}/insights"
+        common = {
+            "time_range": json.dumps({"since": date_from, "until": date_to}),
+            "limit": 500,
+        }
+        campaign_rows = _meta_graph_rows(
+            base,
+            token=token,
+            params={
+                **common,
+                "level": "campaign",
+                "fields": "campaign_id,campaign_name,spend,impressions,clicks,reach,ctr,cpc,cpm,actions",
+            },
+        )
+        for row in campaign_rows:
+            actions = row.get("actions") if isinstance(row.get("actions"), list) else []
+            conversions = sum(
+                float(action.get("value") or 0)
+                for action in actions
+                if isinstance(action, dict) and str(action.get("action_type") or "").lower() in {"lead", "purchase", "complete_registration"}
+            )
+            campaigns.append({
+                "account_id": external_id,
+                "account_name": account["name"],
+                "campaign_id": row.get("campaign_id"),
+                "campaign_name": row.get("campaign_name") or "Untitled campaign",
+                "spend": float(row.get("spend") or 0),
+                "impressions": float(row.get("impressions") or 0),
+                "clicks": float(row.get("clicks") or 0),
+                "reach": float(row.get("reach") or 0),
+                "ctr": float(row.get("ctr") or 0),
+                "cpc": float(row.get("cpc") or 0),
+                "cpm": float(row.get("cpm") or 0),
+                "conversions": conversions,
+            })
+        daily_rows = _meta_graph_rows(
+            base,
+            token=token,
+            params={
+                **common,
+                "level": "account",
+                "fields": "spend,impressions,clicks,reach",
+                "time_increment": 1,
+            },
+        )
+        for row in daily_rows:
+            day = str(row.get("date_start") or "")
+            if not day:
+                continue
+            bucket = daily_by_date.setdefault(day, {"date": day, "spend": 0.0, "impressions": 0.0, "clicks": 0.0, "reach": 0.0})
+            for key in ("spend", "impressions", "clicks", "reach"):
+                bucket[key] = float(bucket[key]) + float(row.get(key) or 0)
+
+    spend = sum(float(row["spend"]) for row in campaigns)
+    impressions = sum(float(row["impressions"]) for row in campaigns)
+    clicks = sum(float(row["clicks"]) for row in campaigns)
+    reach = sum(float(row["reach"]) for row in campaigns)
+    conversions = sum(float(row["conversions"]) for row in campaigns)
+    return {
+        "accounts": accounts,
+        "selected_account_id": str(account_id or ""),
+        "currency": selected[0]["currency"] if len(selected) == 1 else "USD",
+        "summary": {
+            "spend": spend,
+            "impressions": impressions,
+            "clicks": clicks,
+            "reach": reach,
+            "conversions": conversions,
+            "ctr": (clicks / impressions * 100) if impressions else 0,
+            "cpc": (spend / clicks) if clicks else 0,
+            "cpm": (spend / impressions * 1000) if impressions else 0,
+        },
+        "daily": [daily_by_date[key] for key in sorted(daily_by_date)],
+        "campaigns": sorted(campaigns, key=lambda row: float(row["spend"]), reverse=True),
+    }
 
 
 @app.get("/google/insights", response_model=GoogleInsightsResponse)

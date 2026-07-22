@@ -3430,6 +3430,35 @@
   margin-bottom: 16px;
 }
 
+.metaToolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
+.metaToolbar select, .metaToolbar input, .metaToolbar button { min-height: 44px; border: 1px solid #dedfe5; border-radius: 10px; background: #fff; color: #222735; padding: 0 14px; font: inherit; }
+.metaToolbar select { min-width: 240px; }
+.metaToolbar button { background: #1f49d8; border-color: #1f49d8; color: #fff; font-weight: 700; cursor: pointer; }
+.metaConnectState { padding: 42px; border: 1px dashed #cfd4e2; border-radius: 16px; background: #fff; text-align: center; }
+.metaConnectState h3 { margin: 0 0 8px; }
+.metaConnectState p { color: #707789; }
+.metaConnectState a { display: inline-flex; min-height: 44px; align-items: center; padding: 0 18px; border-radius: 10px; background: #0866ff; color: #fff; text-decoration: none; font-weight: 700; }
+.metaMetricGrid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.metaMetricGrid article { min-width: 0; padding: 18px; border: 1px solid #e4e5ea; border-radius: 14px; background: #fff; }
+.metaMetricGrid span { display: block; margin-bottom: 12px; color: #777e8f; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.metaMetricGrid strong { display: block; overflow: hidden; color: #202432; font-size: 24px; letter-spacing: -.04em; text-overflow: ellipsis; }
+.metaChartCard, .metaTableCard { margin-bottom: 18px; padding: 22px; border: 1px solid #e4e5ea; border-radius: 16px; background: #fff; }
+.metaChartCard h3, .metaTableCard h3 { margin: 0 0 4px; color: #202432; }
+.metaChartCard p, .metaTableCard p { margin: 0; color: #858b99; font-size: 13px; }
+.metaBars { height: 280px; display: flex; align-items: flex-end; gap: 5px; margin-top: 26px; border-bottom: 1px solid #e8e9ee; }
+.metaBarColumn { height: 100%; min-width: 10px; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; gap: 8px; }
+.metaBarColumn > div { min-height: 4px; border-radius: 5px 5px 0 0; background: linear-gradient(180deg, #4c73ff, #244ed8); }
+.metaBarColumn span { height: 22px; color: #959ba8; font-size: 9px; text-align: center; writing-mode: vertical-rl; }
+.metaEmpty { align-self: center; width: 100%; text-align: center; }
+.metaTableScroll { overflow-x: auto; margin-top: 20px; }
+.metaTableScroll table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+.metaTableScroll th { padding: 11px 12px; border-bottom: 1px solid #e7e8ed; color: #858b99; font-size: 11px; text-align: left; text-transform: uppercase; }
+.metaTableScroll td { padding: 14px 12px; border-bottom: 1px solid #eff0f3; color: #4d5362; font-size: 13px; }
+.metaTableScroll td:first-child { max-width: 320px; overflow: hidden; color: #232735; text-overflow: ellipsis; }
+
+@media (max-width: 1200px) { .metaMetricGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .metaMetricGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .metaToolbar > * { width: 100%; } .metaBars { height: 220px; } }
+
 .performanceFilters {
   display: flex;
   gap: 10px;
