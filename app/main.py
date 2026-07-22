@@ -9019,6 +9019,8 @@ def meta_insights(
                 {
                     "campaign_id": row.get("campaign_id"),
                     "campaign_name": row.get("campaign_name"),
+                    "account_name": acc.get("name") or acc.get("external_id") or acc.get("account_code"),
+                    "local_account_id": acc.get("id"),
                     "account_id": row.get("account_id"),
                     "account_currency": row.get("account_currency"),
                     "spend": spend,
@@ -9104,7 +9106,7 @@ def google_insights(
             total_impressions += float(row.get("impressions") or 0)
             total_clicks += float(row.get("clicks") or 0)
             total_conversions += float(row.get("conversions") or 0)
-            campaigns.append(row)
+            campaigns.append({**row, "account_name": acc.get("name") or acc.get("external_id") or acc.get("account_code"), "local_account_id": acc.get("id")})
 
     ctr = (total_clicks / total_impressions) if total_impressions else 0.0
     cpc = (total_spend / total_clicks) if total_clicks else 0.0
@@ -9218,6 +9220,8 @@ def tiktok_insights(
                 {
                     "campaign_id": row.get("campaign_id"),
                     "campaign_name": row.get("campaign_name"),
+                    "account_name": acc.get("name") or acc.get("external_id") or acc.get("account_code"),
+                    "local_account_id": acc.get("id"),
                     "spend": spend,
                     "impressions": impressions,
                     "clicks": clicks,
@@ -9912,16 +9916,21 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
         campaigns = platform_payload.get("campaigns") or []
         error = platform_payload.get("error")
         rows_html = ""
+        grouped = {}
         for row in campaigns:
-            rows_html += f"""
-            <tr>
-              <td>{html.escape(str(row.get('campaign_name') or row.get('campaign_id') or '—'))}</td>
-              <td>{html.escape(_dashboard_export_fmt_money(row.get('spend') or 0, row.get('currency') or row.get('account_currency') or summary.get('currency') or currency_default))}</td>
-              <td>{html.escape(_dashboard_export_fmt_int(row.get('impressions') or 0))}</td>
-              <td>{html.escape(_dashboard_export_fmt_int(row.get('clicks') or 0))}</td>
-              <td>{html.escape(_dashboard_export_fmt_pct(row.get('ctr') or 0))}</td>
-            </tr>
-            """
+            grouped.setdefault(str(row.get("account_name") or "Аккаунт без названия"), []).append(row)
+        for account_name, account_rows in grouped.items():
+            rows_html += f'<tr class="account-heading"><td colspan="5"><b>Аккаунт: {html.escape(account_name)}</b></td></tr>'
+            for row in account_rows:
+                rows_html += f"""
+                <tr>
+                  <td>{html.escape(str(row.get('campaign_name') or row.get('campaign_id') or '—'))}</td>
+                  <td>{html.escape(_dashboard_export_fmt_money(row.get('spend') or 0, row.get('currency') or row.get('account_currency') or summary.get('currency') or currency_default))}</td>
+                  <td>{html.escape(_dashboard_export_fmt_int(row.get('impressions') or 0))}</td>
+                  <td>{html.escape(_dashboard_export_fmt_int(row.get('clicks') or 0))}</td>
+                  <td>{html.escape(_dashboard_export_fmt_pct(row.get('ctr') or 0))}</td>
+                </tr>
+                """
         if not rows_html:
             rows_html = '<tr><td colspan="5">Нет данных</td></tr>'
         return f"""
@@ -10126,6 +10135,11 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
           .report-table th {{
             color: #5b6b86;
             font-size: 11px;
+          }}
+          .account-heading td {{
+            background: #e8f0ff;
+            color: #173b72;
+            font-weight: 700;
           }}
           .segment-row, .trend-row {{
             margin-bottom: 10px;
