@@ -9468,6 +9468,18 @@ def _build_insights_overview_for_user(
         "tiktok": {"spend": 0.0, "impressions": 0.0, "clicks": 0.0},
     }
     daily_by_account: Dict[str, Dict[int, Dict[str, object]]] = {"meta": {}, "google": {}, "tiktok": {}}
+    # Keep every configured account in the report, even when its provider
+    # returns no rows or an API error for the selected period.
+    for platform, accounts in (("meta", meta_accounts), ("google", google_accounts), ("tiktok", tiktok_accounts)):
+        for account in accounts:
+            account_id = int(account.get("id") or 0)
+            if account_id:
+                daily_by_account[platform][account_id] = {
+                    "account_id": account_id,
+                    "name": account.get("name") or account.get("external_id") or account.get("account_code") or f"ID {account_id}",
+                    "platform": platform,
+                    "_daily_map": {},
+                }
     daily_meta: Dict[str, Dict[str, object]] = {}
     daily_google: Dict[str, Dict[str, object]] = {}
     daily_tiktok: Dict[str, Dict[str, object]] = {}
@@ -9900,7 +9912,7 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
         campaigns = platform_payload.get("campaigns") or []
         error = platform_payload.get("error")
         rows_html = ""
-        for row in campaigns[:8]:
+        for row in campaigns:
             rows_html += f"""
             <tr>
               <td>{html.escape(str(row.get('campaign_name') or row.get('campaign_id') or '—'))}</td>
