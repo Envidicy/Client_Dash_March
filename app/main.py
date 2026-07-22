@@ -9898,6 +9898,7 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
     geo_items = payload.get("audience_geo") or []
     device_items = payload.get("audience_device") or []
     account_trend = payload.get("account_trend") or {}
+    account_trends = payload.get("account_trends") or []
     daily_points = payload.get("daily_points") or []
     generated_at = payload.get("generated_at") or datetime.utcnow().strftime("%d.%m.%Y %H:%M")
 
@@ -10028,6 +10029,28 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
         """
     if not trend_rows_html:
         trend_rows_html = '<div class="empty">Нет данных</div>'
+
+    def account_chart(account: Dict[str, object]) -> str:
+        points = account.get("daily") or []
+        if not points:
+            return f'<section class="trend-card"><h3>{html.escape(str(account.get("name") or "Аккаунт"))}</h3><div class="empty">Нет данных</div></section>'
+        width, height, pad = 720, 210, 28
+        series = [("Показы", "impressions", "#2563eb"), ("Клики", "clicks", "#16a34a"), ("Расход", "spend", "#dc2626")]
+        paths = []
+        for label, key, color in series:
+            values = [float(row.get(key) or 0) for row in points]
+            maximum = max(values) if values else 0
+            coords = []
+            for idx, value in enumerate(values):
+                x = pad + (idx * (width - 2 * pad) / max(len(values) - 1, 1))
+                y = height - pad - ((value / maximum) * (height - 2 * pad) if maximum else 0)
+                coords.append(f"{x:.1f},{y:.1f}")
+            points_attr = " ".join(coords)
+            paths.append(f'<polyline points="{points_attr}" fill="none" stroke="{color}" stroke-width="3"/>')
+        legend = " · ".join(f'<span style="color:{color}">● {label}</span>' for label, _, color in series)
+        return f'<section class="trend-card"><h3>{html.escape(str(account.get("name") or "Аккаунт"))}</h3><div class="chart-legend">{legend}</div><svg viewBox="0 0 {width} {height}" role="img" aria-label="Динамика аккаунта">{"".join(paths)}</svg><div class="chart-dates">{html.escape(str(points[0].get("date") or ""))} — {html.escape(str(points[-1].get("date") or ""))}</div></section>'
+
+    account_charts_html = "".join(account_chart(item) for item in account_trends) or '<div class="empty">Нет динамики по аккаунтам</div>'
 
     return f"""
     <!doctype html>
@@ -10161,6 +10184,18 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
             background: #f5f8ff;
             border-bottom: 2px solid #cbd9ef;
           }}
+          .trend-card {{
+            margin-top: 12px;
+            padding: 12px;
+            border: 1px solid #d7e2f4;
+            border-radius: 12px;
+            background: #fbfdff;
+            page-break-inside: avoid;
+          }}
+          .trend-card h3 {{ margin: 0 0 6px; font-size: 14px; }}
+          .trend-card svg {{ width: 100%; height: 210px; display: block; }}
+          .chart-legend {{ font-size: 10px; margin-bottom: 4px; }}
+          .chart-dates {{ color: #64748b; font-size: 10px; }}
           .segment-row, .trend-row {{
             margin-bottom: 10px;
           }}
@@ -10234,12 +10269,8 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
           </section>
 
           <section class="section">
-            <div class="section-head">
-              <h2>Динамика по аккаунту</h2>
-              <div class="section-note">{html.escape(str(account_trend.get('title') or 'Выбранный аккаунт'))}</div>
-            </div>
-            <div class="section-note" style="margin-bottom:10px;">Метрика: {html.escape(trend_metric)}</div>
-            {trend_rows_html}
+            <div class="section-head"><h2>Динамика по всем аккаунтам</h2></div>
+            <div class="account-charts">{account_charts_html}</div>
           </section>
 
           <div class="section-grid">
@@ -10362,6 +10393,14 @@ def dashboard_export_pdf(
     if selected_trend is None and trend_accounts:
         selected_trend = trend_accounts[0]
     trend_points = _dashboard_export_bar_rows(selected_trend.get("daily", []) if isinstance(selected_trend, dict) else [], account_trend_metric)
+    account_trends = []
+    for platform_key in ("meta", "google", "tiktok"):
+        for account in overview.get("daily_by_account", {}).get(platform_key, []) or []:
+            if isinstance(account, dict):
+                account_trends.append({
+                    "name": f"{str(platform_key).upper()} · {account.get('name') or account.get('account_id')}",
+                    "daily": account.get("daily") or [],
+                })
 
     with get_conn() as conn:
         account_count = conn.execute(
@@ -10386,6 +10425,7 @@ def dashboard_export_pdf(
                 "title": selected_trend.get("name") if isinstance(selected_trend, dict) else "Нет данных",
                 "points": trend_points[:20],
             },
+            "account_trends": account_trends,
             "audience_age": _dashboard_export_aggregate_segments(age_rows, audience_age_platform),
             "audience_geo": _dashboard_export_aggregate_segments(
                 geo_rows,
