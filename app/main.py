@@ -6700,9 +6700,8 @@ def _sync_all_meta_balances_once() -> Dict[str, object]:
             for account in accounts:
                 try:
                     live = _meta_fetch_account_billing(str(account.get("external_id")), force_refresh=True)
-                    _finance_refresh_snapshot_for_account(
-                        conn, account=account, refresh_live_billing=True, live_billing_payload=live,
-                    )
+                    snapshot = _finance_refresh_snapshot_for_account(conn, account=account, refresh_live_billing=True, live_billing_payload=live)
+                    _maybe_send_meta_balance_alert(conn, account, snapshot.get("remaining_balance"))
                     synced += 1
                 except Exception as exc:
                     logging.exception("Hourly Meta balance sync failed for account_id=%s", account.get("id"))
@@ -10922,6 +10921,43 @@ def bind_client_telegram_chat(user_id: int, chat_id: str, chat_title: Optional[s
             (user_id, normalized_chat_id, chat_title),
         )
         conn.commit()
+
+
+def _maybe_send_meta_balance_alert(conn, account: Dict[str, object], remaining_balance: object) -> None:
+    balance = float(remaining_balance or 0)
+    warning = float(os.getenv("META_BALANCE_WARNING_THRESHOLD", "300") or 300)
+    critical = float(os.getenv("META_BALANCE_CRITICAL_THRESHOLD", "200") or 200)
+    if critical >= warning:
+        critical, warning = 200.0, 300.0
+    level = 2 if balance <= critical else (1 if balance <= warning else 0)
+    account_id = int(account.get("id") or 0)
+    previous_row = conn.execute("SELECT level FROM meta_balance_alerts WHERE account_id=?", (account_id,)).fetchone()
+    previous = int(previous_row["level"]) if previous_row else 0
+    conn.execute(
+        "INSERT INTO meta_balance_alerts (account_id, level) VALUES (?, ?) ON CONFLICT(account_id) DO UPDATE SET level=excluded.level, updated_at=CURRENT_TIMESTAMP",
+        (account_id, level),
+    )
+    if level <= 0 or level == previous or (previous > 0 and level > previous):
+        return
+    client_chat = conn.execute(
+        "SELECT chat_id FROM client_telegram_chats WHERE user_id=? AND enabled=1",
+        (int(account.get("user_id") or 0),),
+    ).fetchone()
+    if not client_chat:
+        return
+    currency = str(account.get("currency") or "USD").upper()
+    title = "🚨 <b>Критически низкий остаток</b>" if level == 2 else "⚠️ <b>Низкий остаток на Meta-аккаунте</b>"
+    _telegram_api_post("sendMessage", {
+        "chat_id": str(client_chat["chat_id"]),
+        "text": "\n".join([
+            title,
+            f"Аккаунт: <b>{html.escape(str(account.get('name') or account.get('external_id') or account_id))}</b>",
+            f"Остаток: <b>{balance:,.2f} {currency}</b>",
+            "Рекомендуется пополнить рекламный аккаунт.",
+        ]),
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    })
     return {"status": "ok", "user_id": user_id, "chat_id": normalized_chat_id, "chat_title": chat_title}
 
 
@@ -15108,6 +15144,7 @@ def _finalize_automatic_meta_topup(topup_id: int, meta_result: Dict[str, object]
         live_payload["balance"] = live_payload["limit"] - live_payload["spend"]
         try:
             _finance_refresh_snapshot_for_account(conn, account=account, refresh_live_billing=True, live_billing_payload=live_payload)
+            _maybe_send_meta_balance_alert(conn, account, live_payload.get("balance"))
         except Exception:
             logging.exception("Finance snapshot refresh failed after Meta topup %s", topup_id)
         conn.commit()

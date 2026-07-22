@@ -589,6 +589,17 @@ def apply_schema():
             );
             """,
         )
+        _ensure_table(
+            conn,
+            "meta_balance_alerts",
+            """
+            CREATE TABLE IF NOT EXISTS meta_balance_alerts (
+              account_id INTEGER PRIMARY KEY REFERENCES ad_accounts(id) ON DELETE CASCADE,
+              level INTEGER NOT NULL DEFAULT 0,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+        )
         _ensure_column(conn, "client_telegram_chats", "message_thread_id", "INTEGER")
         _ensure_column(conn, "client_telegram_chats", "bound_by_telegram_user_id", "TEXT")
         _ensure_column(conn, "client_telegram_chats", "updated_at", "TEXT")
