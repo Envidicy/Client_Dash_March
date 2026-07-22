@@ -555,7 +555,13 @@ def _telegram_send_plain(chat_id: object, text: str) -> None:
 
 
 def _bind_client_telegram_group(payload: Dict[str, object]) -> Dict[str, object]:
-    message = payload.get("message") if isinstance(payload, dict) else None
+    message = None
+    message_kind = "message"
+    if isinstance(payload, dict):
+        message = payload.get("message")
+        if not isinstance(message, dict):
+            message = payload.get("channel_post")
+            message_kind = "channel_post"
     if not isinstance(message, dict):
         return {"status": "ignored"}
     text = str(message.get("text") or "").strip()
@@ -566,14 +572,15 @@ def _bind_client_telegram_group(payload: Dict[str, object]) -> Dict[str, object]
     sender = message.get("from") if isinstance(message.get("from"), dict) else {}
     chat_id = chat.get("id")
     sender_id = sender.get("id")
-    if chat.get("type") not in {"group", "supergroup"} or chat_id is None:
-        _telegram_send_plain(chat_id, "Команда /bind работает только в клиентской группе.")
-        return {"status": "error", "detail": "Group chat required"}
-    membership = _telegram_api_post("getChatMember", {"chat_id": chat_id, "user_id": sender_id}) if sender_id else None
-    member_status = str((((membership or {}).get("result") or {}).get("status") or ""))
-    if member_status not in {"administrator", "creator"}:
-        _telegram_send_plain(chat_id, "Привязать группу может только её администратор.")
-        return {"status": "error", "detail": "Group administrator required"}
+    if chat_id is None or chat.get("type") not in {"group", "supergroup", "channel"}:
+        _telegram_send_plain(chat_id, "Команда /bind работает только в клиентской группе или канале.")
+        return {"status": "error", "detail": "Group or channel chat required"}
+    if message_kind != "channel_post":
+        membership = _telegram_api_post("getChatMember", {"chat_id": chat_id, "user_id": sender_id}) if sender_id else None
+        member_status = str((((membership or {}).get("result") or {}).get("status") or ""))
+        if member_status not in {"administrator", "creator"}:
+            _telegram_send_plain(chat_id, "Привязать группу может только её администратор.")
+            return {"status": "error", "detail": "Group administrator required"}
     if not get_conn:
         _telegram_send_plain(chat_id, "База данных временно недоступна.")
         return {"status": "error", "detail": "DB not initialized"}
@@ -10953,7 +10960,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Op
     if expected_secret and not hmac.compare_digest(str(x_telegram_bot_api_secret_token or ""), expected_secret):
         raise HTTPException(status_code=403, detail="Invalid Telegram webhook secret")
     payload = await request.json()
-    if isinstance(payload, dict) and isinstance(payload.get("message"), dict):
+    if isinstance(payload, dict) and (isinstance(payload.get("message"), dict) or isinstance(payload.get("channel_post"), dict)):
         bind_result = _bind_client_telegram_group(payload)
         if bind_result.get("status") != "ignored":
             return bind_result
