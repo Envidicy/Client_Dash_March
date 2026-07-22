@@ -10194,10 +10194,10 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
           .trend-card h3 {{ margin: 0 0 6px; font-size: 14px; }}
           .metric-bars {{ margin-top: 10px; }}
           .metric-label {{ font-size: 10px; font-weight: 700; margin-bottom: 3px; }}
-          .bars-row {{ display: flex; align-items: flex-end; gap: 5px; height: 98px; border-bottom: 1px solid #cbd5e1; }}
+          .bars-row {{ display: flex; align-items: flex-end; gap: 7px; height: 154px; border-bottom: 1px solid #cbd5e1; padding: 0 4px; }}
           .bar-item {{ flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }}
-          .bar-value {{ font-size: 7px; color: #334155; white-space: nowrap; margin-bottom: 2px; transform: rotate(-45deg); transform-origin: bottom right; }}
-          .bar-track {{ width: 70%; height: 68px; display: flex; align-items: flex-end; }}
+          .bar-value {{ height: 28px; display: flex; align-items: flex-end; font-size: 8px; color: #334155; white-space: nowrap; margin-bottom: 3px; }}
+          .bar-track {{ width: 82%; height: 108px; display: flex; align-items: flex-end; }}
           .bar-track span {{ display: block; width: 100%; min-height: 1px; border-radius: 3px 3px 0 0; }}
           .bar-date {{ font-size: 7px; color: #64748b; margin-top: 4px; }}
           .segment-row, .trend-row {{
