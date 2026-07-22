@@ -9013,8 +9013,7 @@ def meta_insights(
             total_clicks += clicks
             total_reach += reach
             currency = currency or row.get("account_currency")
-            raw_ctr = float(row.get("ctr") or 0)
-            ctr = raw_ctr / 100 if raw_ctr > 1 else raw_ctr
+            ctr = (clicks / impressions) if impressions else 0.0
             campaigns.append(
                 {
                     "campaign_id": row.get("campaign_id"),
@@ -9106,7 +9105,11 @@ def google_insights(
             total_impressions += float(row.get("impressions") or 0)
             total_clicks += float(row.get("clicks") or 0)
             total_conversions += float(row.get("conversions") or 0)
-            campaigns.append({**row, "account_name": acc.get("name") or acc.get("external_id") or acc.get("account_code"), "local_account_id": acc.get("id")})
+            campaign_row = dict(row)
+            impressions = float(campaign_row.get("impressions") or 0)
+            clicks = float(campaign_row.get("clicks") or 0)
+            campaign_row["ctr"] = (clicks / impressions) if impressions else 0.0
+            campaigns.append({**campaign_row, "account_name": acc.get("name") or acc.get("external_id") or acc.get("account_code"), "local_account_id": acc.get("id")})
 
     ctr = (total_clicks / total_impressions) if total_impressions else 0.0
     cpc = (total_spend / total_clicks) if total_clicks else 0.0
@@ -9225,7 +9228,7 @@ def tiktok_insights(
                     "spend": spend,
                     "impressions": impressions,
                     "clicks": clicks,
-                    "ctr": _to_float(row.get("ctr")),
+                    "ctr": (_to_float(row.get("clicks")) / _to_float(row.get("impressions"))) if _to_float(row.get("impressions")) else 0.0,
                     "cpc": _to_float(row.get("cpc")),
                     "cpm": _to_float(row.get("cpm")),
                 }
@@ -10321,6 +10324,10 @@ def dashboard_export_pdf(
             date_key = str(row.get("date") or "")
             if not date_key:
                 continue
+            # Keep only actual activity days and normalize timestamp-like keys.
+            if not any(float(row.get(key) or 0) != 0 for key in ("spend", "impressions", "clicks")):
+                continue
+            date_key = date_key[:10]
             bucket = daily_map.setdefault(date_key, {"spend": 0.0, "impressions": 0.0, "clicks": 0.0})
             bucket["spend"] += float(row.get("spend") or 0)
             bucket["impressions"] += float(row.get("impressions") or 0)
