@@ -6641,6 +6641,8 @@ def _finance_refresh_snapshot_for_account(
 
 _HOURLY_META_SYNC_THREAD: Optional[threading.Thread] = None
 _HOURLY_META_SYNC_STOP = threading.Event()
+_WEEKLY_REPORT_THREAD: Optional[threading.Thread] = None
+_WEEKLY_REPORT_STOP = threading.Event()
 
 
 def _acquire_background_job_lease(job_key: str, lease_seconds: int) -> Optional[str]:
@@ -6730,21 +6732,87 @@ def _hourly_meta_balance_sync_loop() -> None:
             return
 
 
+def _run_weekly_client_reports_once() -> Dict[str, object]:
+    """Generate one dashboard PDF per client and send its temporary R2 link."""
+    if not _r2_enabled():
+        return {"status": "skipped", "reason": "R2 is not configured"}
+    base_url = (os.getenv("APP_PUBLIC_URL") or os.getenv("FRONTEND_PUBLIC_URL") or "").rstrip("/")
+    if not base_url:
+        return {"status": "skipped", "reason": "APP_PUBLIC_URL is not configured"}
+    today = datetime.now(timezone.utc).date()
+    monday = today - timedelta(days=today.weekday() + 7)
+    sunday = monday + timedelta(days=6)
+    date_from, date_to = monday.isoformat(), sunday.isoformat()
+    sent, failed = 0, 0
+    with get_conn() as conn:
+        clients = conn.execute(
+            "SELECT id, email FROM users WHERE COALESCE(is_client, 0)=1 ORDER BY id"
+        ).fetchall()
+        for client in clients:
+            try:
+                user_id, email = int(client["id"]), str(client["email"])
+                token = _issue_user_token(conn, user_id, email)
+                conn.commit()
+                response = httpx.get(
+                    f"{base_url}/dashboard/export/pdf",
+                    params={"date_from": date_from, "date_to": date_to},
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=180,
+                )
+                if response.status_code >= 400:
+                    raise RuntimeError(f"PDF export failed: HTTP {response.status_code}")
+                key = f"weekly_reports/{user_id}/weekly_report_{date_from}_{date_to}.pdf"
+                _r2_upload_bytes(key, response.content, "application/pdf")
+                url = _r2_presigned_url(key, expires=7 * 24 * 3600)
+                chat = conn.execute(
+                    "SELECT chat_id FROM client_telegram_chats WHERE user_id=? AND enabled=1", (user_id,)
+                ).fetchone()
+                if chat and url:
+                    _telegram_api_post("sendMessage", {
+                        "chat_id": str(chat["chat_id"]),
+                        "text": f"📊 <b>Еженедельный отчёт готов</b>\nПериод: {date_from} — {date_to}\n<a href=\"{html.escape(url, quote=True)}\">Открыть PDF-отчёт</a>",
+                        "parse_mode": "HTML", "disable_web_page_preview": True,
+                    })
+                    sent += 1
+            except Exception:
+                failed += 1
+                logging.exception("Weekly client report failed for user_id=%s", client["id"])
+    return {"status": "ok", "sent": sent, "failed": failed, "date_from": date_from, "date_to": date_to}
+
+
+def _weekly_client_report_loop() -> None:
+    if not _env_flag("WEEKLY_CLIENT_REPORTS_ENABLED", True):
+        return
+    target_hour = max(0, min(23, int(os.getenv("WEEKLY_CLIENT_REPORTS_UTC_HOUR", "3") or 3)))
+    while not _WEEKLY_REPORT_STOP.wait(60):
+        now = datetime.now(timezone.utc)
+        if now.weekday() == 0 and now.hour == target_hour and now.minute == 0:
+            _run_weekly_client_reports_once()
+            _WEEKLY_REPORT_STOP.wait(120)
+
+
+@app.post("/admin/reports/weekly/run")
+def run_weekly_client_reports(admin_user=Depends(get_admin_user)):
+    return _run_weekly_client_reports_once()
+
+
 @app.on_event("startup")
 def _start_hourly_meta_balance_sync() -> None:
     global _HOURLY_META_SYNC_THREAD
-    if not _env_flag("META_BALANCE_SYNC_ENABLED", True):
-        return
-    if _HOURLY_META_SYNC_THREAD and _HOURLY_META_SYNC_THREAD.is_alive():
-        return
-    _HOURLY_META_SYNC_STOP.clear()
-    _HOURLY_META_SYNC_THREAD = threading.Thread(target=_hourly_meta_balance_sync_loop, name="meta-balance-sync", daemon=True)
-    _HOURLY_META_SYNC_THREAD.start()
+    if _env_flag("META_BALANCE_SYNC_ENABLED", True) and not (_HOURLY_META_SYNC_THREAD and _HOURLY_META_SYNC_THREAD.is_alive()):
+        _HOURLY_META_SYNC_STOP.clear()
+        _HOURLY_META_SYNC_THREAD = threading.Thread(target=_hourly_meta_balance_sync_loop, name="meta-balance-sync", daemon=True)
+        _HOURLY_META_SYNC_THREAD.start()
+    global _WEEKLY_REPORT_THREAD
+    _WEEKLY_REPORT_STOP.clear()
+    _WEEKLY_REPORT_THREAD = threading.Thread(target=_weekly_client_report_loop, name="weekly-client-reports", daemon=True)
+    _WEEKLY_REPORT_THREAD.start()
 
 
 @app.on_event("shutdown")
 def _stop_hourly_meta_balance_sync() -> None:
     _HOURLY_META_SYNC_STOP.set()
+    _WEEKLY_REPORT_STOP.set()
 
 
 def _resolve_topup_account_amount(row: Dict[str, object], rates_data: Optional[Dict[str, object]] = None) -> Optional[float]:
