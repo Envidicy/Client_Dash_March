@@ -10034,21 +10034,20 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
         points = account.get("daily") or []
         if not points:
             return f'<section class="trend-card"><h3>{html.escape(str(account.get("name") or "Аккаунт"))}</h3><div class="empty">Нет данных</div></section>'
-        width, height, pad = 720, 210, 28
-        series = [("Показы", "impressions", "#2563eb"), ("Клики", "clicks", "#16a34a"), ("Расход", "spend", "#dc2626")]
-        paths = []
+        series = [("Показы", "impressions", "#2563eb"), ("Клики", "clicks", "#16a34a"), ("Расход", "spend", "#ea580c")]
+        metric_rows = []
         for label, key, color in series:
             values = [float(row.get(key) or 0) for row in points]
             maximum = max(values) if values else 0
-            coords = []
-            for idx, value in enumerate(values):
-                x = pad + (idx * (width - 2 * pad) / max(len(values) - 1, 1))
-                y = height - pad - ((value / maximum) * (height - 2 * pad) if maximum else 0)
-                coords.append(f"{x:.1f},{y:.1f}")
-            points_attr = " ".join(coords)
-            paths.append(f'<polyline points="{points_attr}" fill="none" stroke="{color}" stroke-width="3"/>')
-        legend = " · ".join(f'<span style="color:{color}">● {label}</span>' for label, _, color in series)
-        return f'<section class="trend-card"><h3>{html.escape(str(account.get("name") or "Аккаунт"))}</h3><div class="chart-legend">{legend}</div><svg viewBox="0 0 {width} {height}" role="img" aria-label="Динамика аккаунта">{"".join(paths)}</svg><div class="chart-dates">{html.escape(str(points[0].get("date") or ""))} — {html.escape(str(points[-1].get("date") or ""))}</div></section>'
+            bars = []
+            for row, value in zip(points, values):
+                height = (value / maximum * 100) if maximum else 0
+                value_text = _dashboard_export_fmt_money(value, "USD") if key == "spend" else _dashboard_export_fmt_int(value)
+                bars.append(
+                    f'<div class="bar-item"><div class="bar-value">{html.escape(value_text)}</div><div class="bar-track"><span style="height:{height:.2f}%;background:{color}"></span></div><div class="bar-date">{html.escape(str(row.get("date") or "")[5:])}</div></div>'
+                )
+            metric_rows.append(f'<div class="metric-bars"><div class="metric-label" style="color:{color}">{label}</div><div class="bars-row">{"".join(bars)}</div></div>')
+        return f'<section class="trend-card"><h3>{html.escape(str(account.get("name") or "Аккаунт"))}</h3>{"".join(metric_rows)}</section>'
 
     account_charts_html = "".join(account_chart(item) for item in account_trends) or '<div class="empty">Нет динамики по аккаунтам</div>'
 
@@ -10193,9 +10192,14 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
             page-break-inside: avoid;
           }}
           .trend-card h3 {{ margin: 0 0 6px; font-size: 14px; }}
-          .trend-card svg {{ width: 100%; height: 210px; display: block; }}
-          .chart-legend {{ font-size: 10px; margin-bottom: 4px; }}
-          .chart-dates {{ color: #64748b; font-size: 10px; }}
+          .metric-bars {{ margin-top: 10px; }}
+          .metric-label {{ font-size: 10px; font-weight: 700; margin-bottom: 3px; }}
+          .bars-row {{ display: flex; align-items: flex-end; gap: 5px; height: 98px; border-bottom: 1px solid #cbd5e1; }}
+          .bar-item {{ flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }}
+          .bar-value {{ font-size: 7px; color: #334155; white-space: nowrap; margin-bottom: 2px; transform: rotate(-45deg); transform-origin: bottom right; }}
+          .bar-track {{ width: 70%; height: 68px; display: flex; align-items: flex-end; }}
+          .bar-track span {{ display: block; width: 100%; min-height: 1px; border-radius: 3px 3px 0 0; }}
+          .bar-date {{ font-size: 7px; color: #64748b; margin-top: 4px; }}
           .segment-row, .trend-row {{
             margin-bottom: 10px;
           }}
