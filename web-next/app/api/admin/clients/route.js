@@ -49,3 +49,13 @@ export async function GET(request) {
   const items = (Array.isArray(data) ? data : []).map(normalizeClient)
   return NextResponse.json({ items, count: items.length })
 }
+
+export async function POST(request) {
+  const auth = authHeader(request)
+  if (!auth) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
+  const userId = new URL(request.url).searchParams.get('telegram_bind_user_id')
+  if (!userId) return NextResponse.json({ detail: 'Client id is required' }, { status: 400 })
+  const upstreamRes = await upstreamFetch(`/admin/clients/${userId}/telegram-bind-token`, auth, { method: 'POST' })
+  const data = await upstreamRes.json().catch(() => ({}))
+  return NextResponse.json(data, { status: upstreamRes.status })
+}

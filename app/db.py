@@ -560,6 +560,40 @@ def apply_schema():
         )
         _ensure_table(
             conn,
+            "client_telegram_chats",
+            """
+            CREATE TABLE IF NOT EXISTS client_telegram_chats (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+              chat_id TEXT NOT NULL UNIQUE,
+              chat_title TEXT,
+              message_thread_id INTEGER,
+              bound_by_telegram_user_id TEXT,
+              enabled INTEGER DEFAULT 1,
+              bound_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
+            "telegram_bind_tokens",
+            """
+            CREATE TABLE IF NOT EXISTS telegram_bind_tokens (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              token_hash TEXT NOT NULL UNIQUE,
+              expires_at INTEGER NOT NULL,
+              used_at TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+        )
+        _ensure_column(conn, "client_telegram_chats", "message_thread_id", "INTEGER")
+        _ensure_column(conn, "client_telegram_chats", "bound_by_telegram_user_id", "TEXT")
+        _ensure_column(conn, "client_telegram_chats", "updated_at", "TEXT")
+        _ensure_table(
+            conn,
             "user_documents",
             """
             CREATE TABLE IF NOT EXISTS user_documents (

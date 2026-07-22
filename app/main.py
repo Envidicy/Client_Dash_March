@@ -512,6 +512,130 @@ def _send_telegram_alert(text: str, channel: str = "ops", reply_markup: Optional
     except Exception:
         # Telegram notifications should not break business flow.
         pass
+
+
+def _send_client_telegram_alert(user_id: int, text: str) -> bool:
+    """Send a notification to the Telegram group bound to a client."""
+    if not get_conn or not _telegram_bot_token():
+        return False
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT chat_id, message_thread_id
+                FROM client_telegram_chats
+                WHERE user_id=? AND enabled=1
+                """,
+                (user_id,),
+            ).fetchone()
+        if not row:
+            return False
+        payload: Dict[str, object] = {
+            "chat_id": row["chat_id"],
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if row["message_thread_id"] is not None:
+            payload["message_thread_id"] = int(row["message_thread_id"])
+        result = _telegram_api_post("sendMessage", payload)
+        return bool(result and result.get("ok"))
+    except Exception:
+        logging.exception("Failed to send Telegram client notification for user_id=%s", user_id)
+        return False
+
+
+def _telegram_send_plain(chat_id: object, text: str) -> None:
+    if chat_id is None:
+        return
+    _telegram_api_post(
+        "sendMessage",
+        {"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+    )
+
+
+def _bind_client_telegram_group(payload: Dict[str, object]) -> Dict[str, object]:
+    message = payload.get("message") if isinstance(payload, dict) else None
+    if not isinstance(message, dict):
+        return {"status": "ignored"}
+    text = str(message.get("text") or "").strip()
+    match = re.fullmatch(r"/bind(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]+)", text)
+    if not match:
+        return {"status": "ignored"}
+    chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+    sender = message.get("from") if isinstance(message.get("from"), dict) else {}
+    chat_id = chat.get("id")
+    sender_id = sender.get("id")
+    if chat.get("type") not in {"group", "supergroup"} or chat_id is None:
+        _telegram_send_plain(chat_id, "Команда /bind работает только в клиентской группе.")
+        return {"status": "error", "detail": "Group chat required"}
+    membership = _telegram_api_post("getChatMember", {"chat_id": chat_id, "user_id": sender_id}) if sender_id else None
+    member_status = str((((membership or {}).get("result") or {}).get("status") or ""))
+    if member_status not in {"administrator", "creator"}:
+        _telegram_send_plain(chat_id, "Привязать группу может только её администратор.")
+        return {"status": "error", "detail": "Group administrator required"}
+    if not get_conn:
+        _telegram_send_plain(chat_id, "База данных временно недоступна.")
+        return {"status": "error", "detail": "DB not initialized"}
+    token_hash = hashlib.sha256(match.group(1).encode("utf-8")).hexdigest()
+    now = int(time.time())
+    try:
+        with get_conn() as conn:
+            token_row = conn.execute(
+                """
+                SELECT t.user_id, u.email
+                FROM telegram_bind_tokens t
+                JOIN users u ON u.id=t.user_id
+                WHERE t.token_hash=? AND t.used_at IS NULL AND t.expires_at>=?
+                """,
+                (token_hash, now),
+            ).fetchone()
+            if not token_row:
+                _telegram_send_plain(chat_id, "Код привязки недействителен или уже истёк.")
+                return {"status": "error", "detail": "Invalid or expired bind token"}
+            user_id = int(token_row["user_id"])
+            collision = conn.execute(
+                "SELECT user_id FROM client_telegram_chats WHERE chat_id=?",
+                (str(chat_id),),
+            ).fetchone()
+            if collision and int(collision["user_id"]) != user_id:
+                _telegram_send_plain(chat_id, "Эта группа уже привязана к другому клиенту.")
+                return {"status": "error", "detail": "Chat is already bound"}
+            existing = conn.execute(
+                "SELECT user_id FROM client_telegram_chats WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+            values = (str(chat_id), str(chat.get("title") or ""), sender_id, user_id)
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE client_telegram_chats
+                    SET chat_id=?, chat_title=?, bound_by_telegram_user_id=?, enabled=1,
+                        bound_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+                    WHERE user_id=?
+                    """,
+                    values,
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO client_telegram_chats
+                      (chat_id, chat_title, bound_by_telegram_user_id, enabled, user_id)
+                    VALUES (?, ?, ?, 1, ?)
+                    """,
+                    values,
+                )
+            conn.execute(
+                "UPDATE telegram_bind_tokens SET used_at=CURRENT_TIMESTAMP WHERE token_hash=?",
+                (token_hash,),
+            )
+            conn.commit()
+        _telegram_send_plain(chat_id, f"✅ Группа привязана к клиенту {token_row['email']}. Уведомления включены.")
+        return {"status": "bound", "user_id": user_id, "chat_id": str(chat_id)}
+    except Exception:
+        logging.exception("Failed to bind Telegram client group")
+        _telegram_send_plain(chat_id, "Не удалось привязать группу. Попробуйте ещё раз.")
+        return {"status": "error", "detail": "Bind failed"}
 Goal = Literal["reach", "traffic", "leads", "conversions"]
 PlatformKey = Literal[
     "meta",
@@ -10768,12 +10892,71 @@ def _credit_wallet_topup_request(conn, request_id: int, credited_by: Optional[st
     }
 
 
+@app.put("/admin/clients/{user_id}/telegram-chat")
+def bind_client_telegram_chat(user_id: int, chat_id: str, chat_title: Optional[str] = None, admin_user=Depends(get_admin_user)):
+    """Bind one private Telegram group to a client account."""
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    normalized_chat_id = str(chat_id or "").strip()
+    if not normalized_chat_id:
+        raise HTTPException(status_code=400, detail="chat_id is required")
+    with get_conn() as conn:
+        user = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="Client not found")
+        conn.execute(
+            """
+            INSERT INTO client_telegram_chats (user_id, chat_id, chat_title, enabled)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(user_id) DO UPDATE SET
+              chat_id=excluded.chat_id, chat_title=excluded.chat_title,
+              enabled=1, bound_at=CURRENT_TIMESTAMP
+            """,
+            (user_id, normalized_chat_id, chat_title),
+        )
+        conn.commit()
+    return {"status": "ok", "user_id": user_id, "chat_id": normalized_chat_id, "chat_title": chat_title}
+
+
+@app.delete("/admin/clients/{user_id}/telegram-chat")
+def unbind_client_telegram_chat(user_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    with get_conn() as conn:
+        conn.execute("DELETE FROM client_telegram_chats WHERE user_id=?", (user_id,))
+        conn.commit()
+    return {"status": "ok", "user_id": user_id}
+
+
+@app.post("/admin/clients/{user_id}/telegram-bind-token")
+def create_client_telegram_bind_token(user_id: int, admin_user=Depends(get_admin_user)):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    raw_token = secrets.token_urlsafe(18)
+    expires_at = int(time.time()) + 86400
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Client not found")
+        conn.execute("DELETE FROM telegram_bind_tokens WHERE user_id=? AND used_at IS NULL", (user_id,))
+        conn.execute(
+            "INSERT INTO telegram_bind_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
+            (user_id, token_hash, expires_at),
+        )
+        conn.commit()
+    return {"status": "ok", "user_id": user_id, "token": raw_token, "expires_at": expires_at}
+
+
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Optional[str] = Header(None)):
     expected_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
     if expected_secret and not hmac.compare_digest(str(x_telegram_bot_api_secret_token or ""), expected_secret):
         raise HTTPException(status_code=403, detail="Invalid Telegram webhook secret")
     payload = await request.json()
+    if isinstance(payload, dict) and isinstance(payload.get("message"), dict):
+        bind_result = _bind_client_telegram_group(payload)
+        if bind_result.get("status") != "ignored":
+            return bind_result
     callback = payload.get("callback_query") if isinstance(payload, dict) else None
     if not isinstance(callback, dict):
         return {"status": "ignored"}
@@ -10808,6 +10991,16 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Op
         else:
             text = f"Кошелек пополнен: {float(result.get('amount') or 0):.2f} {result.get('currency') or 'KZT'}"
         _telegram_api_post("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
+
+    if result.get("status") != "already_completed":
+        _send_client_telegram_alert(
+            int(result.get("user_id") or 0),
+            "\n".join([
+                "✅ <b>Кошелёк пополнен</b>",
+                f"Зачислено: <b>{float(result.get('amount') or 0):,.2f} {result.get('currency') or 'KZT'}</b>",
+                f"Текущий баланс: <b>{float(result.get('balance') or 0):,.2f} {result.get('currency') or 'KZT'}</b>",
+            ]),
+        )
 
     message = callback.get("message") if isinstance(callback.get("message"), dict) else {}
     chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
@@ -14932,13 +15125,15 @@ def _process_automatic_meta_topup(topup_id: int) -> Dict[str, object]:
         )
         _finalize_automatic_meta_topup(topup_id, result)
         factor = _meta_minor_factor(str(result.get("currency") or "USD"))
-        _send_telegram_alert("\n".join([
+        success_text = "\n".join([
             "✅ <b>Meta лимит обновлён</b>",
             f"Пополнение: <code>#{topup_id}</code>",
             f"Аккаунт: <b>{html.escape(str(row.get('account_name') or row.get('external_id')))}</b>",
             f"Новый лимит: <b>{float(result['confirmed_minor']) / factor:,.2f} {result.get('currency')}</b>",
             f"Пополнение: <b>+{amount_account:,.2f} {result.get('currency')}</b>",
-        ]))
+        ])
+        _send_telegram_alert(success_text)
+        _send_client_telegram_alert(int(row.get("user_id") or 0), success_text)
         return result
     except Exception as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)

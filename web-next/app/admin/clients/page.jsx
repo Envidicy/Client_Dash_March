@@ -39,6 +39,7 @@ export default function AdminClientsPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [selected, setSelected] = useState(null)
   const [modalStatus, setModalStatus] = useState('')
+  const [telegramBindToken, setTelegramBindToken] = useState('')
 
   const [clientRequests, setClientRequests] = useState([])
   const [clientTopups, setClientTopups] = useState([])
@@ -142,6 +143,20 @@ export default function AdminClientsPage() {
         ])
       )
     )
+  }
+
+  async function generateTelegramBindToken() {
+    if (!selected) return
+    try {
+      setModalStatus('Generating Telegram binding code...')
+      const res = await adminRouteFetch(`/api/admin/clients?telegram_bind_user_id=${selected.id}`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || 'Failed to generate Telegram code.')
+      setTelegramBindToken(data.token || '')
+      setModalStatus('Add the bot to the client group and send /bind followed by this code.')
+    } catch (e) {
+      setModalStatus(e?.message || 'Failed to generate Telegram code.')
+    }
   }
 
   async function uploadClientDocument() {
@@ -689,6 +704,15 @@ export default function AdminClientsPage() {
                         <div className="details-row"><span className="details-label">Email</span><span>{clientProfile?.email || '—'}</span></div>
                         <div className="details-row"><span className="details-label">Phone</span><span>{clientProfile?.whatsapp_phone || '—'}</span></div>
                         <div className="details-row"><span className="details-label">Telegram</span><span>{clientProfile?.telegram_handle || '—'}</span></div>
+                        <div className="panel-actions" style={{ marginTop: 12 }}>
+                          <button className="btn primary" type="button" onClick={generateTelegramBindToken}>Connect Telegram group</button>
+                        </div>
+                        {telegramBindToken ? (
+                          <div className="details-row" style={{ marginTop: 10 }}>
+                            <span className="details-label">Bind code</span>
+                            <code>{telegramBindToken}</code>
+                          </div>
+                        ) : null}
                       </div>
                       <div className="details-section">
                         <h4>Profile data</h4>
