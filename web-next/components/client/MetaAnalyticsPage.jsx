@@ -31,28 +31,29 @@ export default function MetaAnalyticsPage() {
   const [dateFrom, setDateFrom] = useState(initial.from)
   const [dateTo, setDateTo] = useState(initial.to)
   const [accountId, setAccountId] = useState('')
+  const [platform, setPlatform] = useState('meta')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  async function load(nextAccountId = accountId) {
+  async function load(nextAccountId = accountId, nextPlatform = platform) {
     const token = getAuthToken()
     if (!token) return router.replace('/login')
     setLoading(true)
     setError('')
     try {
-      const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
+      const params = new URLSearchParams({ platform: nextPlatform, date_from: dateFrom, date_to: dateTo })
       if (nextAccountId) params.set('account_id', nextAccountId)
-      const response = await fetch(`/api/client/meta-analytics?${params}`, {
+      const response = await fetch(`/api/client/analytics?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store',
       })
       const payload = await response.json().catch(() => ({}))
       if (response.status === 401) return router.replace('/login')
-      if (!response.ok) throw new Error(payload?.detail || 'Не удалось загрузить аналитику Meta')
+      if (!response.ok) throw new Error(payload?.detail || 'Не удалось загрузить аналитику')
       setData(payload)
     } catch (reason) {
-      setError(reason?.message || 'Не удалось загрузить аналитику Meta')
+      setError(reason?.message || 'Не удалось загрузить аналитику')
     } finally {
       setLoading(false)
     }
@@ -63,6 +64,7 @@ export default function MetaAnalyticsPage() {
   const summary = data?.summary || {}
   const daily = Array.isArray(data?.daily) ? data.daily : []
   const maxSpend = Math.max(...daily.map((row) => Number(row.spend || 0)), 1)
+  const platformLabel = platform === 'meta' ? 'Meta Ads' : platform === 'google' ? 'Google Ads' : 'TikTok Ads'
   const cards = [
     ['Расход', money(summary.spend, data?.currency || 'USD')],
     ['Показы', number(summary.impressions)],
@@ -73,8 +75,13 @@ export default function MetaAnalyticsPage() {
   ]
 
   return (
-    <ClientShell activeNav="meta-analytics" pageTitle="Meta Analytics" pageSubtitle="Кампании и рекламные показатели из подключённого аккаунта Meta." statusAlerts={loading ? 'Загрузка…' : 'Meta Ads'}>
+    <ClientShell activeNav="analytics" pageTitle="Аналитика" pageSubtitle="Единый обзор кампаний и рекламных показателей по всем площадкам." statusAlerts={loading ? 'Загрузка…' : platformLabel}>
       <section className={styles.metaToolbar}>
+        <select value={platform} onChange={(event) => { const value = event.target.value; setPlatform(value); setAccountId(''); load('', value) }}>
+          <option value="meta">Meta Ads</option>
+          <option value="google">Google Ads</option>
+          <option value="tiktok">TikTok Ads</option>
+        </select>
         <select value={accountId} onChange={(event) => { setAccountId(event.target.value); load(event.target.value) }}>
           <option value="">Все рекламные аккаунты</option>
           {(data?.accounts || []).map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
@@ -86,9 +93,9 @@ export default function MetaAnalyticsPage() {
 
       {error ? (
         <section className={styles.metaConnectState}>
-          <h3>Подключите Meta Ads</h3>
+          <h3>{platform === 'meta' ? 'Подключите Meta Ads' : `Нет данных ${platformLabel}`}</h3>
           <p>{error}</p>
-          <a href="/api/auth/meta/start">Подключить Meta</a>
+          {platform === 'meta' ? <a href="/api/auth/meta/start">Подключить Meta</a> : null}
         </section>
       ) : null}
 

@@ -1,5 +1,5 @@
-import MetaAnalyticsPage from '../../components/client/MetaAnalyticsPage'
+import { redirect } from 'next/navigation'
 
 export default function MetaAnalyticsRoute() {
-  return <MetaAnalyticsPage />
+  redirect('/analytics')
 }

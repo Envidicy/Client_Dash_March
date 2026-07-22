@@ -16,7 +16,7 @@ import GenerateInvoiceModal from './GenerateInvoiceModal'
 const BASE_NAV_ITEMS = [
   { key: 'overview', href: '/dashboard', label: 'Overview', labelRu: 'Обзор', icon: 'O' },
   { key: 'performance', href: '/performance', label: 'Performance', labelRu: 'Перфоманс', icon: 'P' },
-  { key: 'meta-analytics', href: '/meta-analytics', label: 'Meta Analytics', labelRu: 'Meta Аналитика', icon: 'M' },
+  { key: 'analytics', href: '/analytics', label: 'Analytics', labelRu: 'Аналитика', icon: 'A' },
   { key: 'finance', href: '/funds', label: 'Finance', labelRu: 'Финансы', icon: 'F' },
 ]
 

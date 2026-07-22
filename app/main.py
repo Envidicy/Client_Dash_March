@@ -9339,6 +9339,95 @@ def meta_dashboard(
     }
 
 
+@app.get("/analytics/dashboard")
+def analytics_dashboard(
+    platform: Literal["meta", "google", "tiktok"],
+    date_from: str,
+    date_to: str,
+    account_id: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    if platform == "meta":
+        return meta_dashboard(date_from, date_to, account_id, current_user)
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, external_id, account_code, name, currency FROM ad_accounts WHERE user_id=? AND platform=? ORDER BY name, id",
+            (int(current_user["id"]), platform),
+        ).fetchall()
+    accounts = [
+        {
+            "id": str(row["id"]),
+            "external_id": row["external_id"] or row["account_code"],
+            "name": row["name"] or f"{platform.title()} {row['id']}",
+            "currency": row["currency"] or "USD",
+        }
+        for row in (dict(item) for item in rows)
+    ]
+    selected_id: Optional[int] = None
+    if account_id:
+        try:
+            selected_id = int(account_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid advertising account")
+        if not any(int(row["id"]) == selected_id for row in accounts):
+            raise HTTPException(status_code=404, detail="Advertising account not found")
+
+    if platform == "google":
+        source = google_insights(date_from, date_to, selected_id, current_user)
+    else:
+        source = tiktok_insights(date_from, date_to, selected_id, current_user)
+
+    overview = _build_insights_overview_for_user(
+        current_user=current_user,
+        date_from=date_from,
+        date_to=date_to,
+        google_account_id=selected_id if platform == "google" else None,
+        tiktok_account_id=selected_id if platform == "tiktok" else None,
+    )
+    source_summary = dict(source.get("summary") or {})
+    raw_ctr = float(source_summary.get("ctr") or 0)
+    source_summary["ctr"] = raw_ctr * 100 if 0 < raw_ctr <= 1 else raw_ctr
+    source_summary.setdefault("reach", 0)
+    source_summary.setdefault("conversions", 0)
+    currency = source_summary.get("currency") or (accounts[0]["currency"] if len(accounts) == 1 else "USD")
+    account_name_by_external = {
+        str(row.get("external_id") or "").replace("-", ""): row["name"]
+        for row in accounts
+        if row.get("external_id")
+    }
+    normalized_campaigns: List[Dict[str, object]] = []
+    for index, original in enumerate(source.get("campaigns") or []):
+        row = dict(original)
+        external = str(row.get("account_id") or row.get("customer_id") or row.get("advertiser_id") or "").replace("-", "")
+        campaign_ctr = float(row.get("ctr") or 0)
+        normalized_campaigns.append({
+            **row,
+            "campaign_id": row.get("campaign_id") or row.get("id") or f"{platform}-{index}",
+            "campaign_name": row.get("campaign_name") or row.get("name") or "Untitled campaign",
+            "account_id": external or str(selected_id or ""),
+            "account_name": account_name_by_external.get(external) or (accounts[0]["name"] if len(accounts) == 1 else platform.title()),
+            "spend": float(row.get("spend") or 0),
+            "impressions": float(row.get("impressions") or 0),
+            "clicks": float(row.get("clicks") or 0),
+            "ctr": campaign_ctr * 100 if 0 < campaign_ctr <= 1 else campaign_ctr,
+            "cpc": float(row.get("cpc") or 0),
+            "cpm": float(row.get("cpm") or 0),
+            "reach": float(row.get("reach") or 0),
+            "conversions": float(row.get("conversions") or 0),
+        })
+    return {
+        "platform": platform,
+        "accounts": accounts,
+        "selected_account_id": str(account_id or ""),
+        "currency": currency,
+        "summary": source_summary,
+        "daily": list((overview.get("daily") or {}).get(platform) or []),
+        "campaigns": sorted(normalized_campaigns, key=lambda row: float(row.get("spend") or 0), reverse=True),
+        "status": source.get("status"),
+    }
+
+
 @app.get("/google/insights", response_model=GoogleInsightsResponse)
 def google_insights(
     date_from: str,
