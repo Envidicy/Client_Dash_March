@@ -9924,6 +9924,19 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
             grouped.setdefault(str(row.get("account_name") or "Аккаунт без названия"), []).append(row)
         for account_name, account_rows in grouped.items():
             rows_html += f'<tr class="account-heading"><td colspan="5"><b>Аккаунт: {html.escape(account_name)}</b></td></tr>'
+            account_spend = sum(float(row.get("spend") or 0) for row in account_rows)
+            account_impressions = sum(float(row.get("impressions") or 0) for row in account_rows)
+            account_clicks = sum(float(row.get("clicks") or 0) for row in account_rows)
+            account_ctr = (account_clicks / account_impressions) if account_impressions else 0.0
+            rows_html += f"""
+            <tr class="account-total">
+              <td><b>Итого по аккаунту</b></td>
+              <td><b>{html.escape(_dashboard_export_fmt_money(account_spend, summary.get('currency') or currency_default))}</b></td>
+              <td><b>{html.escape(_dashboard_export_fmt_int(account_impressions))}</b></td>
+              <td><b>{html.escape(_dashboard_export_fmt_int(account_clicks))}</b></td>
+              <td><b>{html.escape(_dashboard_export_fmt_pct(account_ctr))}</b></td>
+            </tr>
+            """
             for row in account_rows:
                 rows_html += f"""
                 <tr>
@@ -10143,6 +10156,10 @@ def _dashboard_export_html(payload: Dict[str, object]) -> str:
             background: #e8f0ff;
             color: #173b72;
             font-weight: 700;
+          }}
+          .account-total td {{
+            background: #f5f8ff;
+            border-bottom: 2px solid #cbd9ef;
           }}
           .segment-row, .trend-row {{
             margin-bottom: 10px;
