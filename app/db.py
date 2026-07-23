@@ -622,6 +622,24 @@ def apply_schema():
         _ensure_column(conn, "meta_connections", "scopes", "TEXT")
         _ensure_table(
             conn,
+            "phone_verifications",
+            """
+            CREATE TABLE IF NOT EXISTS phone_verifications (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              phone TEXT NOT NULL UNIQUE,
+              code_hash TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              attempts INTEGER DEFAULT 0,
+              verified_at TEXT,
+              verification_token_hash TEXT,
+              consumed_at TEXT,
+              last_sent_at TEXT NOT NULL,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
+        )
+        _ensure_table(
+            conn,
             "user_documents",
             """
             CREATE TABLE IF NOT EXISTS user_documents (

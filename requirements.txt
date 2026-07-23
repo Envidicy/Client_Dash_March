@@ -4,6 +4,7 @@ pydantic==2.9.2
 openpyxl==3.1.5
 pytest==8.3.4
 httpx==0.28.1
+requests==2.32.3
 python-multipart==0.0.12
 python-dotenv==1.0.1
 google-ads==28.4.1

@@ -30,6 +30,7 @@ import os
 import shutil
 from urllib.parse import urlencode
 import httpx
+import requests
 import boto3
 from botocore.config import Config as BotoConfig
 from google.ads.googleads.client import GoogleAdsClient
@@ -63,6 +64,9 @@ _PASSWORD_HASH_ITERATIONS = max(120000, int(os.getenv("PASSWORD_HASH_ITERATIONS"
 _LOGIN_RATE_LIMIT_MAX_FAILURES = max(3, int(os.getenv("LOGIN_RATE_LIMIT_MAX_FAILURES", "8") or 8))
 _LOGIN_RATE_LIMIT_WINDOW_SEC = max(60, int(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SEC", "300") or 300))
 _LOGIN_RATE_LIMIT_BLOCK_SEC = max(60, int(os.getenv("LOGIN_RATE_LIMIT_BLOCK_SEC", "900") or 900))
+_PHONE_CODE_TTL_SEC = max(300, int(os.getenv("WHATSAPP_CODE_TTL_SEC", "600") or 600))
+_PHONE_CODE_RESEND_SEC = max(30, int(os.getenv("WHATSAPP_CODE_RESEND_SEC", "60") or 60))
+_PHONE_CODE_MAX_ATTEMPTS = max(3, int(os.getenv("WHATSAPP_CODE_MAX_ATTEMPTS", "5") or 5))
 _ADMIN_KEY_RATE_LIMIT_MAX_FAILURES = max(3, int(os.getenv("ADMIN_KEY_RATE_LIMIT_MAX_FAILURES", "5") or 5))
 _ADMIN_KEY_RATE_LIMIT_WINDOW_SEC = max(60, int(os.getenv("ADMIN_KEY_RATE_LIMIT_WINDOW_SEC", "600") or 600))
 _ADMIN_KEY_RATE_LIMIT_BLOCK_SEC = max(60, int(os.getenv("ADMIN_KEY_RATE_LIMIT_BLOCK_SEC", "1800") or 1800))
@@ -3791,6 +3795,7 @@ class RegisterPayload(AuthPayload):
     name: str
     company: Optional[str] = None
     phone: str
+    phone_verification_token: str
 
 
 class MetaAuthPayload(BaseModel):
@@ -3800,6 +3805,14 @@ class MetaAuthPayload(BaseModel):
 
 class PhonePayload(BaseModel):
     phone: str
+
+
+class PhoneCodePayload(BaseModel):
+    phone: str
+
+
+class PhoneCodeConfirmPayload(PhoneCodePayload):
+    code: str
 
 
 class ChangePasswordPayload(BaseModel):
@@ -5445,6 +5458,187 @@ def topup_request(payload: TopUpRequest):
     return {"status": "ok", "message": "Top-up request received", "payload": payload}
 
 
+def _normalize_phone(value: object) -> str:
+    raw = str(value or "").strip()
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = f"7{digits[1:]}"
+    if len(digits) < 10 or len(digits) > 15:
+        raise HTTPException(status_code=400, detail="Enter a valid phone number with country code")
+    return f"+{digits}"
+
+
+def _phone_verification_hash(value: str) -> str:
+    secret = (
+        os.getenv("WHATSAPP_VERIFICATION_SECRET")
+        or os.getenv("META_APP_SECRET")
+        or _PUBLIC_URL_TOKEN_SECRET_FALLBACK
+    )
+    return hmac.new(secret.encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _parse_utc_timestamp(value: object) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _send_whatsapp_verification_code(phone: str, code: str) -> None:
+    access_token = (os.getenv("WHATSAPP_ACCESS_TOKEN") or "").strip()
+    phone_number_id = (os.getenv("WHATSAPP_PHONE_NUMBER_ID") or "").strip()
+    template_name = (os.getenv("WHATSAPP_TEMPLATE_NAME") or "phone_verification").strip()
+    template_language = (os.getenv("WHATSAPP_TEMPLATE_LANGUAGE") or "ru").strip()
+    graph_version = (os.getenv("META_GRAPH_API_VERSION") or "v25.0").strip()
+    if not access_token or not phone_number_id:
+        raise HTTPException(status_code=503, detail="WhatsApp verification is not configured")
+
+    try:
+        response = requests.post(
+            f"https://graph.facebook.com/{graph_version}/{phone_number_id}/messages",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "messaging_product": "whatsapp",
+                "to": phone.lstrip("+"),
+                "type": "template",
+                "template": {
+                    "name": template_name,
+                    "language": {"code": template_language},
+                    "components": [
+                        {
+                            "type": "body",
+                            "parameters": [{"type": "text", "text": code}],
+                        },
+                        {
+                            "type": "button",
+                            "sub_type": "url",
+                            "index": "0",
+                            "parameters": [{"type": "text", "text": code}],
+                        },
+                    ],
+                },
+            },
+            timeout=20,
+        )
+        response_data = response.json()
+    except Exception:
+        logging.exception("WhatsApp verification request failed")
+        raise HTTPException(status_code=502, detail="Could not send the verification code")
+    if not response.ok:
+        error = response_data.get("error") if isinstance(response_data, dict) else None
+        logging.error("WhatsApp verification rejected: %s", error or response_data)
+        raise HTTPException(status_code=502, detail="WhatsApp rejected the verification message")
+
+
+@app.post("/auth/phone-verification/send")
+def send_phone_verification(payload: PhoneCodePayload):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    phone = _normalize_phone(payload.phone)
+    now = datetime.now(timezone.utc)
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    code_hash = _phone_verification_hash(f"{phone}:{code}")
+
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT user_id FROM user_profiles WHERE whatsapp_phone=?",
+            (phone,),
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=400, detail="This phone number is already registered")
+        verification = conn.execute(
+            "SELECT * FROM phone_verifications WHERE phone=?",
+            (phone,),
+        ).fetchone()
+        if verification:
+            last_sent_at = _parse_utc_timestamp(verification["last_sent_at"])
+            if last_sent_at:
+                retry_after = _PHONE_CODE_RESEND_SEC - int((now - last_sent_at).total_seconds())
+                if retry_after > 0:
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Wait {retry_after} seconds before requesting another code",
+                    )
+
+        _send_whatsapp_verification_code(phone, code)
+        expires_at = now + timedelta(seconds=_PHONE_CODE_TTL_SEC)
+        conn.execute(
+            """
+            INSERT INTO phone_verifications
+              (phone, code_hash, expires_at, attempts, verified_at, verification_token_hash, consumed_at, last_sent_at)
+            VALUES (?, ?, ?, 0, NULL, NULL, NULL, ?)
+            ON CONFLICT(phone) DO UPDATE SET
+              code_hash=excluded.code_hash,
+              expires_at=excluded.expires_at,
+              attempts=0,
+              verified_at=NULL,
+              verification_token_hash=NULL,
+              consumed_at=NULL,
+              last_sent_at=excluded.last_sent_at
+            """,
+            (phone, code_hash, expires_at.isoformat(), now.isoformat()),
+        )
+        conn.commit()
+    return {"status": "sent", "expires_in": _PHONE_CODE_TTL_SEC, "retry_after": _PHONE_CODE_RESEND_SEC}
+
+
+@app.post("/auth/phone-verification/confirm")
+def confirm_phone_verification(payload: PhoneCodeConfirmPayload):
+    if not get_conn:
+        raise HTTPException(status_code=500, detail="DB not initialized")
+    phone = _normalize_phone(payload.phone)
+    code = re.sub(r"\D", "", payload.code)
+    if len(code) != 6:
+        raise HTTPException(status_code=400, detail="Enter the 6-digit code")
+    now = datetime.now(timezone.utc)
+
+    with get_conn() as conn:
+        verification = conn.execute(
+            "SELECT * FROM phone_verifications WHERE phone=?",
+            (phone,),
+        ).fetchone()
+        if not verification or verification["consumed_at"]:
+            raise HTTPException(status_code=400, detail="Request a new verification code")
+        expires_at = _parse_utc_timestamp(verification["expires_at"])
+        if not expires_at or expires_at <= now:
+            raise HTTPException(status_code=400, detail="The verification code has expired")
+        attempts = int(verification["attempts"] or 0)
+        if attempts >= _PHONE_CODE_MAX_ATTEMPTS:
+            raise HTTPException(status_code=429, detail="Too many attempts. Request a new code")
+        expected_hash = _phone_verification_hash(f"{phone}:{code}")
+        if not hmac.compare_digest(str(verification["code_hash"]), expected_hash):
+            conn.execute(
+                "UPDATE phone_verifications SET attempts=attempts+1 WHERE phone=?",
+                (phone,),
+            )
+            conn.commit()
+            remaining = max(0, _PHONE_CODE_MAX_ATTEMPTS - attempts - 1)
+            raise HTTPException(status_code=400, detail=f"Incorrect code. Attempts remaining: {remaining}")
+
+        verification_token = secrets.token_urlsafe(32)
+        conn.execute(
+            """
+            UPDATE phone_verifications
+            SET verified_at=?, verification_token_hash=?, attempts=attempts+1
+            WHERE phone=?
+            """,
+            (now.isoformat(), _phone_verification_hash(verification_token), phone),
+        )
+        conn.commit()
+    return {"status": "verified", "verification_token": verification_token}
+
+
 @app.post("/auth/register")
 def register(payload: RegisterPayload):
     if not get_conn:
@@ -5453,12 +5647,31 @@ def register(payload: RegisterPayload):
     password = payload.password.strip()
     name = payload.name.strip()
     company = (payload.company or "").strip() or None
-    phone = re.sub(r"[^\d+]", "", payload.phone.strip())
+    phone = _normalize_phone(payload.phone)
+    phone_verification_token = payload.phone_verification_token.strip()
     if not email or not password or not name or not phone:
         raise HTTPException(status_code=400, detail="Name, phone, email and password are required")
-    if len(re.sub(r"\D", "", phone)) < 10:
-        raise HTTPException(status_code=400, detail="Enter a valid phone number")
+    if not phone_verification_token:
+        raise HTTPException(status_code=400, detail="Verify your phone number first")
     with get_conn() as conn:
+        verification = conn.execute(
+            "SELECT * FROM phone_verifications WHERE phone=?",
+            (phone,),
+        ).fetchone()
+        verified_at = _parse_utc_timestamp(verification["verified_at"]) if verification else None
+        valid_until = verified_at + timedelta(seconds=_PHONE_CODE_TTL_SEC) if verified_at else None
+        if (
+            not verification
+            or verification["consumed_at"]
+            or not valid_until
+            or valid_until <= datetime.now(timezone.utc)
+            or not verification["verification_token_hash"]
+            or not hmac.compare_digest(
+                str(verification["verification_token_hash"]),
+                _phone_verification_hash(phone_verification_token),
+            )
+        ):
+            raise HTTPException(status_code=400, detail="Phone verification is invalid or expired")
         existing = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         if existing or _get_access_by_email(conn, email):
             raise HTTPException(status_code=400, detail="User already exists")
@@ -5475,6 +5688,10 @@ def register(payload: RegisterPayload):
             VALUES (?, ?, ?, ?, ?)
             """,
             (user_id, name, company, "ru", phone),
+        )
+        conn.execute(
+            "UPDATE phone_verifications SET consumed_at=? WHERE phone=?",
+            (datetime.now(timezone.utc).isoformat(), phone),
         )
         _ensure_owner_access(conn, user_id)
         token = _issue_user_token(conn, user_id, email)

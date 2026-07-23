@@ -175,6 +175,19 @@ CREATE TABLE IF NOT EXISTS meta_connections (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS phone_verifications (
+  id BIGSERIAL PRIMARY KEY,
+  phone TEXT NOT NULL UNIQUE,
+  code_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  attempts INTEGER DEFAULT 0,
+  verified_at TIMESTAMPTZ,
+  verification_token_hash TEXT,
+  consumed_at TIMESTAMPTZ,
+  last_sent_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS account_saved_views (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
