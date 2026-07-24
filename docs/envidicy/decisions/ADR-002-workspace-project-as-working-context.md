@@ -1,24 +1,24 @@
 ---
 document_id: ADR-002
 title: Workspace and Project as Working Context
-document_version: 0.3.1
-document_status: REVIEW
-decision_status: PROPOSED
+document_version: 1.0.0
+document_status: ACCEPTED
+decision_status: ACCEPTED
 decision_class: ARCHITECTURE
 h0_stage: H0.1
 created_at: 2026-07-23
 review_candidate_at: 2026-07-23
 review_candidate_manifest: ./ADR-002-workspace-project-as-working-context.review-candidate-0.3.0.md
 review_opened_at: 2026-07-24
-review_closed_at: null
+review_closed_at: 2026-07-24
 review_target_snapshot: ./ADR-002-workspace-project-as-working-context.review-target-0.3.1.md
-review_target_sha256: null
+review_target_sha256: f7792b415a8d7aa98bd7b16811eb77801a31e99baf153446945ea1ed205e3cf1
 formal_review_pack: ./ADR-002-workspace-project-as-working-context.review-pack.md
-acceptance_record: null
-decision_date: null
-accepted_at: null
-effective_from: null
-human_approvals_recorded: false
+acceptance_record: ./ADR-002-workspace-project-as-working-context.acceptance-record.md
+decision_date: 2026-07-24
+accepted_at: 2026-07-24
+effective_from: 2026-07-24
+human_approvals_recorded: true
 revision_from:
   document_version: 0.2.0
   review_candidate_snapshot: ./ADR-002-workspace-project-as-working-context.review-candidate-0.2.0.snapshot.md
@@ -49,79 +49,79 @@ reviewers:
     name: "Сухоруков Роман Николаевич"
     human_identity_ref: person:envidicy:0001
     required_decision_ids: [ADR-002-D01, ADR-002-D02, ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D06, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-roman-2026-07-24
   - role: Architecture Owner
     name: "Колядов Денис Викторович"
     human_identity_ref: person:envidicy:0002
     required_decision_ids: [ADR-002-D01, ADR-002-D02, ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D06, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-denis-2026-07-24
   - role: Core Domain Owner
     name: "Колядов Денис Викторович"
     human_identity_ref: person:envidicy:0002
     required_decision_ids: [ADR-002-D01, ADR-002-D02, ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D06, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-denis-2026-07-24
   - role: Platform Domain Owner
     name: "Колядов Денис Викторович"
     human_identity_ref: person:envidicy:0002
     required_decision_ids: [ADR-002-D04, ADR-002-D05, ADR-002-D06, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-denis-2026-07-24
   - role: Security Reviewer
     name: "Колядов Денис Викторович"
     human_identity_ref: person:envidicy:0002
     required_decision_ids: [ADR-002-D01, ADR-002-D02, ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D06, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-denis-2026-07-24
   - role: Engineering Owner
     name: "Колядов Денис Викторович"
     human_identity_ref: person:envidicy:0002
     required_decision_ids: [ADR-002-D01, ADR-002-D02, ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D06, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-denis-2026-07-24
   - role: Operations/SRE Reviewer
     name: "Сухоруков Роман Николаевич"
     human_identity_ref: person:envidicy:0001
     required_decision_ids: [ADR-002-D02, ADR-002-D04, ADR-002-D05, ADR-002-D06, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-roman-2026-07-24
   - role: Finance Reviewer
     name: "Сухоруков Роман Николаевич"
     human_identity_ref: person:envidicy:0001
     required_decision_ids: [ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-roman-2026-07-24
   - role: Data/Analytics Domain Reviewer
     name: "Колядов Денис Викторович"
     human_identity_ref: person:envidicy:0002
     required_decision_ids: [ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D06, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-denis-2026-07-24
   - role: Advertising Product Domain Reviewer
     name: "Колядов Денис Викторович"
     human_identity_ref: person:envidicy:0002
     required_decision_ids: [ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-denis-2026-07-24
   - role: Creative Intelligence Product Domain Reviewer
     name: "Колядов Денис Викторович"
     human_identity_ref: person:envidicy:0002
     required_decision_ids: [ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: null
-    reviewed_at: null
-    evidence_ref: null
+    decision: APPROVE
+    reviewed_at: 2026-07-24
+    evidence_ref: ./ADR-002-workspace-project-as-working-context.acceptance-record.md#approval-attestation-denis-2026-07-24
 constitution_snapshot:
   document_id: ENVIDICY-ARCH-PRINCIPLES
   document_version: 1.0.0
@@ -154,7 +154,7 @@ exceptions: []
 
 # ADR-002 — Workspace and Project as Working Context
 
-Текущий статус — `REVIEW / PROPOSED`, document version `0.3.1`. Formal human review открыт `2026-07-24` только для отдельного immutable review target, полный SHA-256 которого фиксируется Review Pack. Входящий verdict `ACCEPT FOR REVIEW_CANDIDATE` является содержательным evidence и не заменяет human `APPROVE`; все 11 role decisions остаются незаполненными. Статус не принимает Blueprint, не завершает H0.1 и не разрешает изменение application-code, database schema или production data.
+Текущий статус — `ACCEPTED`, document version `1.0.0`. Formal human review точного immutable target завершён `2026-07-24`; все 11 обязательных role decisions имеют `APPROVE`, а promotion conformance зафиксирован отдельным Acceptance Record. Принятие ADR-002 не принимает Blueprint, не завершает H0.1 и не разрешает изменение application-code, database schema или production data.
 
 ## 0. Краткое решение
 
@@ -1581,17 +1581,16 @@ ADR пересматривается при:
 
 ## 14. Status boundaries
 
-Текущий `REVIEW / PROPOSED`, version `0.3.1`:
+Текущий `ACCEPTED / ACCEPTED`, version `1.0.0`:
 
-- открывает formal human review `2026-07-24` исключительно для immutable target `ADR-002-workspace-project-as-working-context.review-target-0.3.1.md`, полный SHA-256 которого нормативно фиксирует Review Pack;
-- использует content-addressed Review Candidate 0.3.0 только как неизменяемый source;
-- сохраняет возвращённые snapshot/manifest 0.1.0 и 0.2.0 неизменными как historical evidence;
-- сохраняет D01–D10, их anchors и machine-readable Principle links без semantic changes;
-- оставляет все 11 human role decisions, review dates и evidence refs незаполненными;
-- не записывает human APPROVE;
+- принимает D01–D10 как обязательные архитектурные решения для последующей документации и новой реализации;
+- сохраняет immutable review target `0.3.1` в историческом статусе `REVIEW / PROPOSED` и связывает его полным SHA-256;
+- сохраняет content-addressed Review Candidate 0.3.0 и возвращённые snapshot/manifest 0.1.0 и 0.2.0 как historical evidence;
+- сохраняет D01–D10, их anchors и 152 machine-readable Principle links без semantic changes;
+- фиксирует 11 отдельных human role decisions, даты и evidence refs через Review Pack и Acceptance Record;
 - не принимает Blueprint;
 - не завершает H0.1;
 - не обновляет frozen H0.0;
-- не разрешает application-code, database schema или production data changes.
+- не разрешает application-code, database schema или production data changes до соответствующего `GREEN H0.6/H0.7`.
 
-Любое изменение хотя бы одного byte immutable review target делает текущий review `STALE` и требует новой document version, нового target/hash и повторного review затронутых scopes без переноса approvals. Только отдельные direct human attestations, привязанные к полному target SHA-256, роли, Decision IDs, дате и evidence ref, могут изменить `PENDING`; formal review закрывается и Acceptance Record создаётся только после `11/11 APPROVE` при неизменном target.
+Accepted D01–D10 не переписываются молча. Изменение архитектурного смысла требует superseding ADR, impact review связанных Principles/ADR и последующего обновления Architecture Decision Matrix и Blueprint Conformance evidence.

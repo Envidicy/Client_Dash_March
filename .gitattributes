@@ -1,0 +1,2 @@
+# Envidicy governance uses raw SHA-256; preserve identical Markdown bytes on every checkout.
+docs/envidicy/**/*.md text eol=lf

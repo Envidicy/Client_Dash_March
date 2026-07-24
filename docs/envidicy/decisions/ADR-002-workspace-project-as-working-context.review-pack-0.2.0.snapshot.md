@@ -1,12 +1,12 @@
 ---
 document_id: ADR-002-FORMAL-REVIEW-PACK
-document_version: 0.3.0
-document_status: ACCEPTED
+document_version: 0.2.0
+document_status: REVIEW
 h0_stage: H0.1
 updated_at: 2026-07-24
-previous_document_version: 0.2.0
-previous_sha256: 9d50cae993ba8ab3008774d9692389c990cb69c4c077384e641c486e902d0283
-previous_snapshot: ./ADR-002-workspace-project-as-working-context.review-pack-0.2.0.snapshot.md
+previous_document_version: 0.1.0
+previous_sha256: e97b095e05378eef9de753164c6936d953d2aa4a858d19da95ee1dbf28d868d7
+previous_snapshot: ./ADR-002-workspace-project-as-working-context.review-pack-0.1.0.snapshot.md
 review_target_document_id: ADR-002
 review_target_document_version: 0.3.1
 review_target_document_status: REVIEW
@@ -48,12 +48,12 @@ owner_role: Architecture Owner
 owner_name: "Колядов Денис Викторович"
 owner_human_identity_ref: person:envidicy:0002
 review_opened_at: 2026-07-24
-review_closed_at: 2026-07-24
+review_closed_at: null
 required_role_decisions: 11
-recorded_role_decisions: 11
-pending_role_decisions: 0
+recorded_role_decisions: 8
+pending_role_decisions: 3
 human_approvals_recorded: true
-acceptance_record: ./ADR-002-workspace-project-as-working-context.acceptance-record.md
+acceptance_record: null
 blueprint_accepted: false
 h0_1_completed: false
 development_authorization: false
@@ -132,19 +132,19 @@ Reviewer подтверждает в назначенном scope:
 
 | Role | Human | Scope | Decision | Reviewed at | Evidence / finding |
 |---|---|---|---|---|---|
-| Product/Business Sponsor | Сухоруков Роман Николаевич | D01–D10 | `APPROVE` | `2026-07-24` | [Roman attestation](#approval-attestation-roman-2026-07-24) |
+| Product/Business Sponsor | Сухоруков Роман Николаевич | D01–D10 | `PENDING` | — | — |
 | Architecture Owner | Колядов Денис Викторович | D01–D10 | `APPROVE` | `2026-07-24` | [Denis attestation](#approval-attestation-denis-2026-07-24) |
 | Core Domain Owner | Колядов Денис Викторович | D01–D10 | `APPROVE` | `2026-07-24` | [Denis attestation](#approval-attestation-denis-2026-07-24) |
 | Platform Domain Owner | Колядов Денис Викторович | D04–D10 | `APPROVE` | `2026-07-24` | [Denis attestation](#approval-attestation-denis-2026-07-24) |
 | Security Reviewer | Колядов Денис Викторович | D01–D10 | `APPROVE` | `2026-07-24` | [Denis attestation](#approval-attestation-denis-2026-07-24) |
 | Engineering Owner | Колядов Денис Викторович | D01–D10 | `APPROVE` | `2026-07-24` | [Denis attestation](#approval-attestation-denis-2026-07-24) |
-| Operations/SRE Reviewer | Сухоруков Роман Николаевич | D02, D04–D10 | `APPROVE` | `2026-07-24` | [Roman attestation](#approval-attestation-roman-2026-07-24) |
-| Finance Reviewer | Сухоруков Роман Николаевич | D03–D05, D07–D10 | `APPROVE` | `2026-07-24` | [Roman attestation](#approval-attestation-roman-2026-07-24) |
+| Operations/SRE Reviewer | Сухоруков Роман Николаевич | D02, D04–D10 | `PENDING` | — | — |
+| Finance Reviewer | Сухоруков Роман Николаевич | D03–D05, D07–D10 | `PENDING` | — | — |
 | Data/Analytics Domain Reviewer | Колядов Денис Викторович | D03–D10 | `APPROVE` | `2026-07-24` | [Denis attestation](#approval-attestation-denis-2026-07-24) |
 | Advertising Product Domain Reviewer | Колядов Денис Викторович | D03–D05, D07–D10 | `APPROVE` | `2026-07-24` | [Denis attestation](#approval-attestation-denis-2026-07-24) |
 | Creative Intelligence Product Domain Reviewer | Колядов Денис Викторович | D03–D05, D07–D10 | `APPROVE` | `2026-07-24` | [Denis attestation](#approval-attestation-denis-2026-07-24) |
 
-Итоговое состояние: `11 required / 11 recorded / 0 pending`.
+Текущее состояние: `11 required / 8 recorded / 3 pending`.
 
 ## 6. Входящий content review
 
@@ -156,7 +156,7 @@ Reviewer подтверждает в назначенном scope:
 - `Editorial=0`;
 - Constitution, ADR-001, D01–D10, 152 traceability links и immutable chain подтверждены.
 
-Verdict является содержательным architecture/conformance evidence. Он не аутентифицирует Дениса или Романа и не является human `APPROVE`; все 11 role decisions получены отдельно через direct human attestations.
+Verdict является содержательным architecture/conformance evidence. Он не аутентифицирует Дениса или Романа, не заменяет ни одного `PENDING` и не является human `APPROVE`.
 
 ## 7. Human approval evidence
 
@@ -204,10 +204,9 @@ evidence_ref: ./ADR-002-workspace-project-as-working-context.review-pack.md#appr
 
 Одна attestation фиксирует восемь явно перечисленных role decisions; каждая роль остаётся отдельной строкой журнала и связана с этим evidence anchor. Repository record сохраняет explicit human statement, но сам по себе не является криптографической аутентификацией личности.
 
-<a id="approval-attestation-roman-2026-07-24"></a>
-### Роман Сухоруков — 2026-07-24
+## 8. Контракт оставшейся human attestation
 
-Сухоруков Роман Николаевич напрямую подтвердил `APPROVE` для exact review target:
+Каждая direct attestation обязана содержать:
 
 ```yaml
 review_target:
@@ -215,41 +214,30 @@ review_target:
   document_version: 0.3.1
   sha256: f7792b415a8d7aa98bd7b16811eb77801a31e99baf153446945ea1ed205e3cf1
 human:
-  name: "Сухоруков Роман Николаевич"
-  human_identity_ref: person:envidicy:0001
-reviewed_at: 2026-07-24
+  name: "<ФИО>"
+  human_identity_ref: "<person ref>"
+reviewed_at: "<фактическая дата>"
 decisions:
-  - role: Product/Business Sponsor
-    scope: [ADR-002-D01, ADR-002-D02, ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D06, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: APPROVE
-  - role: Operations/SRE Reviewer
-    scope: [ADR-002-D02, ADR-002-D04, ADR-002-D05, ADR-002-D06, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: APPROVE
-  - role: Finance Reviewer
-    scope: [ADR-002-D03, ADR-002-D04, ADR-002-D05, ADR-002-D07, ADR-002-D08, ADR-002-D09, ADR-002-D10]
-    decision: APPROVE
-evidence_ref: ./ADR-002-workspace-project-as-working-context.review-pack.md#approval-attestation-roman-2026-07-24
+  - role: "<ровно одна назначенная governance role>"
+    scope: [<точные ADR-002 Decision IDs>]
+    decision: "<APPROVE или RETURN_WITH_FINDINGS>"
+evidence_ref: "<разрешимая ссылка на attestation>"
 ```
 
-Одна attestation фиксирует три явно перечисленных role decisions; каждая роль остаётся отдельной строкой журнала и связана с этим evidence anchor. Repository record сохраняет explicit human statement, но сам по себе не является криптографической аутентификацией личности.
+Одна attestation MAY перечислять несколько ролей одного человека, но каждая роль остаётся отдельным decision object с собственным exact scope. Общая фраза «за всё одобряю», решение за другого человека или approval без полного target SHA недействительны.
 
-## 8. Проверка полноты human attestations
+## 9. Состояние formal review
 
-Для каждой из 11 назначенных governance roles зафиксирован отдельный decision object с exact scope. Обе direct attestations содержат полный target SHA-256, фактическую дату, human identity ref и разрешимый evidence ref. Решения одного человека не подменяют решения другого, а входящий architecture verdict не засчитывается как human `APPROVE`.
-
-## 9. Результат formal review
-
-Formal review закрыт `2026-07-24`:
+Formal review открыт `2026-07-24` и остаётся незавершённым:
 
 - target immutable и имеет SHA-256 `f7792b415a8d7aa98bd7b16811eb77801a31e99baf153446945ea1ed205e3cf1`;
-- все 11 role decisions имеют `APPROVE`;
-- каждое решение связано с exact target SHA-256, датой и evidence ref;
-- blocking findings и Architecture Principle exceptions отсутствуют;
-- architecture verdict не выдан за human approval;
-- immutable review target исторически сохраняет `decision_status: PROPOSED`;
-- promotion в stable ADR фиксируется отдельным [Acceptance Record](./ADR-002-workspace-project-as-working-context.acceptance-record.md);
+- восемь role decisions Дениса имеют `APPROVE` и связаны с exact target/date/evidence;
+- три role decisions Романа остаются `PENDING`;
+- human approvals записаны частично: `8/11`;
+- `decision_status` остаётся `PROPOSED`;
+- `Acceptance Record` отсутствует;
 - Blueprint не принят;
 - H0.1 не завершён;
 - development authorization отсутствует.
 
-Закрытие review и принятие ADR-002 сами по себе не разрешают изменение application-code, database schema или production data до соответствующего `GREEN H0.6/H0.7`.
+Review закрывается только после `11/11 APPROVE`, exact role/scope/date/evidence binding и повторной проверки неизменности target hash. Закрытие review и даже последующее принятие ADR-002 сами по себе не разрешают изменение application-code, database schema или production data до соответствующего `GREEN H0.6/H0.7`.
