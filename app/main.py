@@ -11497,13 +11497,23 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
                 )
             except Exception:
                 pass
+        request_tax = _invoice_tax_breakdown(payload.amount, tax_mode, vat_rate)
+        request_vat_amount = float(request_tax["vat_amount"])
+        request_net_amount = float(request_tax["net_amount"])
         _send_telegram_alert(
             "\n".join(
                 [
                     "🧾 <b>Запрос на пополнение кошелька</b>",
                     f"ID: <code>{request_id}</code>",
                     f"Пользователь: <code>{current_user['email']}</code> (id={current_user['id']})",
-                    f"Сумма: <b>{payload.amount:.2f} {payload.currency}</b>",
+                    f"Сумма оплаты: <b>{payload.amount:.2f} {payload.currency}</b>",
+                    (
+                        f"В том числе НДС {vat_rate:g}%: "
+                        f"<b>{request_vat_amount:.2f} {payload.currency}</b>"
+                        if tax_mode == "with_vat"
+                        else "Без НДС"
+                    ),
+                    f"Будет зачислено: <b>{request_net_amount:.2f} {payload.currency}</b>",
                     f"Контрагент: <b>{client_name or '—'}</b>",
                     f"БИН/ИИН: <code>{client_bin or '—'}</code>",
                     f"Order Ref: <code>{payload.order_ref or '—'}</code>",
@@ -11513,7 +11523,10 @@ def create_wallet_topup_request(payload: WalletTopupRequestPayload, current_user
                 "inline_keyboard": [
                     [
                         {
-                            "text": "Пополнить кошелек",
+                            "text": (
+                                "Зачислить "
+                                f"{request_net_amount:.2f} {payload.currency}"
+                            ),
                             "callback_data": _build_wallet_topup_credit_callback_data(int(request_id)),
                         }
                     ]
@@ -11574,6 +11587,12 @@ def _credit_wallet_topup_request(conn, request_id: int, credited_by: Optional[st
     if not row:
         raise HTTPException(status_code=404, detail="Wallet topup request not found")
     request_row = dict(row)
+    tax_mode = _normalize_tax_mode(request_row.get("tax_mode"), "without_vat")
+    vat_rate = _normalize_vat_rate_for_mode(tax_mode, request_row.get("vat_rate"))
+    tax = _invoice_tax_breakdown(float(request_row.get("amount") or 0), tax_mode, vat_rate)
+    gross_amount = float(tax["total_amount"])
+    vat_amount = float(tax["vat_amount"])
+    credited_amount = float(tax["net_amount"])
     status = str(request_row.get("status") or "").lower()
     if status in {"completed", "credited", "approved"}:
         return {
@@ -11581,12 +11600,15 @@ def _credit_wallet_topup_request(conn, request_id: int, credited_by: Optional[st
             "request_id": request_id,
             "user_id": request_row.get("user_id"),
             "user_email": request_row.get("user_email"),
-            "amount": float(request_row.get("amount") or 0),
+            "amount": credited_amount,
+            "gross_amount": gross_amount,
+            "vat_amount": vat_amount,
+            "net_amount": credited_amount,
+            "vat_rate": vat_rate,
             "currency": request_row.get("currency") or "KZT",
         }
 
-    amount = float(request_row.get("amount") or 0)
-    if amount <= 0:
+    if gross_amount <= 0 or credited_amount <= 0:
         raise HTTPException(status_code=400, detail="Wallet topup amount must be positive")
     currency = str(request_row.get("currency") or "KZT").upper()
     user_id = int(request_row["user_id"])
@@ -11609,11 +11631,15 @@ def _credit_wallet_topup_request(conn, request_id: int, credited_by: Optional[st
             "request_id": request_id,
             "user_id": user_id,
             "user_email": request_row.get("user_email"),
-            "amount": amount,
+            "amount": credited_amount,
+            "gross_amount": gross_amount,
+            "vat_amount": vat_amount,
+            "net_amount": credited_amount,
+            "vat_rate": vat_rate,
             "currency": currency,
         }
 
-    new_balance = float(wallet.get("balance") or 0) + amount
+    new_balance = float(wallet.get("balance") or 0) + credited_amount
     conn.execute(
         "UPDATE wallets SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
         (new_balance, user_id),
@@ -11630,7 +11656,7 @@ def _credit_wallet_topup_request(conn, request_id: int, credited_by: Optional[st
         (
             user_id,
             None,
-            amount,
+            gross_amount,
             currency,
             "wallet_topup",
             "wallet_topup_request",
@@ -11639,13 +11665,36 @@ def _credit_wallet_topup_request(conn, request_id: int, credited_by: Optional[st
             note,
         ),
     )
+    if vat_amount > 0:
+        conn.execute(
+            """
+            INSERT INTO wallet_transactions
+              (user_id, account_id, amount, currency, type, source_type, source_id, source_key, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                None,
+                -vat_amount,
+                currency,
+                "wallet_vat",
+                "wallet_topup_request",
+                request_id,
+                f"wallet_topup_request:{request_id}:vat",
+                f"VAT {vat_rate:g}% withheld from wallet topup request #{request_id}",
+            ),
+        )
     conn.commit()
     return {
         "status": "completed",
         "request_id": request_id,
         "user_id": user_id,
         "user_email": request_row.get("user_email"),
-        "amount": amount,
+        "amount": credited_amount,
+        "gross_amount": gross_amount,
+        "vat_amount": vat_amount,
+        "net_amount": credited_amount,
+        "vat_rate": vat_rate,
         "currency": currency,
         "balance": new_balance,
     }
@@ -11785,7 +11834,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Op
         if result.get("status") == "already_completed":
             text = "Уже пополнено"
         else:
-            text = f"Кошелек пополнен: {float(result.get('amount') or 0):.2f} {result.get('currency') or 'KZT'}"
+            text = f"На баланс зачислено: {float(result.get('amount') or 0):.2f} {result.get('currency') or 'KZT'}"
         _telegram_api_post("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
 
     if result.get("status") != "already_completed":
@@ -11793,7 +11842,16 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Op
             int(result.get("user_id") or 0),
             "\n".join([
                 "✅ <b>Кошелёк пополнен</b>",
-                f"Зачислено: <b>{float(result.get('amount') or 0):,.2f} {result.get('currency') or 'KZT'}</b>",
+                f"Оплата: <b>{float(result.get('gross_amount') or result.get('amount') or 0):,.2f} {result.get('currency') or 'KZT'}</b>",
+                *(
+                    [
+                        f"НДС {float(result.get('vat_rate') or 0):g}%: "
+                        f"<b>−{float(result.get('vat_amount') or 0):,.2f} {result.get('currency') or 'KZT'}</b>"
+                    ]
+                    if float(result.get("vat_amount") or 0) > 0
+                    else []
+                ),
+                f"Зачислено на баланс: <b>{float(result.get('amount') or 0):,.2f} {result.get('currency') or 'KZT'}</b>",
                 f"Текущий баланс: <b>{float(result.get('balance') or 0):,.2f} {result.get('currency') or 'KZT'}</b>",
             ]),
         )
